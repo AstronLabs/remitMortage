@@ -10,6 +10,7 @@ export interface RemittanceAnalysis {
   totalPayments: number;
   totalAmountUSDC: string;
   averageAmountUSDC: string;
+  standardDeviation: number;
   firstPayment: string | null;
   lastPayment: string | null;
   spanMonths: number;
@@ -59,6 +60,7 @@ export async function analyzeRemittanceHistory(
       totalPayments: 0,
       totalAmountUSDC: "0",
       averageAmountUSDC: "0",
+      standardDeviation: 0,
       firstPayment: null,
       lastPayment: null,
       spanMonths: 0,
@@ -74,6 +76,7 @@ export async function analyzeRemittanceHistory(
       totalPayments: 0,
       totalAmountUSDC: "0",
       averageAmountUSDC: "0",
+      standardDeviation: 0,
       firstPayment: null,
       lastPayment: null,
       spanMonths: 0,
@@ -93,6 +96,9 @@ export async function analyzeRemittanceHistory(
   );
   const avgAmount = totalAmount / payments.length;
 
+  const variance = payments.reduce((sum, p) => sum + Math.pow(parseFloat(p.amount) - avgAmount, 2), 0) / payments.length;
+  const standardDeviation = Math.sqrt(variance);
+
   const firstDate = new Date(payments[0].date);
   const lastDate = new Date(payments[payments.length - 1].date);
   const spanMonths = Math.round(
@@ -108,6 +114,7 @@ export async function analyzeRemittanceHistory(
     totalPayments: payments.length,
     totalAmountUSDC: totalAmount.toFixed(2),
     averageAmountUSDC: avgAmount.toFixed(2),
+    standardDeviation,
     firstPayment: payments[0].date,
     lastPayment: payments[payments.length - 1].date,
     spanMonths,
