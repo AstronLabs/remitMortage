@@ -4,6 +4,7 @@ members = [
     "escrow",
     "lending-pool",
     "milestone",
+    "verification-registry",
 ]
 
 [workspace.dependencies]
