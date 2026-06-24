@@ -18,7 +18,7 @@ export const borrowerRouter = Router();
  *         schema:
  *           type: string
  *           pattern: '^G[A-Z2-7]{55}$'
- *         example: GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF
+ *         example: GDXU35N4YDZTX4LU6KM2P5WNOWIBLDE2DYUNCCXKMAO4NSV3WVNGLJXZ
  *     responses:
  *       200:
  *         description: Borrower status summary.

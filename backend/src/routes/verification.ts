@@ -20,8 +20,8 @@ export const verificationRouter = Router();
  *           examples:
  *             check:
  *               value:
- *                 senderAddress: GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF
- *                 recipientAddress: GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBCJ
+ *                 senderAddress: GDXU35N4YDZTX4LU6KM2P5WNOWIBLDE2DYUNCCXKMAO4NSV3WVNGLJXZ
+ *                 recipientAddress: GBRO6TWF5WNRQKUER75INAECJVDFKW2PKHV3B6CNBFUYFUOSTWKMHEGB
  *     responses:
  *       200:
  *         description: Remittance analysis completed.
