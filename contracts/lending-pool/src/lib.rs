@@ -5,9 +5,7 @@ mod types;
 
 use crate::errors::PoolError;
 use crate::types::{DataKey, InvestorRecord, LoanRecord, LoanStatus, PoolConfig, RepaymentSchedule};
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env};
-use crate::types::{DataKey, InvestorRecord, LoanRecord, LoanStatus, PoolConfig};
-use soroban_sdk::{contract, contractimpl, symbol_short, Symbol, token, Address, BytesN, Env, IntoVal};
+use soroban_sdk::{contract, contractclient, contractimpl, symbol_short, Symbol, token, Address, BytesN, Env, IntoVal};
 
 const INSTANCE_BUMP_AMOUNT: u32 = 518_400; // ~30 days
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 129_600; // ~7.5 days
@@ -28,6 +26,18 @@ const DEFAULT_MISSED_THRESHOLD: u32 = 3; // default after 3 missed payments
 #[contract]
 pub struct LendingPoolContract;
 
+#[contract]
+pub struct VerificationRegistryContract;
+
+#[contractclient]
+pub struct VerificationRegistryClient;
+
+impl VerificationRegistryClient {
+    pub fn initialize(&self);
+    pub fn set_score(&self, borrower: &Address, score: &u32);
+    pub fn get_score(&self, borrower: &Address) -> Option<u32>;
+}
+
 /// Internal helpers.
 impl LendingPoolContract {
     fn read_config(env: &Env) -> Result<PoolConfig, PoolError> {
@@ -35,6 +45,23 @@ impl LendingPoolContract {
             .instance()
             .get(&DataKey::Config)
             .ok_or(PoolError::NotInitialized)
+    }
+
+    fn get_interest_rate_for_score(score: u32) -> u32 {
+        if score >= 80 {
+            400u32
+        } else if score >= 60 {
+            600u32
+        } else if score >= 40 {
+            800u32
+        } else {
+            1200u32
+        }
+    }
+
+    fn fetch_verification_score(env: &Env, registry: &Address, borrower: &Address) -> Option<u32> {
+        let client = VerificationRegistryClient::new(env, registry);
+        client.get_score(borrower)
     }
 
     fn read_investor(env: &Env, investor: &Address) -> InvestorRecord {
@@ -112,6 +139,7 @@ impl LendingPoolContract {
         env: Env,
         admin: Address,
         token: Address,
+        verification_registry: Address,
         interest_rate_bps: u32,
     ) -> Result<(), PoolError> {
         if env.storage().instance().has(&DataKey::Config) {
@@ -123,6 +151,7 @@ impl LendingPoolContract {
         let config = PoolConfig {
             admin,
             token,
+            verification_registry,
             interest_rate_bps,
         };
 
@@ -215,13 +244,16 @@ impl LendingPoolContract {
         }
 
         let config = Self::read_config(&env)?;
+        let score = Self::fetch_verification_score(&env, &config.verification_registry, &borrower)
+            .unwrap_or(0u32);
+        let assigned_interest_rate_bps = Self::get_interest_rate_for_score(score);
 
         let loan = LoanRecord {
             borrower,
             principal,
             disbursed: 0,
             repaid: 0,
-            interest_rate_bps: config.interest_rate_bps,
+            interest_rate_bps: assigned_interest_rate_bps,
             status: LoanStatus::Requested,
             created_ledger: env.ledger().sequence(),
         };
@@ -682,6 +714,21 @@ impl LendingPoolContract {
     }
 }
 
+#[contractimpl]
+impl VerificationRegistryContract {
+    pub fn initialize(_env: Env) {}
+
+    pub fn set_score(env: Env, borrower: Address, score: u32) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Verification(borrower), &score);
+    }
+
+    pub fn get_score(env: Env, borrower: Address) -> Option<u32> {
+        env.storage().persistent().get(&DataKey::Verification(borrower))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -701,11 +748,39 @@ mod test {
         // Mint 100,000 USDC to investor.
         sac.mint(&investor, &100_000_0000000i128);
 
+        let registry_contract_id = env.register(VerificationRegistryContract, ());
+        let registry_client = VerificationRegistryContractClient::new(env, &registry_contract_id);
+        registry_client.initialize();
+
         let contract_id = env.register(LendingPoolContract, ());
         let client = LendingPoolContractClient::new(env, &contract_id);
-        client.initialize(&admin, &token_address, &800u32); // 8% interest
+        client.initialize(&admin, &token_address, &registry_contract_id, &800u32); // 8% interest
 
         (admin, investor, token_address, client)
+    }
+
+    fn setup_pool_with_registry(env: &Env) -> (Address, Address, Address, Address, LendingPoolContractClient<'_>) {
+        let admin = Address::generate(env);
+        let investor = Address::generate(env);
+
+        // Deploy test USDC.
+        let token_admin = Address::generate(env);
+        let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let token_address = token_id.address();
+        let sac = StellarAssetClient::new(env, &token_address);
+
+        // Mint 100,000 USDC to investor.
+        sac.mint(&investor, &100_000_0000000i128);
+
+        let registry_contract_id = env.register(VerificationRegistryContract, ());
+        let registry_client = VerificationRegistryContractClient::new(env, &registry_contract_id);
+        registry_client.initialize();
+
+        let contract_id = env.register(LendingPoolContract, ());
+        let client = LendingPoolContractClient::new(env, &contract_id);
+        client.initialize(&admin, &token_address, &registry_contract_id, &800u32); // 8% interest
+
+        (admin, investor, token_address, registry_contract_id, client)
     }
 
     #[test]
@@ -755,9 +830,9 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (admin, _investor, token_address, client) = setup_pool(&env);
+        let (admin, _investor, token_address, registry_contract_id, client) = setup_pool_with_registry(&env);
 
-        let result = client.try_initialize(&admin, &token_address, &800u32);
+        let result = client.try_initialize(&admin, &token_address, &registry_contract_id, &800u32);
         assert!(result.is_err());
     }
 
@@ -798,6 +873,41 @@ mod test {
         client.approve_loan(&loan_id);
         let loan = client.get_loan_info(&loan_id);
         assert_eq!(loan.status, LoanStatus::Approved);
+    }
+
+    #[test]
+    fn test_dynamic_interest_rate_assignment_based_on_verification_score() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (_admin, investor, _token_address, registry_contract_id, client) = setup_pool_with_registry(&env);
+        let registry_client = VerificationRegistryContractClient::new(&env, &registry_contract_id);
+
+        let borrower_excellent = Address::generate(&env);
+        let borrower_good = Address::generate(&env);
+        let borrower_fair = Address::generate(&env);
+        let borrower_unverified = Address::generate(&env);
+
+        let loan_excellent = BytesN::from_array(&env, &[1u8; 32]);
+        let loan_good = BytesN::from_array(&env, &[2u8; 32]);
+        let loan_fair = BytesN::from_array(&env, &[3u8; 32]);
+        let loan_unverified = BytesN::from_array(&env, &[4u8; 32]);
+
+        registry_client.set_score(&borrower_excellent, &85u32);
+        registry_client.set_score(&borrower_good, &70u32);
+        registry_client.set_score(&borrower_fair, &50u32);
+
+        client.deposit(&investor, &280_000_0000000i128);
+
+        client.request_loan(&borrower_excellent, &loan_excellent, &70_000_0000000i128);
+        client.request_loan(&borrower_good, &loan_good, &70_000_0000000i128);
+        client.request_loan(&borrower_fair, &loan_fair, &70_000_0000000i128);
+        client.request_loan(&borrower_unverified, &loan_unverified, &70_000_0000000i128);
+
+        assert_eq!(client.get_loan_info(&loan_excellent).interest_rate_bps, 400u32);
+        assert_eq!(client.get_loan_info(&loan_good).interest_rate_bps, 600u32);
+        assert_eq!(client.get_loan_info(&loan_fair).interest_rate_bps, 800u32);
+        assert_eq!(client.get_loan_info(&loan_unverified).interest_rate_bps, 1200u32);
     }
 
     #[test]
