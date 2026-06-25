@@ -1,4 +1,5 @@
 import { prisma } from "./db.js";
+import logger from "../utils/logger.js";
 import { sendEmail, sendDepositReceipt, sendRepaymentReminder, sendLoanStatusUpdate } from "./email.js";
 import { sendWebhook } from "./webhook.js";
 
@@ -27,7 +28,7 @@ export async function queueNotification(
 
   // Trigger dispatch in background (fire-and-forget)
   dispatchNotification(notification.id).catch((err) => {
-    console.error(`[NotificationService] Async dispatch failed for ${notification.id}:`, err);
+    logger.error(`[NotificationService] Async dispatch failed for ${notification.id}`, { err });
   });
 
   return notification;
@@ -42,7 +43,7 @@ export async function dispatchNotification(id: string): Promise<boolean> {
   });
 
   if (!notification) {
-    console.error(`[NotificationService] Notification ${id} not found.`);
+    logger.error(`[NotificationService] Notification ${id} not found`);
     return false;
   }
 
@@ -106,7 +107,7 @@ export async function dispatchNotification(id: string): Promise<boolean> {
       },
     });
 
-    console.warn(
+    logger.warn(
       `[NotificationService] Notification ${id} failed (attempt ${currentAttempts}/${MAX_ATTEMPTS}). Next retry at: ${nextRetryAt}`
     );
     return false;
@@ -173,7 +174,7 @@ export function startNotificationScheduler(intervalMs = 30000) {
   if (pollingInterval) return;
   pollingInterval = setInterval(() => {
     processRetries().catch((err) => {
-      console.error("[NotificationScheduler] Error running retry process:", err);
+      logger.error("[NotificationScheduler] Error running retry process", { err });
     });
   }, intervalMs);
 }

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import logger from "../utils/logger.js";
 import { validateBorrowerParams } from "../middleware/validate.js";
 
 export const borrowerRouter = Router();
@@ -56,7 +57,7 @@ borrowerRouter.get("/:address/status", validateBorrowerParams, async (req, res) 
       },
     });
   } catch (error) {
-    console.error("Borrower status error:", error);
+    logger.error("Borrower status error", { error });
     res.status(500).json({ error: "Failed to fetch borrower status" });
   }
 });

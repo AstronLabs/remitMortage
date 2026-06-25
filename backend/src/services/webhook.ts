@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
 
 const config = loadConfig();
@@ -29,13 +30,13 @@ export async function sendWebhook(url: string, payload: any): Promise<boolean> {
     });
 
     if (!response.ok) {
-      console.error(`[WebhookService] HTTP Error from ${url}: Status ${response.status}`);
+      logger.error(`[WebhookService] HTTP Error from ${url}`, { status: response.status });
       return false;
     }
 
     return true;
   } catch (error) {
-    console.error(`[WebhookService] Fetch failure sending webhook to ${url}:`, error);
+    logger.error(`[WebhookService] Fetch failure sending webhook to ${url}`, { error });
     return false;
   }
 }

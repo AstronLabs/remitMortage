@@ -1,4 +1,5 @@
 import { Horizon } from "@stellar/stellar-sdk";
+import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
 
 const config = loadConfig();
@@ -53,7 +54,7 @@ export async function analyzeRemittanceHistory(
       }
     }
   } catch (error) {
-    console.error("Horizon query error:", error);
+    logger.error("Horizon query error", { error });
     return {
       senderAddress,
       recipientAddress,

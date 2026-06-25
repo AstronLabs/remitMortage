@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
+import rTracer from "cls-rtracer";
 import { swaggerSpec } from "./docs/swagger.js";
 import { healthRouter } from "./routes/health.js";
 import { verificationRouter } from "./routes/verification.js";
@@ -12,12 +13,14 @@ import { milestoneRouter } from "./routes/milestone.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { startNotificationScheduler } from "./services/notification.js";
 import { loadConfig } from "./config.js";
+import logger from "./utils/logger.js";
 
 const app = express();
 const config = loadConfig();
 const PORT = config.port;
 
 // ── Middleware ───────────────────────────────────────────────────────────
+app.use(rTracer.expressMiddleware());
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (like mobile apps, curl, Postman)
@@ -59,7 +62,7 @@ app.use(errorHandler);
 
 // ── Start Server ────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`🚀 RemitMortgage API running on http://localhost:${PORT}`);
+  logger.info(`RemitMortgage API running on http://localhost:${PORT}`);
   startNotificationScheduler();
 });
 

@@ -1,4 +1,5 @@
 import axios from "axios";
+import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
 
 const config = loadConfig();
@@ -43,7 +44,7 @@ export async function pinFileToIPFS(fileBuffer: Buffer, fileName: string): Promi
 
     return response.data.IpfsHash;
   } catch (error: any) {
-    console.error("[IPFSService] Error pinning file to IPFS:", error.response?.data || error.message);
+    logger.error("[IPFSService] Error pinning file to IPFS", { error: error.response?.data || error.message });
     throw new Error(`Failed to pin file to IPFS: ${error.response?.data?.error?.details || error.message}`);
   }
 }
@@ -81,7 +82,7 @@ export async function pinJSONToIPFS(metadata: any): Promise<string> {
 
     return response.data.IpfsHash;
   } catch (error: any) {
-    console.error("[IPFSService] Error pinning JSON to IPFS:", error.response?.data || error.message);
+    logger.error("[IPFSService] Error pinning JSON to IPFS", { error: error.response?.data || error.message });
     throw new Error(`Failed to pin JSON to IPFS: ${error.response?.data?.error?.details || error.message}`);
   }
 }
@@ -113,7 +114,7 @@ export async function unpinFileFromIPFS(cid: string): Promise<UnpinResult> {
 
     return { status: response.status, cid };
   } catch (error: any) {
-    console.error("[IPFSService] Error unpinning file from IPFS:", error.response?.data || error.message);
+    logger.error("[IPFSService] Error unpinning file from IPFS", { error: error.response?.data || error.message });
     throw new Error(`Failed to unpin file from IPFS: ${error.response?.data?.error?.details || error.message}`);
   }
 }
