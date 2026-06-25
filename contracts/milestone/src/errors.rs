@@ -14,8 +14,14 @@ pub enum MilestoneError {
     InvalidAmount = 4,
     /// Milestone not found.
     MilestoneNotFound = 5,
-    /// Invalid milestone status transition.
+    /// Invalid milestone status for the requested action.
     InvalidStatus = 6,
     /// Evidence hash is required for milestone proposal.
     EvidenceRequired = 7,
+    /// A milestone with this proposal ID already exists.
+    MilestoneExists = 8,
+    /// This approver has already voted on the proposal.
+    AlreadyVoted = 9,
+    /// Approver set must be non-empty and threshold within 1..=approvers.
+    InvalidThreshold = 10,
 }
