@@ -112,6 +112,7 @@ impl LendingPoolContract {
         env: Env,
         admin: Address,
         token: Address,
+        escrow: Address,
         interest_rate_bps: u32,
     ) -> Result<(), PoolError> {
         if env.storage().instance().has(&DataKey::Config) {
@@ -123,6 +124,7 @@ impl LendingPoolContract {
         let config = PoolConfig {
             admin,
             token,
+            escrow,
             interest_rate_bps,
         };
 
@@ -449,10 +451,8 @@ impl LendingPoolContract {
                 // Advance next_due by missed_periods + 1 months (we cover current and skipped installments)
                 sched.next_due_ledger = sched.next_due_ledger + ((missed_periods + 1) * LEDGERS_PER_MONTH);
 
-                // If missed threshold reached, mark Defaulted
-                if sched.payments_missed >= DEFAULT_MISSED_THRESHOLD {
-                    loan.status = LoanStatus::Defaulted;
-                }
+                // If missed threshold reached, it becomes eligible for default marking
+                // which must be executed via `mark_default` to seize collateral.
             }
 
             // Persist schedule changes back to storage
@@ -512,6 +512,70 @@ impl LendingPoolContract {
         env.events().publish(
             (symbol_short!("repay"),),
             (borrower.clone(), loan_id.clone(), amount, remaining - amount),
+        );
+
+        Ok(())
+    }
+
+
+    /// Trigger an on-chain liquidation for a defaulted loan.
+    /// Allocates the seized savings collateral to the lending pool to cover investor losses.
+    pub fn mark_default(env: Env, loan_id: BytesN<32>) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        let mut loan = Self::read_loan(&env, &loan_id)?;
+
+        if loan.status == LoanStatus::Repaid || loan.status == LoanStatus::Cancelled {
+            return Err(PoolError::InvalidLoanState);
+        }
+        if loan.status == LoanStatus::Defaulted {
+            return Err(PoolError::AlreadyDefaulted);
+        }
+
+        if !env.storage().persistent().has(&DataKey::LoanSchedule(loan_id.clone())) {
+            return Err(PoolError::InvalidLoanState);
+        }
+
+        let sched: RepaymentSchedule = env.storage().persistent().get(&DataKey::LoanSchedule(loan_id.clone())).unwrap();
+        if sched.payments_missed < DEFAULT_MISSED_THRESHOLD {
+            return Err(PoolError::NotEligibleForDefault);
+        }
+
+        // Seize collateral from escrow contract
+        // Invokes: escrow::seize_collateral(borrower, lending_pool_address)
+        let seized_amount: i128 = env.invoke_contract(
+            &config.escrow,
+            &soroban_sdk::Symbol::new(&env, "seize_collateral"),
+            soroban_sdk::vec![&env, loan.borrower.into_val(&env), env.current_contract_address().into_val(&env)],
+        );
+
+        // Reduce outstanding defaulted loss using the seized savings balance
+        loan.repaid += seized_amount;
+        loan.status = LoanStatus::Defaulted;
+        Self::set_loan(&env, &loan_id, &loan);
+
+        // Update lending pool total liquidity
+        let mut liquidity = Self::read_total_liquidity(&env);
+        liquidity += seized_amount;
+        env.storage().instance().set(&DataKey::TotalLiquidity, &liquidity);
+
+        // Release undisbursed active commitments
+        let undisbursed = loan.principal - loan.disbursed;
+        if undisbursed > 0 {
+            let active_commitments = Self::read_active_commitments(&env);
+            env.storage()
+                .instance()
+                .set(&DataKey::ActiveLoanCommitments, &(active_commitments - undisbursed));
+        }
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("default"),),
+            (loan_id.clone(), loan.borrower.clone(), seized_amount),
         );
 
         Ok(())
@@ -688,7 +752,7 @@ mod test {
     use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Env};
 
     /// Helper: deploy test token, mint to investor, initialize pool.
-    fn setup_pool(env: &Env) -> (Address, Address, Address, LendingPoolContractClient<'_>) {
+    fn setup_pool(env: &Env) -> (Address, Address, Address, Address, LendingPoolContractClient<\'_>) {
         let admin = Address::generate(env);
         let investor = Address::generate(env);
 
@@ -700,12 +764,13 @@ mod test {
 
         // Mint 100,000 USDC to investor.
         sac.mint(&investor, &100_000_0000000i128);
+        let escrow = Address::generate(env);
 
         let contract_id = env.register(LendingPoolContract, ());
         let client = LendingPoolContractClient::new(env, &contract_id);
-        client.initialize(&admin, &token_address, &800u32); // 8% interest
+        client.initialize(&admin, &token_address, &escrow, &800u32); // 8% interest
 
-        (admin, investor, token_address, client)
+        (admin, investor, token_address, escrow, client)
     }
 
     #[test]
@@ -713,7 +778,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (admin, _investor, token_address, client) = setup_pool(&env);
+        let (admin, _investor, token_address, _escrow, client) = setup_pool(&env);
 
         let config = client.get_pool_config();
         assert_eq!(config.admin, admin);
@@ -727,7 +792,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor, token_address, client) = setup_pool(&env);
+        let (_admin, investor, token_address, _escrow, client) = setup_pool(&env);
         let token = token::Client::new(&env, &token_address);
 
         client.deposit(&investor, &50_000_0000000i128);
@@ -744,7 +809,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor, _token_address, client) = setup_pool(&env);
+        let (_admin, investor, _token_address, _escrow, client) = setup_pool(&env);
 
         let result = client.try_deposit(&investor, &0i128);
         assert!(result.is_err());
@@ -755,9 +820,9 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (admin, _investor, token_address, client) = setup_pool(&env);
+        let (admin, _investor, token_address, _escrow, client) = setup_pool(&env);
 
-        let result = client.try_initialize(&admin, &token_address, &800u32);
+        let result = client.try_initialize(&admin, &token_address, &_escrow, &800u32);
         assert!(result.is_err());
     }
 
@@ -770,7 +835,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor, _token_address, client) = setup_pool(&env);
+        let (_admin, investor, _token_address, _escrow, client) = setup_pool(&env);
         let borrower = Address::generate(&env);
         let loan_id = mock_loan_id(&env);
 
@@ -805,7 +870,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor, _token_address, client) = setup_pool(&env);
+        let (_admin, investor, _token_address, _escrow, client) = setup_pool(&env);
         let borrower = Address::generate(&env);
         let loan_id = mock_loan_id(&env);
 
@@ -822,7 +887,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor, _token_address, client) = setup_pool(&env);
+        let (_admin, investor, _token_address, _escrow, client) = setup_pool(&env);
         let borrower = Address::generate(&env);
         let loan_id = mock_loan_id(&env);
 
@@ -847,7 +912,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor, token_address, client) = setup_pool(&env);
+        let (_admin, investor, token_address, _escrow, client) = setup_pool(&env);
         let token = token::Client::new(&env, &token_address);
         let borrower = Address::generate(&env);
         let contractor = Address::generate(&env);
@@ -885,7 +950,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor, _token_address, client) = setup_pool(&env);
+        let (_admin, investor, _token_address, _escrow, client) = setup_pool(&env);
         let borrower = Address::generate(&env);
         let contractor = Address::generate(&env);
         let loan_id = mock_loan_id(&env);
@@ -904,7 +969,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor, token_address, client) = setup_pool(&env);
+        let (_admin, investor, token_address, _escrow, client) = setup_pool(&env);
         let borrower = Address::generate(&env);
         let loan_id = mock_loan_id(&env);
 
@@ -926,7 +991,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor, token_address, client) = setup_pool(&env);
+        let (_admin, investor, token_address, _escrow, client) = setup_pool(&env);
         let token = token::Client::new(&env, &token_address);
 
         client.deposit(&investor, &50_000_0000000i128);
@@ -946,7 +1011,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor, _token_address, client) = setup_pool(&env);
+        let (_admin, investor, _token_address, _escrow, client) = setup_pool(&env);
         let borrower = Address::generate(&env);
         let loan_id = mock_loan_id(&env);
 
@@ -969,7 +1034,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor1, token_address, client) = setup_pool(&env);
+        let (_admin, investor1, token_address, _escrow, client) = setup_pool(&env);
         
         // Setup investor 2
         let investor2 = Address::generate(&env);
@@ -1008,7 +1073,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor, token_address, client) = setup_pool(&env);
+        let (_admin, investor, token_address, _escrow, client) = setup_pool(&env);
         let borrower = Address::generate(&env);
         let loan_id = mock_loan_id(&env);
 
@@ -1033,7 +1098,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, investor, token_address, client) = setup_pool(&env);
+        let (_admin, investor, token_address, _escrow, client) = setup_pool(&env);
         let borrower = Address::generate(&env);
         let loan_id = mock_loan_id(&env);
 
@@ -1055,12 +1120,86 @@ mod test {
         assert_eq!(record.claimed_yield, 800_0000000i128);
     }
 
+
+    #[contract]
+    pub struct MockEscrow;
+
+    #[contractimpl]
+    impl MockEscrow {
+        pub fn seize_collateral(env: Env, _borrower: Address, lending_pool_address: Address) -> i128 {
+            // Mock transferring 5000 USDC
+            let token_address = env.storage().instance().get(&symbol_short!("token")).unwrap();
+            let sac = StellarAssetClient::new(&env, &token_address);
+            // In a real scenario we'd use transfer, but in test we can just mint to the lending pool to simulate seized funds
+            sac.mint(&lending_pool_address, &5_000_0000000i128);
+            5_000_0000000i128
+        }
+        pub fn set_token(env: Env, token: Address) {
+            env.storage().instance().set(&symbol_short!("token"), &token);
+        }
+    }
+
+    #[test]
+    fn test_mark_default() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let investor = Address::generate(&env);
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+
+        let token_admin = Address::generate(&env);
+        let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let token_address = token_id.address();
+        let sac = StellarAssetClient::new(&env, &token_address);
+        sac.mint(&investor, &100_000_0000000i128);
+
+        let escrow_id = env.register(MockEscrow, ());
+        let mock_escrow = escrow_id.clone();
+        
+        // Setup mock escrow token
+        env.invoke_contract::<()>(&escrow_id, &symbol_short!("set_token"), soroban_sdk::vec![&env, token_address.into_val(&env)]);
+
+        let contract_id = env.register(LendingPoolContract, ());
+        let client = LendingPoolContractClient::new(&env, &contract_id);
+        client.initialize(&admin, &token_address, &mock_escrow, &800u32);
+
+        client.deposit(&investor, &70_000_0000000i128);
+        client.request_loan(&borrower, &loan_id, &70_000_0000000i128);
+        client.approve_loan(&loan_id);
+
+        client.disburse(&loan_id, &borrower, &30_000_0000000i128);
+
+        // Advance schedule to have missed 3 payments
+        let mut sched: RepaymentSchedule = env.as_contract(&contract_id, || {
+            env.storage().persistent().get(&DataKey::LoanSchedule(loan_id.clone())).unwrap()
+        });
+        sched.payments_missed = 3;
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().set(&DataKey::LoanSchedule(loan_id.clone()), &sched);
+        });
+
+        // Trigger default
+        client.mark_default(&loan_id);
+
+        let loan = client.get_loan_info(&loan_id);
+        assert_eq!(loan.status, LoanStatus::Defaulted);
+        assert_eq!(loan.repaid, 5_000_0000000i128); // 5000 seized from mock escrow
+
+        // Verify active commitments are reduced by undisbursed (70000 - 30000 = 40000)
+        // Original commitments: 70000. After disburse: 40000. After default: 0.
+        // Also liquidity increased by 5000 seized collateral.
+        let liquidity = client.get_liquidity();
+        assert_eq!(liquidity, 45_000_0000000i128); // 70000 - 30000 + 5000
+    }
+
     #[test]
     #[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
     fn test_unauthorized_withdrawal() {
         let env = Env::default();
 
-        let (_admin, _investor, _token_address, client) = setup_pool(&env);
+        let (_admin, _investor, _token_address, _escrow, client) = setup_pool(&env);
         let unauthorized = Address::generate(&env);
         
         // This will panic because unauthorized doesn't have auth mocked.

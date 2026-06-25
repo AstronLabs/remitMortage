@@ -8,6 +8,8 @@ pub struct EscrowConfig {
     pub admin: Address,
     /// USDC token contract address on Stellar.
     pub token: Address,
+    /// Lending pool contract address linked to this escrow.
+    pub lending_pool: Address,
     /// Savings target amount in USDC (in stroops, i.e. 7 decimals).
     pub savings_target: i128,
     /// Maximum savings period in ledger-sequence increments.
@@ -34,6 +36,8 @@ pub struct BorrowerRecord {
     pub released: bool,
     /// Whether the borrower withdrew early.
     pub withdrawn: bool,
+    /// Whether the collateral was seized by the lending pool due to default.
+    pub seized: bool,
 }
 
 /// Storage keys for the escrow contract.

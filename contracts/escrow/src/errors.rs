@@ -22,4 +22,6 @@ pub enum EscrowError {
     PeriodExpired = 8,
     /// Borrower record not found.
     BorrowerNotFound = 9,
+    /// Collateral has already been seized.
+    AlreadySeized = 10,
 }

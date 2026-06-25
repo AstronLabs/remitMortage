@@ -41,6 +41,7 @@ impl EscrowContract {
                 start_ledger: 0,
                 released: false,
                 withdrawn: false,
+                seized: false,
             })
     }
 
@@ -74,6 +75,7 @@ impl EscrowContract {
         env: Env,
         admin: Address,
         token: Address,
+        lending_pool: Address,
         savings_target: i128,
         max_duration_ledgers: u32,
         penalty_bps_tier1: u32,
@@ -96,6 +98,7 @@ impl EscrowContract {
         let config = EscrowConfig {
             admin,
             token,
+            lending_pool,
             savings_target,
             max_duration_ledgers,
             penalty_bps_tier1,
@@ -134,6 +137,9 @@ impl EscrowContract {
         }
         if record.withdrawn {
             return Err(EscrowError::AlreadyWithdrawn);
+        }
+        if record.seized {
+            return Err(EscrowError::AlreadySeized);
         }
 
         // Transfer USDC from borrower to this contract.
@@ -183,6 +189,9 @@ impl EscrowContract {
         }
         if record.withdrawn {
             return Err(EscrowError::AlreadyWithdrawn);
+        }
+        if record.seized {
+            return Err(EscrowError::AlreadySeized);
         }
 
         // Determine elapsed months (1-based).
@@ -256,6 +265,9 @@ impl EscrowContract {
         }
         if record.withdrawn {
             return Err(EscrowError::AlreadyWithdrawn);
+        }
+        if record.seized {
+            return Err(EscrowError::AlreadySeized);
         }
 
         // Verify savings target is met.
@@ -358,7 +370,7 @@ mod test {
     use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Env};
 
     /// Helper: deploy a test USDC token, mint to borrower, initialize escrow.
-    fn setup_with_token(env: &Env) -> (Address, Address, Address, EscrowContractClient<'_>) {
+    fn setup_with_token(env: &Env) -> (Address, Address, Address, Address, EscrowContractClient<\'_>) {
         let admin = Address::generate(env);
         let borrower = Address::generate(env);
 
@@ -370,6 +382,7 @@ mod test {
 
         // Mint 50,000 USDC to borrower.
         sac_client.mint(&borrower, &50_000_0000000i128);
+        let lending_pool = Address::generate(env);
 
         // Register and initialize escrow.
         let contract_id = env.register(EscrowContract, ());
@@ -377,6 +390,7 @@ mod test {
         client.initialize(
             &admin,
             &token_address,
+            &lending_pool,
             &10_000_0000000i128, // 10,000 USDC target
             &518_400u32,
             &500u32, // tier1: months 1-2 -> 5%
@@ -385,7 +399,7 @@ mod test {
             &50u32,  // tier4: month 7+ -> 0.5%
         );
 
-        (admin, borrower, token_address, client)
+        (admin, borrower, token_address, lending_pool, client)
     }
 
     #[test]
@@ -398,10 +412,12 @@ mod test {
 
         let admin = Address::generate(&env);
         let token = Address::generate(&env);
+        let lending_pool = Address::generate(&env);
 
         client.initialize(
             &admin,
             &token,
+            &lending_pool,
             &10_000_0000000i128,
             &518_400u32,
             &500u32,
@@ -420,6 +436,7 @@ mod test {
 
             assert_eq!(stored_config.admin, admin);
             assert_eq!(stored_config.token, token);
+            assert_eq!(stored_config.lending_pool, lending_pool);
             assert_eq!(stored_config.savings_target, 10_000_0000000i128);
             assert_eq!(stored_config.max_duration_ledgers, 518_400u32);
             assert_eq!(stored_config.penalty_bps_tier1, 500u32);
@@ -439,10 +456,11 @@ mod test {
 
         let admin = Address::generate(&env);
         let token = Address::generate(&env);
+        let lending_pool = Address::generate(&env);
 
-        client.initialize(&admin, &token, &10_000_0000000i128, &518_400u32, &500u32, &300u32, &150u32, &50u32);
+        client.initialize(&admin, &token, &lending_pool, &10_000_0000000i128, &518_400u32, &500u32, &300u32, &150u32, &50u32);
 
-        let result = client.try_initialize(&admin, &token, &10_000_0000000i128, &518_400u32, &500u32, &300u32, &150u32, &50u32);
+        let result = client.try_initialize(&admin, &token, &lending_pool, &10_000_0000000i128, &518_400u32, &500u32, &300u32, &150u32, &50u32);
         assert!(result.is_err());
     }
 
@@ -451,7 +469,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, borrower, token_address, client) = setup_with_token(&env);
+        let (_admin, borrower, token_address, _lending_pool, client) = setup_with_token(&env);
         let token = soroban_sdk::token::Client::new(&env, &token_address);
 
         // Deposit 2,000 USDC.
@@ -484,7 +502,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, borrower, _token_address, client) = setup_with_token(&env);
+        let (_admin, borrower, _token_address, _lending_pool, client) = setup_with_token(&env);
 
         let result = client.try_deposit(&borrower, &0i128);
         assert!(result.is_err());
@@ -503,7 +521,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, borrower, _token_address, client) = setup_with_token(&env);
+        let (_admin, borrower, _token_address, _lending_pool, client) = setup_with_token(&env);
 
         // Before deposit, balance is 0.
         assert_eq!(client.get_balance(&borrower), 0);
@@ -520,7 +538,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, borrower, _token_address, client) = setup_with_token(&env);
+        let (_admin, borrower, _token_address, _lending_pool, client) = setup_with_token(&env);
 
         client.deposit(&borrower, &1_000_0000000i128);
 
@@ -535,7 +553,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (admin, _borrower, token_address, client) = setup_with_token(&env);
+        let (admin, _borrower, token_address, _lending_pool, client) = setup_with_token(&env);
 
         let config = client.get_escrow_config();
         assert_eq!(config.admin, admin);
@@ -552,7 +570,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, borrower, token_address, client) = setup_with_token(&env);
+        let (_admin, borrower, token_address, _lending_pool, client) = setup_with_token(&env);
         let token = soroban_sdk::token::Client::new(&env, &token_address);
 
         // Borrower had 50,000 USDC. Deposit 10,000.
@@ -583,7 +601,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, borrower, _token_address, client) = setup_with_token(&env);
+        let (_admin, borrower, _token_address, _lending_pool, client) = setup_with_token(&env);
 
         client.deposit(&borrower, &5_000_0000000i128);
         client.withdraw(&borrower);
@@ -598,7 +616,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, borrower, token_address, client) = setup_with_token(&env);
+        let (_admin, borrower, token_address, _lending_pool, client) = setup_with_token(&env);
         let token = soroban_sdk::token::Client::new(&env, &token_address);
         let recipient = Address::generate(&env);
 
@@ -626,7 +644,7 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, borrower, _token_address, client) = setup_with_token(&env);
+        let (_admin, borrower, _token_address, _lending_pool, client) = setup_with_token(&env);
         let recipient = Address::generate(&env);
 
         // Deposit only 5,000 USDC (target is 10,000).

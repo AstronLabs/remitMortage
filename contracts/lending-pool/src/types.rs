@@ -8,6 +8,8 @@ pub struct PoolConfig {
     pub admin: Address,
     /// USDC token contract address.
     pub token: Address,
+    /// Escrow contract address for the savings target.
+    pub escrow: Address,
     /// Annual interest rate in basis points (e.g. 800 = 8%).
     pub interest_rate_bps: u32,
 }

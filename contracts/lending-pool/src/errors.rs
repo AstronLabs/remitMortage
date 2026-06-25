@@ -24,4 +24,8 @@ pub enum PoolError {
     InsufficientLiquidity = 9,
     /// Repayment exceeds remaining loan balance.
     OverPayment = 10,
+    /// Loan has not met the criteria for default.
+    NotEligibleForDefault = 11,
+    /// Loan has already defaulted.
+    AlreadyDefaulted = 12,
 }
