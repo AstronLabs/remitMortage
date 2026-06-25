@@ -15,6 +15,7 @@ export interface Config {
   smtpPass: string;
   smtpFrom: string;
   webhookSecret: string;
+  allowedOrigins: string[];
 }
 
 export function loadConfig(): Config {
@@ -34,5 +35,8 @@ export function loadConfig(): Config {
     smtpPass: process.env.SMTP_PASS || "",
     smtpFrom: process.env.SMTP_FROM || "no-reply@remitmortgage.com",
     webhookSecret: process.env.WEBHOOK_SECRET || "default_signing_secret_key",
+    allowedOrigins: process.env.ALLOWED_ORIGINS
+      ? process.env.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim())
+      : ["http://localhost:3000", "http://localhost:4000"],
   };
 }
