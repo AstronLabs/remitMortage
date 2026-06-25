@@ -8,7 +8,9 @@ pub struct PoolConfig {
     pub admin: Address,
     /// USDC token contract address.
     pub token: Address,
-    /// Annual interest rate in basis points (e.g. 800 = 8%).
+    /// Verification registry contract address used to look up borrower scores.
+    pub verification_registry: Address,
+    /// Annual interest rate in basis points (legacy pool default, subject to dynamic override).
     pub interest_rate_bps: u32,
 }
 
@@ -92,6 +94,8 @@ pub enum DataKey {
     Loan(BytesN<32>),
     /// Repayment schedule keyed by loan ID.
     LoanSchedule(BytesN<32>),
+    /// Verification score keyed by borrower address.
+    Verification(Address),
     /// Total number of active loans (for tracking).
     LoanCount,
     /// Total interest repaid to the pool.
