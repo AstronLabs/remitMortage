@@ -89,14 +89,7 @@ impl GovernanceContract {
         let config = Self::get_config(env.clone());
 
         // 1. Verify signer is part of the governance committee
-        let mut is_signer = false;
-        for i in 0..config.signers.len() {
-            if config.signers.get_unchecked(i) == signer {
-                is_signer = true;
-                break;
-            }
-        }
-        if !is_signer {
+        if !config.signers.contains(&signer) {
             panic!("Address is not a registered signer");
         }
 
@@ -110,19 +103,12 @@ impl GovernanceContract {
         }
 
         // 4. Verify signer hasn't already voted
-        let mut already_voted = false;
-        for i in 0..proposal.voters.len() {
-            if proposal.voters.get_unchecked(i) == signer {
-                already_voted = true;
-                break;
-            }
-        }
-        if already_voted {
+        if proposal.voters.contains(&signer) {
             panic!("Signer has already voted on this proposal");
         }
 
         // 5. Record the vote
-        proposal.voters.push_back(signer.clone());
+        proposal.voters.push_back(signer);
         proposal.vote_count += 1;
 
         // 6. Calculate required votes for quorum (using ceiling calculation)
@@ -151,15 +137,7 @@ impl GovernanceContract {
         let mut config = Self::get_config(env.clone());
         config.admin.require_auth();
 
-        let mut exists = false;
-        for i in 0..config.signers.len() {
-            if config.signers.get_unchecked(i) == new_signer {
-                exists = true;
-                break;
-            }
-        }
-
-        if !exists {
+        if !config.signers.contains(&new_signer) {
             config.signers.push_back(new_signer);
             env.storage().instance().set(&DataKey::Config, &config);
         }
