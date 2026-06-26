@@ -600,6 +600,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "defaulted_ledger"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "disbursed"
                       },
                       "val": {

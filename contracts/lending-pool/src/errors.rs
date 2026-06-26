@@ -36,4 +36,6 @@ pub enum PoolError {
     ContractPaused = 13,
     /// Proposed new admin is not the caller or no transfer is pending.
     NotPendingAdmin = 14,
+    /// Loan is not yet overdue enough to be marked as defaulted.
+    LoanNotOverdue = 17,
 }
