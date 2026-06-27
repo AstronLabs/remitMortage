@@ -172,4 +172,8 @@ pub enum DataKey {
     /// Address of the VerificationRegistry contract used to gate loan requests.
     /// Absent until `set_verification_registry` is called by the admin.
     VerificationRegistry,
+    /// Global daily borrow limit.
+    DailyBorrowLimit,
+    /// Tracks total amount borrowed in a specific daily window (day_id).
+    DailyBorrowed(u32),
 }

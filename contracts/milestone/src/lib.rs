@@ -61,16 +61,16 @@ impl MilestoneContract {
     fn validate_cid(cid: &Bytes) -> Result<(), MilestoneError> {
         let len = cid.len();
         if len == 46
-            && cid.get(0) == Some(b'Q' as u32)
-            && cid.get(1) == Some(b'm' as u32)
+            && cid.get(0) == Some(b'Q')
+            && cid.get(1) == Some(b'm')
         {
             return Ok(());
         }
         if len == 59
-            && cid.get(0) == Some(b'b' as u32)
-            && cid.get(1) == Some(b'a' as u32)
-            && cid.get(2) == Some(b'f' as u32)
-            && cid.get(3) == Some(b'y' as u32)
+            && cid.get(0) == Some(b'b')
+            && cid.get(1) == Some(b'a')
+            && cid.get(2) == Some(b'f')
+            && cid.get(3) == Some(b'y')
         {
             return Ok(());
         }

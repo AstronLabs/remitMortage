@@ -13,6 +13,10 @@ const INSTANCE_LIFETIME_THRESHOLD: u32 = 129_600; // ~7.5 days
 
 // Ledger durations used for repayment scheduling
 const LEDGERS_PER_MONTH: u32 = 518_400; // ~30 days
+#[cfg(not(test))]
+const LEDGERS_PER_DAY: u32 = 17_280; // ~1 day
+#[cfg(test)]
+const LEDGERS_PER_DAY: u32 = 100;
 const GRACE_PERIOD_LEDGERS: u32 = 120_960; // ~7 days
 const LATE_PENALTY_BPS: u32 = 50; // 50 bps = 0.5%
 const DEFAULT_DURATION_MONTHS: u32 = 12;
@@ -227,12 +231,16 @@ impl LendingPoolContract {
     /// Utilization = active_loan_commitments / total_pool_liquidity
     /// Returns the rate in basis points (0-10000).
     fn calculate_utilization(env: &Env) -> u32 {
-        let total_liquidity = Self::read_total_liquidity(env);
-        if total_liquidity <= 0 {
+        let total_deposited = Self::read_total_deposited(env);
+        if total_deposited <= 0 {
             return 0;
         }
+        let total_liquidity = Self::read_total_liquidity(env);
         let active_commitments = Self::read_active_commitments(env);
-        let utilization = (active_commitments * BPS_SCALE as i128) / total_liquidity;
+        let utilized = active_commitments.saturating_add(
+            total_deposited.saturating_sub(total_liquidity).max(0),
+        );
+        let utilization = (utilized * BPS_SCALE as i128) / total_deposited;
         utilization.min(BPS_SCALE as i128) as u32
     }
 
@@ -571,6 +579,27 @@ impl LendingPoolContract {
         let liquidity = Self::read_total_liquidity(&env);
         if liquidity < amount {
             return Err(PoolError::InsufficientLiquidity);
+        }
+
+        // Enforce daily borrow limit if configured.
+        let limit: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DailyBorrowLimit)
+            .unwrap_or(0);
+        if limit > 0 {
+            let day_id = env.ledger().sequence() / LEDGERS_PER_DAY;
+            let current_day_borrowed: i128 = env
+                .storage()
+                .instance()
+                .get(&DataKey::DailyBorrowed(day_id))
+                .unwrap_or(0);
+            if current_day_borrowed.saturating_add(amount) > limit {
+                return Err(PoolError::DailyBorrowLimitExceeded);
+            }
+            env.storage()
+                .instance()
+                .set(&DataKey::DailyBorrowed(day_id), &(current_day_borrowed + amount));
         }
 
         // Transfer funds to recipient.
@@ -1213,6 +1242,44 @@ impl LendingPoolContract {
         Self::read_verification_registry(&env)
     }
 
+    /// Set the daily borrow limit. Admin-only.
+    /// A limit <= 0 means no limit.
+    pub fn set_daily_borrow_limit(env: Env, limit: i128) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::DailyBorrowLimit, &limit);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events().publish(
+            (symbol_short!("set_limit"),),
+            (limit,),
+        );
+
+        Ok(())
+    }
+
+    /// Get the daily borrow limit.
+    pub fn get_daily_borrow_limit(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::DailyBorrowLimit)
+            .unwrap_or(0)
+    }
+
+    /// Get the total amount borrowed in the current day's time window.
+    pub fn get_daily_borrowed(env: Env) -> i128 {
+        let day_id = env.ledger().sequence() / LEDGERS_PER_DAY;
+        env.storage()
+            .instance()
+            .get(&DataKey::DailyBorrowed(day_id))
+            .unwrap_or(0)
+    }
+
     // ── Upgrade Functions ────────────────────────────────────────────────
 
     /// Set the number of ledgers that must elapse between proposing and
@@ -1538,10 +1605,10 @@ mod test {
     // ── Verification Registry Gate ───────────────────────────────────────
 
     /// Helper: deploy and initialize a VerificationRegistryContract.
-    fn setup_registry(
-        env: &Env,
+    fn setup_registry<'a>(
+        env: &'a Env,
         admin: &Address,
-    ) -> verification_registry::VerificationRegistryContractClient<'_> {
+    ) -> verification_registry::VerificationRegistryContractClient<'a> {
         let registry_id = env.register(verification_registry::VerificationRegistryContract, ());
         let registry = verification_registry::VerificationRegistryContractClient::new(env, &registry_id);
         registry.initialize(admin);
@@ -1739,6 +1806,9 @@ mod test {
         let loan = client.get_loan_info(&loan_id);
         assert_eq!(loan.disbursed, 70_000_0000000i128);
 
+        // Advance ledger by 1 period to compound interest
+        env.ledger().set_sequence_number(env.ledger().sequence() + 100);
+
         // Borrower repays. Total owed = 70,000 + 8% = 75,600.
         let sac = StellarAssetClient::new(&env, &token_address);
         sac.mint(&borrower, &80_000_0000000i128);
@@ -1811,6 +1881,9 @@ mod test {
         client.request_loan(&borrower, &loan_id, &10_000_0000000i128);
         client.approve_loan(&loan_id);
         client.disburse(&loan_id, &borrower, &10_000_0000000i128);
+
+        // Advance ledger by 1 period to compound interest
+        env.ledger().set_sequence_number(env.ledger().sequence() + 100);
 
         sac.mint(&borrower, &20_000_0000000i128);
 
@@ -1942,6 +2015,8 @@ mod test {
         client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
         client.request_loan(&borrower, &loan_id, &10_000_0000000i128);
         client.approve_loan(&loan_id);
+        client.disburse(&loan_id, &borrower, &10_000_0000000i128);
+        env.ledger().set_sequence_number(env.ledger().sequence() + 100);
 
         let sac = StellarAssetClient::new(&env, &token_address);
         sac.mint(&borrower, &20_000_0000000i128);
@@ -1967,6 +2042,8 @@ mod test {
         client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
         client.request_loan(&borrower, &loan_id, &10_000_0000000i128);
         client.approve_loan(&loan_id);
+        client.disburse(&loan_id, &borrower, &10_000_0000000i128);
+        env.ledger().set_sequence_number(env.ledger().sequence() + 100);
 
         let sac = StellarAssetClient::new(&env, &token_address);
         sac.mint(&borrower, &20_000_0000000i128);
@@ -2028,7 +2105,7 @@ mod test {
 
         // Preview: 10_000 withdrawal at 0.1% = 10 fee, 9990 net
         let preview = client.preview_withdrawal_fee(&10_000_0000000i128);
-        assert_eq!(preview, (10_000_0000000i128, 1_0000000i128, 9_999_0000000i128, 10u32, 3_000u32));
+        assert_eq!(preview, (10_000_0000000i128, 10_0000000i128, 9_990_0000000i128, 10u32, 3_000u32));
     }
 
     #[test]
@@ -2153,6 +2230,9 @@ mod test {
 
         // High utilization during active loan
         assert_eq!(client.get_withdrawal_fee_bps(), 200u32);
+
+        // Advance ledger by 1 period to compound interest
+        env.ledger().set_sequence_number(env.ledger().sequence() + 100);
 
         // Borrower repays full amount
         sac.mint(&borrower, &90_000_0000000i128);
@@ -2584,5 +2664,51 @@ mod test {
         env.mock_all_auths();
         let result = client.try_pause();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_daily_borrow_limit_enforced() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (admin, investor, _treasury, _token_address, client) = setup_pool(&env);
+        let borrower = Address::generate(&env);
+        let contractor = Address::generate(&env);
+
+        // Deposit liquidity.
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+
+        // Configure daily limit to 10k USDC
+        assert_eq!(client.get_daily_borrow_limit(), 0);
+        client.set_daily_borrow_limit(&10_000_0000000i128);
+        assert_eq!(client.get_daily_borrow_limit(), 10_000_0000000i128);
+
+        // Request and approve a 50k loan.
+        let loan_id = mock_loan_id(&env);
+        client.request_loan(&borrower, &loan_id, &50_000_0000000i128);
+        client.approve_loan(&loan_id);
+
+        // Disburse 10k -> should succeed.
+        client.disburse(&loan_id, &contractor, &10_000_0000000i128);
+        assert_eq!(client.get_daily_borrowed(), 10_000_0000000i128);
+
+        // Disburse another 1k -> should fail (exceeds daily limit).
+        let result = client.try_disburse(&loan_id, &contractor, &1_000_0000000i128);
+        assert_eq!(result.unwrap_err(), Ok(PoolError::DailyBorrowLimitExceeded));
+
+        // Advance ledger by 1 day (100 ledgers in test).
+        let current = env.ledger().sequence();
+        env.ledger().set_sequence_number(current + 100);
+
+        // Accumulator for the new day should be 0.
+        assert_eq!(client.get_daily_borrowed(), 0);
+
+        // Disburse 1k -> should succeed now.
+        client.disburse(&loan_id, &contractor, &1_000_0000000i128);
+        assert_eq!(client.get_daily_borrowed(), 1_000_0000000i128);
+
+        // Disburse 10k -> should fail.
+        let result2 = client.try_disburse(&loan_id, &contractor, &10_000_0000000i128);
+        assert_eq!(result2.unwrap_err(), Ok(PoolError::DailyBorrowLimitExceeded));
     }
 }

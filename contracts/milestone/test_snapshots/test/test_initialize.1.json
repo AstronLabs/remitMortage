@@ -234,6 +234,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "min_delay_ledgers"
+                              },
+                              "val": {
+                                "u32": 100
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "threshold"
                               },
                               "val": {

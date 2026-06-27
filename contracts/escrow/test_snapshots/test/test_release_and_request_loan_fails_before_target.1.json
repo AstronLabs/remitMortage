@@ -214,6 +214,9 @@
                 },
                 {
                   "u32": 400
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                 }
               ]
             }
@@ -1060,6 +1063,14 @@
                               "val": {
                                 "address": "CCABDO7UZXYE4W6GVSEGSNNZTKSLFQGKXXQTH6OX7M7GKZ4Z6CUJNGZN"
                               }
+                            },
+                            {
+                              "key": {
+                                "symbol": "treasury_address"
+                              },
+                              "val": {
+                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                              }
                             }
                           ]
                         }
@@ -1203,6 +1214,21 @@
                           "vec": [
                             {
                               "symbol": "TotalRepaidInterest"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 0
+                          }
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "TotalWithdrawalFees"
                             }
                           ]
                         },

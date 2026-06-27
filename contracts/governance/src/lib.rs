@@ -261,16 +261,18 @@ mod test {
 
         let admin = Address::generate(&env);
         let signer1 = Address::generate(&env);
+        let signer2 = Address::generate(&env);
         let mut signers = Vec::new(&env);
         signers.push_back(signer1.clone());
+        signers.push_back(signer2.clone());
 
-        client.initialize(&admin, &signers, &10000);
+        client.initialize(&admin, &signers, &10000); // Requires 2 votes to pass
 
         let evidence_hash = Bytes::from_slice(&env, b"QmEvidenceHash");
         let proposal_id = client.submit_proposal(&1, &evidence_hash);
 
         client.vote(&signer1, &proposal_id);
-        client.vote(&signer1, &proposal_id); // Should panic here
+        client.vote(&signer1, &proposal_id); // Should panic here with already voted
     }
 
     #[test]

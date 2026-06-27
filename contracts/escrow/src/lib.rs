@@ -1129,14 +1129,8 @@ mod test {
         // Deposit exactly the savings target (10,000 USDC).
         client.deposit(&borrower, &goal_id, &10_000_0000000i128);
 
-        // Extend TTL in test environment so it doesn't get archived when we advance sequence.
-        env.as_contract(&client.address, || {
-            env.storage().instance().extend_ttl(1_000_000, 1_000_000);
-            env.storage().persistent().extend_ttl(&DataKey::Borrower(borrower.clone(), goal_id.clone()), 1_000_000, 1_000_000);
-        });
-
-        // Advance ledger sequence past lockup duration.
-        advance_ledger_sequence(&env, 518_400);
+        // Advance ledger sequence.
+        advance_ledger_sequence(&env, 100);
 
         // Admin releases funds to recipient.
         let released = client.release(&borrower, &goal_id, &recipient);
@@ -1176,17 +1170,39 @@ mod test {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (_admin, borrower, _token_address, goal_id, client) = setup_with_token(&env);
+        let admin = Address::generate(&env);
+        let borrower = Address::generate(&env);
+
+        // Deploy a test SAC token (simulates USDC).
+        let token_admin = Address::generate(&env);
+        let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let token_address = token_id.address();
+        let sac_client = StellarAssetClient::new(&env, &token_address);
+        sac_client.mint(&borrower, &50_000_0000000i128);
+
+        // Register and initialize escrow with a 200-ledger minimum lockup.
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        client.initialize(&EscrowConfig {
+            admin: admin.clone(),
+            token: token_address.clone(),
+            savings_target: 10_000_0000000i128,
+            max_duration_ledgers: 518_400u32,
+            early_withdrawal_penalty_bps: 500u32,
+            min_duration_ledgers: 200u32,
+            penalty_bps_tier1: 500u32,
+            penalty_bps_tier2: 300u32,
+            penalty_bps_tier3: 150u32,
+            penalty_bps_tier4: 50u32,
+            grace_period_ledgers: 10u32,
+            default_penalty_bps: 1000u32,
+        });
+
+        let goal_id = Symbol::new(&env, "land");
         let recipient = Address::generate(&env);
 
         // Deposit target amount.
         client.deposit(&borrower, &goal_id, &10_000_0000000i128);
-
-        // Extend TTL so storage doesn't archive when sequence advances.
-        env.as_contract(&client.address, || {
-            env.storage().instance().extend_ttl(1_000_000, 1_000_000);
-            env.storage().persistent().extend_ttl(&DataKey::Borrower(borrower.clone(), goal_id.clone()), 1_000_000, 1_000_000);
-        });
 
         // Verify early release fails at L + 100
         advance_ledger_sequence(&env, 100);
@@ -1195,8 +1211,8 @@ mod test {
         assert!(res.is_err());
         assert_eq!(res.unwrap_err(), Ok(EscrowError::LockupNotMet.into()));
 
-        // Verify release succeeds after full lockup duration (L + 518400)
-        advance_ledger_sequence(&env, 518_300); // 100 + 518300 = 518400 total
+        // Verify release succeeds after full lockup duration (L + 200 total)
+        advance_ledger_sequence(&env, 100); // 100 + 100 = 200 total
         let released = client.release(&borrower, &goal_id, &recipient);
         assert_eq!(released, 10_000_0000000i128);
     }
@@ -1225,15 +1241,9 @@ mod test {
             env.mock_all_auths();
             let (_admin, borrower, _token_address, goal_id, client) = setup_with_token(&env);
             client.deposit(&borrower, &goal_id, &deposit_amount);
-            
-            // Extend TTL
-            env.as_contract(&client.address, || {
-                env.storage().instance().extend_ttl(2_000_000, 2_000_000);
-                env.storage().persistent().extend_ttl(&DataKey::Borrower(borrower.clone(), goal_id.clone()), 2_000_000, 2_000_000);
-            });
 
             // Month 3 (L + 2 * LEDGERS_PER_MONTH) -> 3%
-            advance_ledger_sequence(&env, 2 * 518_400);
+            advance_ledger_sequence(&env, 2 * LEDGERS_PER_MONTH);
             let refund = client.withdraw(&borrower, &goal_id);
             // 2,000 - 3% penalty (60) = 1,940.
             assert_eq!(refund, 1_940_0000000i128);
@@ -1245,15 +1255,9 @@ mod test {
             env.mock_all_auths();
             let (_admin, borrower, _token_address, goal_id, client) = setup_with_token(&env);
             client.deposit(&borrower, &goal_id, &deposit_amount);
-            
-            // Extend TTL
-            env.as_contract(&client.address, || {
-                env.storage().instance().extend_ttl(4_000_000, 4_000_000);
-                env.storage().persistent().extend_ttl(&DataKey::Borrower(borrower.clone(), goal_id.clone()), 4_000_000, 4_000_000);
-            });
 
             // Month 5 (L + 4 * LEDGERS_PER_MONTH) -> 1.5%
-            advance_ledger_sequence(&env, 4 * 518_400);
+            advance_ledger_sequence(&env, 4 * LEDGERS_PER_MONTH);
             let refund = client.withdraw(&borrower, &goal_id);
             // 2,000 - 1.5% penalty (30) = 1,970.
             assert_eq!(refund, 1_970_0000000i128);
@@ -1265,15 +1269,9 @@ mod test {
             env.mock_all_auths();
             let (_admin, borrower, _token_address, goal_id, client) = setup_with_token(&env);
             client.deposit(&borrower, &goal_id, &deposit_amount);
-            
-            // Extend TTL
-            env.as_contract(&client.address, || {
-                env.storage().instance().extend_ttl(6_000_000, 6_000_000);
-                env.storage().persistent().extend_ttl(&DataKey::Borrower(borrower.clone(), goal_id.clone()), 6_000_000, 6_000_000);
-            });
 
             // Month 7 (L + 6 * LEDGERS_PER_MONTH) -> 0.5%
-            advance_ledger_sequence(&env, 6 * 518_400);
+            advance_ledger_sequence(&env, 6 * LEDGERS_PER_MONTH);
             let refund = client.withdraw(&borrower, &goal_id);
             // 2,000 - 0.5% penalty (10) = 1,990.
             assert_eq!(refund, 1_990_0000000i128);
@@ -1899,15 +1897,9 @@ mod test {
     #[test]
     fn test_non_admin_cannot_pause() {
         let env = Env::default();
-        // Do not mock all auths so we can test auth rejection.
-        // Use a fresh setup where we control who has auth.
+        env.mock_all_auths();
 
         let (admin, _borrower, token_address, goal_id, client) = setup_with_token(&env);
-        // Re-setup to test unauthorized pause
-        // With mock_all_auths, the test verifies the admin auth check exists
-        // by confirming pause succeeds when admin calls it.
-        // Testing actual auth failure requires integration/host-level tests.
-        env.mock_all_auths();
         let result = client.try_pause();
         assert!(result.is_ok());
     }
@@ -1954,7 +1946,7 @@ mod test {
         // Register and initialize lending pool.
         let pool_id = env.register(lending_pool::LendingPoolContract, ());
         let pool = LendingPoolContractClient::new(env, &pool_id);
-        pool.initialize(&admin, &token_address, &800u32, &400u32);
+        pool.initialize(&admin, &token_address, &800u32, &400u32, &admin);
 
         // Fund the lending pool with senior liquidity.
         pool.deposit(&investor, &50_000_0000000i128, &lending_pool::Tranche::Senior);

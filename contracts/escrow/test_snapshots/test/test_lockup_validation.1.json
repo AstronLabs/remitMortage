@@ -105,7 +105,7 @@
                         "symbol": "min_duration_ledgers"
                       },
                       "val": {
-                        "u32": 0
+                        "u32": 200
                       }
                     },
                     {
@@ -249,7 +249,7 @@
   ],
   "ledger": {
     "protocol_version": 22,
-    "sequence_number": 100,
+    "sequence_number": 200,
     "timestamp": 100,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
@@ -357,7 +357,7 @@
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
             "key": {
               "ledger_key_nonce": {
-                "nonce": 2032731177588607455
+                "nonce": 4270020994084947596
               }
             },
             "durability": "temporary"
@@ -372,7 +372,7 @@
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
                 "key": {
                   "ledger_key_nonce": {
-                    "nonce": 2032731177588607455
+                    "nonce": 4270020994084947596
                   }
                 },
                 "durability": "temporary",
@@ -381,7 +381,7 @@
             },
             "ext": "v0"
           },
-          6312099
+          6312199
         ]
       ],
       [
@@ -553,7 +553,7 @@
             },
             "ext": "v0"
           },
-          1000000
+          4095
         ]
       ],
       [
@@ -634,7 +634,7 @@
                                 "symbol": "min_duration_ledgers"
                               },
                               "val": {
-                                "u32": 0
+                                "u32": 200
                               }
                             },
                             {
@@ -725,7 +725,7 @@
             },
             "ext": "v0"
           },
-          1000000
+          518400
         ]
       ],
       [
@@ -944,7 +944,7 @@
             },
             "ext": "v0"
           },
-          518500
+          518600
         ]
       ],
       [
@@ -1077,7 +1077,7 @@
             },
             "ext": "v0"
           },
-          1000000
+          518400
         ]
       ]
     ]

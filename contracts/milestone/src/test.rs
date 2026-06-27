@@ -5,7 +5,8 @@ use crate::errors::MilestoneError;
 use crate::types::{MilestoneRecord, MilestoneStatus};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::token::StellarAssetClient;
-use soroban_sdk::{token, Address, BytesN, Env, Vec};
+use soroban_sdk::testutils::Ledger;
+use soroban_sdk::{token, Address, Bytes, BytesN, Env, Vec};
 
 /// Minimal mock of the lending pool exposing the same `disburse` ABI the
 /// milestone contract calls cross-contract. It actually moves tokens (so the
@@ -145,6 +146,13 @@ fn evidence(env: &Env) -> BytesN<32> {
     BytesN::from_array(env, &[9u8; 32])
 }
 
+fn cidv0(env: &Env) -> Bytes {
+    let mut raw = [b'x'; 46];
+    raw[0] = b'Q';
+    raw[1] = b'm';
+    Bytes::from_slice(env, &raw)
+}
+
 // ── Initialization ──────────────────────────────────────────────────────
 
 #[test]
@@ -205,6 +213,7 @@ fn test_propose_milestone_creates_record() {
         &loan_id(&env),
         &1_000i128,
         &evidence(&env),
+        &cidv0(&env),
     );
 
     let record: MilestoneRecord = h.milestone.get_milestone(&pid);
@@ -227,6 +236,7 @@ fn test_propose_zero_amount_fails() {
         &loan_id(&env),
         &0i128,
         &evidence(&env),
+        &cidv0(&env),
     );
     assert_eq!(res, Err(Ok(MilestoneError::InvalidAmount)));
 }
@@ -244,6 +254,7 @@ fn test_propose_zero_evidence_fails() {
         &loan_id(&env),
         &1_000i128,
         &zero,
+        &cidv0(&env),
     );
     assert_eq!(res, Err(Ok(MilestoneError::EvidenceRequired)));
 }
@@ -261,6 +272,7 @@ fn test_propose_duplicate_fails() {
         &loan_id(&env),
         &1_000i128,
         &evidence(&env),
+        &cidv0(&env),
     );
 
     let res = h.milestone.try_propose_milestone(
@@ -269,6 +281,7 @@ fn test_propose_duplicate_fails() {
         &loan_id(&env),
         &1_000i128,
         &evidence(&env),
+        &cidv0(&env),
     );
     assert_eq!(res, Err(Ok(MilestoneError::MilestoneExists)));
 }
@@ -288,6 +301,7 @@ fn test_approve_reaches_threshold() {
         &loan_id(&env),
         &1_000i128,
         &evidence(&env),
+        &cidv0(&env),
     );
 
     // First vote: still Proposed, votes == 1.
@@ -318,6 +332,7 @@ fn test_approve_by_non_approver_fails() {
         &loan_id(&env),
         &1_000i128,
         &evidence(&env),
+        &cidv0(&env),
     );
 
     // A random address that is not in the approver set cannot approve, even
@@ -340,6 +355,7 @@ fn test_approve_twice_by_same_approver_fails() {
         &loan_id(&env),
         &1_000i128,
         &evidence(&env),
+        &cidv0(&env),
     );
 
     let approver = h.approvers.get(0).unwrap();
@@ -377,6 +393,7 @@ fn test_release_disburses_via_cross_contract() {
         &loan_id(&env),
         &amount,
         &evidence(&env),
+        &cidv0(&env),
     );
     h.milestone
         .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
@@ -409,6 +426,7 @@ fn test_release_before_approved_fails() {
         &loan_id(&env),
         &1_000i128,
         &evidence(&env),
+        &cidv0(&env),
     );
 
     // Only one of two required votes cast: still Proposed.
@@ -432,6 +450,7 @@ fn test_release_is_blocked_until_configured_timelock_elapses() {
         &loan_id(&env),
         &1_000i128,
         &evidence(&env),
+        &cidv0(&env),
     );
     h.milestone
         .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
@@ -467,6 +486,7 @@ fn test_cannot_release_twice() {
         &loan_id(&env),
         &amount,
         &evidence(&env),
+        &cidv0(&env),
     );
     h.milestone
         .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
@@ -502,6 +522,7 @@ fn test_release_exceeding_pool_cap_fails() {
         &loan_id(&env),
         &1_000i128,
         &evidence(&env),
+        &cidv0(&env),
     );
     h.milestone
         .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
@@ -529,6 +550,7 @@ fn test_approve_requires_caller_auth() {
             &loan_id(&env),
             &1_000i128,
             &evidence(&env),
+            &cidv0(&env),
         );
         h
     };

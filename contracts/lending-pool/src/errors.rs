@@ -39,4 +39,6 @@ pub enum PoolError {
     /// Borrower has no valid, non-expired verification record in the
     /// configured VerificationRegistry, so the loan request is rejected.
     ApplicantNotVerified = 17,
+    /// The daily borrow limit has been exceeded.
+    DailyBorrowLimitExceeded = 18,
 }
