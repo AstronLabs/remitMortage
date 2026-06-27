@@ -55,6 +55,8 @@ model Applicant {
   stellarAddress     String             @unique
   verificationStatus VerificationStatus @default(PENDING)
   creditScore        Int?
+  taxId              String?
+  monthlyIncome      String?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
   verificationResults VerificationResult[]

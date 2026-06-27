@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./docs/swagger.js";
@@ -20,6 +21,7 @@ const config = loadConfig();
 const PORT = config.port;
 
 // ── Middleware ───────────────────────────────────────────────────────────
+app.use(helmet());
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (like mobile apps, curl, Postman)
