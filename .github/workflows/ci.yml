@@ -95,6 +95,49 @@ jobs:
           NEXT_PUBLIC_NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
           NEXT_PUBLIC_HORIZON_URL: "https://horizon-testnet.stellar.org"
 
+  # ── Contracts Coverage ──────────────────────────────────────────────────
+  contracts-coverage:
+    name: Contracts Coverage (cargo-tarpaulin)
+    runs-on: ubuntu-latest
+    needs: contracts-ci
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            contracts -> target
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+
+      - name: Run Coverage
+        run: cargo tarpaulin --out Xml --out Html --workspace --exclude-files "tests/**/*" --output-dir coverage/
+        working-directory: contracts
+
+      - name: Upload Coverage Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: contracts-coverage-report
+          path: contracts/coverage/
+          retention-days: 14
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: contracts/coverage/cobertura.xml
+          flags: contracts
+          name: soroban-contracts
+          fail_ci_if_error: false
+
   # ── Integration Tests ───────────────────────────────────────────────────
   integration-tests:
     name: Integration Tests
