@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { validateBorrowerParams } from "../middleware/validate.js";
+import { getApplicant } from "../services/db.js";
 
 export const borrowerRouter = Router();
 
@@ -8,7 +9,7 @@ export const borrowerRouter = Router();
  * /api/borrower/{address}/status:
  *   get:
  *     summary: Get borrower status
- *     description: Returns the current borrower escrow and loan status summary. Contract-backed values are placeholders until Soroban queries are integrated.
+ *     description: Returns the current borrower verification and loan status from the database.
  *     tags:
  *       - Borrower
  *     parameters:
@@ -36,24 +37,40 @@ export const borrowerRouter = Router();
  */
 borrowerRouter.get("/:address/status", validateBorrowerParams, async (req, res) => {
   try {
-    const { address } = req.params;
+    const address = Array.isArray(req.params.address)
+      ? req.params.address[0]
+      : req.params.address;
 
-    // TODO: Query escrow contract for borrower balance
-    // TODO: Query lending pool contract for active loans
+    const applicant = await getApplicant(address).catch((err) => {
+      console.error("DB read error (non-fatal):", err);
+      return null;
+    });
+
+    const latestVerification = applicant?.verificationResults[0] ?? null;
+    const latestLoan = applicant?.loanApplications[0] ?? null;
 
     res.json({
       address,
-      escrow: {
-        deposited: "0",
-        target: "0",
-        progress: 0,
-      },
-      loan: {
-        status: "none",
-        principal: "0",
-        disbursed: "0",
-        repaid: "0",
-      },
+      verificationStatus: applicant?.verificationStatus ?? "PENDING",
+      creditScore: applicant?.creditScore ?? null,
+      verification: latestVerification
+        ? {
+            eligible: latestVerification.eligible,
+            totalPayments: latestVerification.totalPayments,
+            totalVolume: latestVerification.totalVolume,
+            spanMonths: latestVerification.spanMonths,
+            reportHash: latestVerification.reportHash,
+            analyzedAt: latestVerification.analyzedAt,
+          }
+        : null,
+      loan: latestLoan
+        ? {
+            status: latestLoan.status,
+            principal: String(latestLoan.principal),
+            escrowContractId: latestLoan.escrowContractId ?? null,
+            loanId: latestLoan.loanId ?? null,
+          }
+        : { status: "none", principal: "0" },
     });
   } catch (error) {
     console.error("Borrower status error:", error);

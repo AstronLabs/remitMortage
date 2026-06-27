@@ -23,6 +23,8 @@ pub struct VerificationRecord {
 pub enum DataKey {
     /// Contract admin address.
     Admin,
+    /// Pending admin address awaiting acceptance of the admin role.
+    ProposedAdmin,
     /// Verification record keyed by borrower address.
     Verification(Address),
 }

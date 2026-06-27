@@ -24,4 +24,20 @@ pub enum EscrowError {
     BorrowerNotFound = 9,
     /// Collateral has already been seized.
     AlreadySeized = 10,
+    /// No pending upgrade exists to execute.
+    UpgradeNotPending = 10,
+    /// Upgrade was proposed but the timelock delay has not elapsed yet.
+    UpgradeTimelockActive = 11,
+    /// The borrower's grace period has not yet expired; removal is not allowed.
+    GracePeriodActive = 12,
+    /// The borrower is not in default and cannot be forcibly removed.
+    BorrowerNotInDefault = 13,
+    /// Minimum savings lockup period has not elapsed yet.
+    LockupNotMet = 17,
+    /// Operation rejected because the contract is paused.
+    ContractPaused = 14,
+    /// Proposed new admin is not the caller or no transfer is pending.
+    NotPendingAdmin = 15,
+    /// Cross-contract bridge call to the lending pool failed.
+    BridgeFailed = 16,
 }

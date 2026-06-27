@@ -35,6 +35,10 @@ export function getProposal(id: string): MilestoneProposal | null {
   return store.get(id) ?? null;
 }
 
+export function listProposals(): MilestoneProposal[] {
+  return Array.from(store.values());
+}
+
 export function updateProposal(
   id: string,
   patch: Partial<Pick<MilestoneProposal, "status" | "reason">>

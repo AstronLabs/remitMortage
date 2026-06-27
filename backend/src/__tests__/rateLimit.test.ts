@@ -2,6 +2,11 @@ import express from "express";
 import request from "supertest";
 import { verificationRouter } from "../routes/verification";
 
+jest.mock("../services/db.js", () => ({
+  upsertApplicant: jest.fn(),
+  createVerificationResult: jest.fn(),
+}));
+
 const app = express();
 app.use(express.json());
 app.use("/api/verification", verificationRouter);

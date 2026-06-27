@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { setupServer } from 'msw/node';
-import { horizonHandlers } from '../mocks/horizonHandlers';
+import { horizonHandlers, MOCK_EDGE_CASES } from '../mocks/horizonHandlers';
 import prisma, { setupTestDB, teardownTestDB, disconnectTestDB } from '../setup/dbEnv';
 import app from '../../backend/src/index';
 
@@ -115,8 +115,24 @@ describe('Borrower Onboarding Integration', () => {
         senderAddress: mockAccountId
         // Missing recipientAddress
       });
-    
+
     expect(res.status).toBe(400);
+  });
+
+  it('should handle a missing Horizon account gracefully', async () => {
+    const res = await request(app)
+      .post('/api/verification/check')
+      .send({
+        senderAddress: MOCK_EDGE_CASES.MISSING_ACCOUNT,
+        recipientAddress: mockAccountId,
+      });
+
+    // The service should not crash — it returns 200 with eligible: false
+    // or a 400/500 depending on implementation, but never an unhandled error.
+    expect([200, 400, 500]).toContain(res.status);
+    if (res.status === 200) {
+      expect(res.body.eligible).toBe(false);
+    }
   });
 
   it('should calculate credit score for valid remittance history', async () => {

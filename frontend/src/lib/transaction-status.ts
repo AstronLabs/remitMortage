@@ -1,6 +1,7 @@
 import { rpc, scValToNative, StrKey, xdr } from "@stellar/stellar-sdk";
 
 export const STELLARCHAIN_TX_BASE = "https://testnet.stellarchain.io/transactions/";
+export const STELLAR_EXPERT_TX_BASE = "https://stellar.expert/explorer/testnet/tx/";
 export const TX_SUCCESS_SESSION_KEY = "rm_tx_success";
 
 export type TransactionType =
@@ -18,11 +19,25 @@ export type TxUiPhase =
   | "confirmed"
   | "failed";
 
+export type TransactionModalPhase =
+  | "idle"
+  | "simulating"
+  | "signing"
+  | "pending"
+  | "success"
+  | "error";
+
 export const TX_PROGRESS_STEPS = [
   "Submitted",
   "Simulating",
   "Pending Confirmation",
   "Complete",
+] as const;
+
+export const TRANSACTION_MODAL_STEPS = [
+  "Simulating",
+  "Awaiting Signature",
+  "Confirming on Stellar",
 ] as const;
 
 export function shortenAddress(addr: string): string {
@@ -74,6 +89,46 @@ export function phaseToStepIndex(phase: TxUiPhase): number {
 
 export function isTerminalPhase(phase: TxUiPhase): boolean {
   return phase === "confirmed" || phase === "failed";
+}
+
+export function getTransactionExplorerLinks(hash: string) {
+  return [
+    {
+      label: "View on Stellarchain",
+      href: `${STELLARCHAIN_TX_BASE}${hash}`,
+    },
+    {
+      label: "View on Stellar Expert",
+      href: `${STELLAR_EXPERT_TX_BASE}${hash}`,
+    },
+  ];
+}
+
+export function formatTransactionErrorMessage(error: unknown): string {
+  const message =
+    typeof error === "string"
+      ? error
+      : error instanceof Error
+        ? error.message
+        : typeof error === "object" &&
+            error !== null &&
+            "message" in error &&
+            typeof (error as { message?: unknown }).message === "string"
+          ? (error as { message: string }).message
+          : "Transaction could not be completed.";
+
+  const cleaned = message
+    .replace(/^Simulation failed:\s*/i, "")
+    .replace(/^Submission failed:\s*/i, "")
+    .replace(/^Error:\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (/trInvokeHostFunction/i.test(cleaned)) {
+    return "The contract rejected the transaction. Review the on-chain diagnostics for details.";
+  }
+
+  return cleaned || "Transaction could not be completed.";
 }
 
 function readSwitchName(value: { switch: () => unknown }): string {

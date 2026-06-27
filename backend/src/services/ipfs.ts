@@ -2,6 +2,76 @@ import axios from "axios";
 import { loadConfig } from "../config.js";
 
 const config = loadConfig();
+export const PINATA_MAX_RETRIES = 3;
+export const PINATA_RETRY_BASE_DELAY_MS = 1000;
+interface PinataHashResponse {
+  IpfsHash: string;
+}
+
+export function calculatePinataRetryDelay(retryCount: number): number {
+  return 2 ** retryCount * PINATA_RETRY_BASE_DELAY_MS;
+}
+
+function isPinataRateLimitError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "response" in error &&
+    typeof (error as { response?: { status?: number } }).response?.status === "number" &&
+    (error as { response?: { status?: number } }).response?.status === 429
+  );
+}
+
+function extractPinataErrorDetail(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "response" in error &&
+    typeof (error as { response?: { data?: { error?: { details?: string } } } }).response?.data
+      ?.error?.details === "string"
+  ) {
+    return (error as { response?: { data?: { error?: { details?: string } } } }).response!.data!
+      .error!.details!;
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: string }).message === "string"
+  ) {
+    return (error as { message: string }).message;
+  }
+
+  return "Unknown Pinata error";
+}
+
+async function waitForRetry(delayMs: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function executePinataRequest<T>(
+  request: () => Promise<{ data: T; status: number }>
+): Promise<{ data: T; status: number }> {
+  let retryCount = 0;
+
+  while (true) {
+    try {
+      return await request();
+    } catch (error) {
+      if (!isPinataRateLimitError(error) || retryCount >= PINATA_MAX_RETRIES) {
+        throw error;
+      }
+
+      retryCount += 1;
+      const delayMs = calculatePinataRetryDelay(retryCount);
+      console.warn(
+        `[IPFSService] Pinata rate limit hit. Retrying request ${retryCount}/${PINATA_MAX_RETRIES} in ${delayMs}ms.`
+      );
+      await waitForRetry(delayMs);
+    }
+  }
+}
 
 /**
  * Uploads a file buffer to Pinata IPFS.
@@ -30,21 +100,28 @@ export async function pinFileToIPFS(fileBuffer: Buffer, fileName: string): Promi
   formData.append("pinataMetadata", pinataMetadata);
 
   try {
-    const response = await axios.post(url, formData, {
-      headers: {
-        "pinata_api_key": config.pinataApiKey,
-        "pinata_secret_api_key": config.pinataSecretApiKey,
-      },
-    });
+    const response = await executePinataRequest<PinataHashResponse>(() =>
+      axios.post<PinataHashResponse>(url, formData, {
+        headers: {
+          "pinata_api_key": config.pinataApiKey,
+          "pinata_secret_api_key": config.pinataSecretApiKey,
+        },
+      })
+    );
 
     if (!response.data || !response.data.IpfsHash) {
       throw new Error("Invalid response received from Pinata API");
     }
 
     return response.data.IpfsHash;
-  } catch (error: any) {
-    console.error("[IPFSService] Error pinning file to IPFS:", error.response?.data || error.message);
-    throw new Error(`Failed to pin file to IPFS: ${error.response?.data?.error?.details || error.message}`);
+  } catch (error) {
+    console.error(
+      "[IPFSService] Error pinning file to IPFS:",
+      typeof error === "object" && error !== null && "response" in error
+        ? (error as { response?: { data?: unknown } }).response?.data
+        : extractPinataErrorDetail(error)
+    );
+    throw new Error(`Failed to pin file to IPFS: ${extractPinataErrorDetail(error)}`);
   }
 }
 
@@ -61,18 +138,20 @@ export async function pinJSONToIPFS(metadata: any): Promise<string> {
   }
 
   try {
-    const response = await axios.post(
-      url,
-      {
-        pinataContent: metadata,
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "pinata_api_key": config.pinataApiKey,
-          "pinata_secret_api_key": config.pinataSecretApiKey,
+    const response = await executePinataRequest<PinataHashResponse>(() =>
+      axios.post<PinataHashResponse>(
+        url,
+        {
+          pinataContent: metadata,
         },
-      }
+        {
+          headers: {
+            "Content-Type": "application/json",
+            "pinata_api_key": config.pinataApiKey,
+            "pinata_secret_api_key": config.pinataSecretApiKey,
+          },
+        }
+      )
     );
 
     if (!response.data || !response.data.IpfsHash) {
@@ -80,9 +159,14 @@ export async function pinJSONToIPFS(metadata: any): Promise<string> {
     }
 
     return response.data.IpfsHash;
-  } catch (error: any) {
-    console.error("[IPFSService] Error pinning JSON to IPFS:", error.response?.data || error.message);
-    throw new Error(`Failed to pin JSON to IPFS: ${error.response?.data?.error?.details || error.message}`);
+  } catch (error) {
+    console.error(
+      "[IPFSService] Error pinning JSON to IPFS:",
+      typeof error === "object" && error !== null && "response" in error
+        ? (error as { response?: { data?: unknown } }).response?.data
+        : extractPinataErrorDetail(error)
+    );
+    throw new Error(`Failed to pin JSON to IPFS: ${extractPinataErrorDetail(error)}`);
   }
 }
 
@@ -104,16 +188,23 @@ export async function unpinFileFromIPFS(cid: string): Promise<UnpinResult> {
   }
 
   try {
-    const response = await axios.delete(url, {
-      headers: {
-        pinata_api_key: config.pinataApiKey,
-        pinata_secret_api_key: config.pinataSecretApiKey,
-      },
-    });
+    const response = await executePinataRequest(() =>
+      axios.delete(url, {
+        headers: {
+          pinata_api_key: config.pinataApiKey,
+          pinata_secret_api_key: config.pinataSecretApiKey,
+        },
+      })
+    );
 
     return { status: response.status, cid };
-  } catch (error: any) {
-    console.error("[IPFSService] Error unpinning file from IPFS:", error.response?.data || error.message);
-    throw new Error(`Failed to unpin file from IPFS: ${error.response?.data?.error?.details || error.message}`);
+  } catch (error) {
+    console.error(
+      "[IPFSService] Error unpinning file from IPFS:",
+      typeof error === "object" && error !== null && "response" in error
+        ? (error as { response?: { data?: unknown } }).response?.data
+        : extractPinataErrorDetail(error)
+    );
+    throw new Error(`Failed to unpin file from IPFS: ${extractPinataErrorDetail(error)}`);
   }
 }

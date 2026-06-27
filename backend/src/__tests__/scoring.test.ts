@@ -12,6 +12,7 @@ describe("Credit Scoring Engine", () => {
     spanMonths: 12,
     firstPayment: "2023-01-01",
     lastPayment: "2024-01-01",
+    selfDealing: false,
     eligible: true,
     reason: "OK"
   };

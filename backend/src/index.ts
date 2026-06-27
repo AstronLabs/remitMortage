@@ -9,7 +9,9 @@ import { verificationRouter } from "./routes/verification.js";
 import { borrowerRouter } from "./routes/borrower.js";
 import { loanRouter } from "./routes/loan.js";
 import { milestoneRouter } from "./routes/milestone.js";
+import { analyticsRouter } from "./routes/analytics.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { startEventListener } from "./services/eventListener.js";
 import { startNotificationScheduler } from "./services/notification.js";
 import { loadConfig } from "./config.js";
 
@@ -52,6 +54,7 @@ app.use("/api/verification", verificationLimiter, verificationRouter);
 app.use("/api/borrower", borrowerRouter);
 app.use("/api/loan", loanRouter);
 app.use("/api/milestone", milestoneRouter);
+app.use("/api/analytics", analyticsRouter);
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Global error handler (must be after routes)
@@ -60,6 +63,11 @@ app.use(errorHandler);
 // ── Start Server ────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🚀 RemitMortgage API running on http://localhost:${PORT}`);
+
+  // Start the Soroban contract event listener alongside the HTTP server. It
+  // runs in the background and self-heals via exponential backoff, so a failing
+  // RPC node never takes down the API process.
+  startEventListener();
   startNotificationScheduler();
 });
 

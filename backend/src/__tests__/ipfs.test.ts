@@ -30,7 +30,12 @@ jest.mock("../services/db.js", () => ({
 import express from "express";
 import request from "supertest";
 import { milestoneRouter } from "../routes/milestone.js";
-import { unpinFileFromIPFS } from "../services/ipfs.js";
+import {
+  calculatePinataRetryDelay,
+  PINATA_MAX_RETRIES,
+  pinJSONToIPFS,
+  unpinFileFromIPFS,
+} from "../services/ipfs.js";
 import { unpinEvidenceCid } from "../services/ipfsCleanup.js";
 import { prisma } from "../services/db.js";
 import {
@@ -49,6 +54,79 @@ describe("IPFS unpinning", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     _clearProposalStore();
+  });
+
+  describe("retry policy", () => {
+    function mockImmediateTimeout() {
+      const immediateTimeout = (((
+        handler: Parameters<typeof setTimeout>[0]
+      ) => {
+        if (typeof handler === "function") {
+          handler();
+        }
+        return 0 as ReturnType<typeof setTimeout>;
+      }) as unknown) as typeof setTimeout;
+
+      return jest
+        .spyOn(global, "setTimeout")
+        .mockImplementation(immediateTimeout);
+    }
+
+    it("retries Pinata POST requests after a 429 response", async () => {
+      const timeoutSpy = mockImmediateTimeout();
+      mockedAxios.post
+        .mockRejectedValueOnce({
+          response: { status: 429, data: { error: { details: "Too Many Requests" } } },
+          message: "Too Many Requests",
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          data: { IpfsHash: "QmRetrySuccess" },
+        });
+
+      await expect(pinJSONToIPFS({ proposalId: "retry-1" })).resolves.toBe(
+        "QmRetrySuccess"
+      );
+
+      expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+      expect(timeoutSpy).toHaveBeenCalledWith(
+        expect.any(Function),
+        calculatePinataRetryDelay(1)
+      );
+
+      timeoutSpy.mockRestore();
+    });
+
+    it("throws after three retry attempts when Pinata keeps returning 429", async () => {
+      const timeoutSpy = mockImmediateTimeout();
+      mockedAxios.delete.mockRejectedValue({
+        response: { status: 429, data: { error: { details: "Too Many Requests" } } },
+        message: "Too Many Requests",
+      });
+
+      await expect(unpinFileFromIPFS("QmStillLimited")).rejects.toThrow(
+        "Failed to unpin file from IPFS: Too Many Requests"
+      );
+
+      expect(mockedAxios.delete).toHaveBeenCalledTimes(PINATA_MAX_RETRIES + 1);
+      expect(timeoutSpy).toHaveBeenNthCalledWith(
+        1,
+        expect.any(Function),
+        calculatePinataRetryDelay(1)
+      );
+      expect(timeoutSpy).toHaveBeenNthCalledWith(
+        2,
+        expect.any(Function),
+        calculatePinataRetryDelay(2)
+      );
+      expect(timeoutSpy).toHaveBeenNthCalledWith(
+        3,
+        expect.any(Function),
+        calculatePinataRetryDelay(3)
+      );
+
+      timeoutSpy.mockRestore();
+    });
   });
 
   describe("unpinFileFromIPFS", () => {

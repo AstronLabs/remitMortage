@@ -28,4 +28,21 @@ pub enum PoolError {
     NotEligibleForDefault = 11,
     /// Loan has already defaulted.
     AlreadyDefaulted = 12,
+    /// No pending upgrade exists to execute.
+    UpgradeNotPending = 11,
+    /// Upgrade was proposed but the timelock delay has not elapsed yet.
+    UpgradeTimelockActive = 12,
+    /// Investor cannot change tranche after the initial deposit.
+    TrancheMismatch = 15,
+    /// Junior tranche has insufficient capital to absorb this loss.
+    InsufficientJuniorCapital = 16,
+    /// Operation rejected because the contract is paused.
+    ContractPaused = 13,
+    /// Proposed new admin is not the caller or no transfer is pending.
+    NotPendingAdmin = 14,
+    /// Borrower has no valid, non-expired verification record in the
+    /// configured VerificationRegistry, so the loan request is rejected.
+    ApplicantNotVerified = 17,
+    /// The daily borrow limit has been exceeded.
+    DailyBorrowLimitExceeded = 18,
 }

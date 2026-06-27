@@ -27,6 +27,9 @@
 
   --shadow-glow: 0 0 60px rgba(99, 102, 241, 0.08);
   --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.3);
+  --shadow-modal: 0 30px 90px rgba(2, 6, 23, 0.62);
+  --glass-overlay: rgba(3, 7, 18, 0.78);
+  --glass-panel: rgba(10, 16, 28, 0.84);
 
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -160,6 +163,17 @@ body {
   to { opacity: 1; transform: scale(1); }
 }
 
+@keyframes modal-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @keyframes checkmark-draw {
   from { stroke-dashoffset: 48; }
   to { stroke-dashoffset: 0; }
@@ -213,6 +227,10 @@ body {
   animation: pulse-glow 3s ease-in-out infinite;
 }
 
+.animate-modal-pop {
+  animation: modal-pop 0.28s cubic-bezier(0.2, 0.9, 0.25, 1) both;
+}
+
 /* ── Glass Card ──────────────────────────────────────────────────────── */
 .glass-card {
   background: var(--bg-glass);
@@ -227,6 +245,24 @@ body {
   border-color: var(--border-glow);
   transform: translateY(-4px);
   box-shadow: var(--shadow-glow);
+}
+
+.glass-overlay {
+  background:
+    radial-gradient(circle at top, rgba(6, 182, 212, 0.16), transparent 38%),
+    radial-gradient(circle at 80% 20%, rgba(99, 102, 241, 0.22), transparent 30%),
+    var(--glass-overlay);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.glass-modal {
+  background:
+    linear-gradient(155deg, rgba(15, 23, 42, 0.94), rgba(9, 14, 25, 0.88)),
+    var(--glass-panel);
+  box-shadow: var(--shadow-modal);
+  backdrop-filter: blur(26px);
+  -webkit-backdrop-filter: blur(26px);
 }
 
 /* ── Gradient Text ───────────────────────────────────────────────────── */

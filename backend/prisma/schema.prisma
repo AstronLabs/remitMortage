@@ -35,3 +35,51 @@ model UnpinnedCid {
   error        String?
   createdAt    DateTime @default(now())
 }
+
+enum VerificationStatus {
+  PENDING
+  ELIGIBLE
+  INELIGIBLE
+}
+
+enum LoanStatus {
+  PENDING
+  APPROVED
+  ACTIVE
+  REPAID
+  DEFAULTED
+}
+
+model Applicant {
+  id                 String             @id @default(uuid())
+  stellarAddress     String             @unique
+  verificationStatus VerificationStatus @default(PENDING)
+  creditScore        Int?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  verificationResults VerificationResult[]
+  loanApplications    LoanApplication[]
+}
+
+model VerificationResult {
+  id             String    @id @default(uuid())
+  applicantId    String
+  applicant      Applicant @relation(fields: [applicantId], references: [id])
+  reportHash     String
+  totalPayments  Int
+  totalVolume    Float
+  spanMonths     Float
+  eligible       Boolean
+  analyzedAt     DateTime  @default(now())
+}
+
+model LoanApplication {
+  id                 String     @id @default(uuid())
+  applicantId        String
+  applicant          Applicant  @relation(fields: [applicantId], references: [id])
+  escrowContractId   String?
+  loanId             String?
+  principal          Float
+  status             LoanStatus @default(PENDING)
+  createdAt          DateTime   @default(now())
+}

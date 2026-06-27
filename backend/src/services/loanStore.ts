@@ -58,6 +58,10 @@ export function getPendingApplications() {
   return Array.from(store.values()).filter((a) => a.status === "Pending");
 }
 
+export function listApplications() {
+  return Array.from(store.values());
+}
+
 export function updateApplication(id: string, patch: Partial<LoanApplication>) {
   const existing = store.get(id);
   if (!existing) return null;

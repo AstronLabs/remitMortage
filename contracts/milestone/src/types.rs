@@ -14,6 +14,8 @@ pub struct MilestoneConfig {
     pub approvers: Vec<Address>,
     /// Number of approver votes required to approve a milestone.
     pub threshold: u32,
+    /// Minimum number of ledgers that must elapse between approval and release.
+    pub min_delay_ledgers: u32,
 }
 
 /// Milestone status lifecycle.
@@ -46,6 +48,8 @@ pub struct MilestoneRecord {
     pub votes: u32,
     /// Ledger sequence at which the milestone was proposed.
     pub created_ledger: u32,
+    /// Ledger sequence at which the milestone was approved and the timelock began.
+    pub approved_ledger: u32,
 }
 
 /// Storage keys for the milestone contract.

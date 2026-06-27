@@ -15,37 +15,107 @@
               "function_name": "initialize",
               "args": [
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                },
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                },
-                {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 100000000000
-                  }
-                },
-                {
-                  "u32": 518400
-                },
-                {
-                  "u32": 500
-                },
-                {
-                  "u32": 300
-                },
-                {
-                  "u32": 150
-                },
-                {
-                  "u32": 50
-                },
-                {
-                  "u32": 120960
-                },
-                {
-                  "u32": 1000
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "admin"
+                      },
+                      "val": {
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "default_penalty_bps"
+                      },
+                      "val": {
+                        "u32": 1000
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "early_withdrawal_penalty_bps"
+                      },
+                      "val": {
+                        "u32": 500
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "grace_period_ledgers"
+                      },
+                      "val": {
+                        "u32": 120960
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "max_duration_ledgers"
+                      },
+                      "val": {
+                        "u32": 518400
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_duration_ledgers"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "penalty_bps_tier1"
+                      },
+                      "val": {
+                        "u32": 500
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "penalty_bps_tier2"
+                      },
+                      "val": {
+                        "u32": 300
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "penalty_bps_tier3"
+                      },
+                      "val": {
+                        "u32": 150
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "penalty_bps_tier4"
+                      },
+                      "val": {
+                        "u32": 50
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "savings_target"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 100000000000
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "token"
+                      },
+                      "val": {
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                      }
+                    }
+                  ]
                 }
               ]
             }
@@ -117,6 +187,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "early_withdrawal_penalty_bps"
+                              },
+                              "val": {
+                                "u32": 500
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "grace_period_ledgers"
                               },
                               "val": {
@@ -129,6 +207,14 @@
                               },
                               "val": {
                                 "u32": 518400
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "min_duration_ledgers"
+                              },
+                              "val": {
+                                "u32": 0
                               }
                             },
                             {

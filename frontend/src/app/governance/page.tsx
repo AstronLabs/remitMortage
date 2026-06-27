@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { ShieldAlert, CheckCircle2, Clock, Check, Eye } from 'lucide-react';
 import { QuorumProgressBar } from '../../components/governance/QuorumProgressBar';
 import { EvidenceDrawer } from '../../components/governance/EvidenceDrawer';
+import { MultisigApprovalCard, type GovernanceSigner } from '../../components/governance/MultisigApprovalCard';
 
 // Mock toast notification
 const toast = {
@@ -23,6 +24,44 @@ const useCommitteeMember = () => {
 
   return { isMember };
 };
+
+const mockSigners: GovernanceSigner[] = [
+  { address: 'GABC1234567890XYZABC1234567890XYZABC1234567890', label: 'Committee Lead', weight: 2, status: 'approved' },
+  { address: 'GDEF1234567890XYZDEF1234567890XYZDEF1234567890', label: 'Legal Review', weight: 1, status: 'approved' },
+  { address: 'GHIJ1234567890XYZGHIJ1234567890XYZGHIJ1234567890', label: 'Finance Board', weight: 1, status: 'pending' },
+];
+
+const mockApprovalProposals = [
+  {
+    id: 'approval_1',
+    milestoneTitle: 'Phase 1: Foundation & Grading',
+    contractor: 'BuildWell Construction LLC',
+    amount: '50,000 USDC',
+    ipfsCid: 'QmTestHash12345abcdef',
+    currentWeight: 3,
+    requiredWeight: 3,
+    totalSignerWeight: 4,
+    signers: mockSigners,
+    status: 'approved' as const,
+    expiration: '2 days',
+  },
+  {
+    id: 'approval_2',
+    milestoneTitle: 'Phase 2: Framing & Structural Work',
+    contractor: 'Structo Builders Inc.',
+    amount: '120,000 USDC',
+    ipfsCid: 'QmAnotherHash987654abcdef',
+    currentWeight: 2,
+    requiredWeight: 3,
+    totalSignerWeight: 4,
+    signers: mockSigners.map((s, i) => ({
+      ...s,
+      status: i === 0 ? ('approved' as const) : i === 1 ? ('approved' as const) : ('pending' as const),
+    })),
+    status: 'pending' as const,
+    expiration: '5 days',
+  },
+];
 
 // Mock data for proposals
 const mockProposals = [
@@ -55,6 +94,7 @@ const mockProposals = [
 export default function GovernanceDashboard() {
   const { isMember } = useCommitteeMember();
   const [proposals, setProposals] = useState(mockProposals);
+  const [approvalProposals, setApprovalProposals] = useState(mockApprovalProposals);
   const [selectedEvidenceCid, setSelectedEvidenceCid] = useState<string | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isVoting, setIsVoting] = useState<string | null>(null);
@@ -123,6 +163,32 @@ export default function GovernanceDashboard() {
     setIsDrawerOpen(true);
   };
 
+  const handleApprovalVote = async (proposalId: string) => {
+    setIsVoting(proposalId);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      toast.success('Vote successfully cast and recorded on-chain.');
+      setApprovalProposals(prev => prev.map(p => {
+        if (p.id !== proposalId) return p;
+        const newWeight = p.currentWeight + 1;
+        return {
+          ...p,
+          currentWeight: newWeight,
+          status: newWeight >= p.requiredWeight ? ('approved' as const) : ('pending' as const),
+          signers: p.signers.map((s, i) =>
+            i === p.signers.findIndex(sig => sig.status === 'pending')
+              ? { ...s, status: 'approved' as const }
+              : s
+          ),
+        };
+      }));
+    } catch {
+      toast.error('Failed to cast vote. Transaction rejected.');
+    } finally {
+      setIsVoting(null);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 p-6 md:p-10 font-sans selection:bg-cyan-500/30 selection:text-cyan-100">
       <div className="max-w-7xl mx-auto">
@@ -140,6 +206,24 @@ export default function GovernanceDashboard() {
             <span className="text-emerald-400 font-semibold text-sm tracking-wide">Committee Active</span>
           </div>
         </div>
+
+        {/* Multisig Approval Cards — #154 */}
+        <section className="mb-12">
+          <h2 className="text-xl font-bold text-zinc-100 mb-1">Approval Requests</h2>
+          <p className="text-zinc-400 text-sm mb-6">
+            Review milestone evidence and cast your weighted vote toward quorum.
+          </p>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            {approvalProposals.map(proposal => (
+              <MultisigApprovalCard
+                key={proposal.id}
+                {...proposal}
+                onVote={handleApprovalVote}
+                isVoting={isVoting === proposal.id}
+              />
+            ))}
+          </div>
+        </section>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
           {proposals.map(proposal => (

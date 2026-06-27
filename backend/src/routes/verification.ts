@@ -5,10 +5,14 @@ import { analyzeRemittanceHistory } from "../services/stellar.js";
 import { hashReportContent, streamVerificationPdf, VerificationReport } from "../services/pdf.js";
 import { calculateCreditScore } from "../services/scoring.js";
 import { validateVerificationBody, validateWalletAddress, validateMultiChainOwnership } from "../middleware/validate.js";
-import { verificationChallengeRateLimiter } from "../middleware/rateLimit.js";
+import {
+  verificationChallengeRateLimiter,
+  verificationOwnershipRateLimiter,
+} from "../middleware/rateLimit.js";
 import { createChallenge, consumeChallenge } from "../services/challengeStore.js";
 import { verifyEvmSignature } from "../services/evm.js";
 import { verifySolanaSignature } from "../services/solana.js";
+import { upsertApplicant, createVerificationResult } from "../services/db.js";
 
 export const verificationRouter = Router();
 
@@ -49,34 +53,35 @@ const reportStore = new Map<string, VerificationReport>();
 verificationRouter.post("/check", validateVerificationBody, async (req, res) => {
   try {
     const { senderAddress, recipientAddress } = req.body;
-    const result = await analyzeRemittanceHistory(senderAddress, recipientAddress);
-    res.json(result);
-
     const analysis = await analyzeRemittanceHistory(senderAddress, recipientAddress);
 
-    // Generate a unique report ID and timestamp.
     const reportId = crypto.randomUUID();
     const generatedAt = new Date().toISOString();
-
-    // Compute SHA-256 hash of the report content for on-chain anchoring.
     const reportHash = hashReportContent(reportId, generatedAt, analysis);
 
-    const report: VerificationReport = {
-      reportId,
-      generatedAt,
-      analysis,
-      reportHash,
-    };
-
-    // Cache the report so it can be downloaded via GET /report/:reportId.
+    const report: VerificationReport = { reportId, generatedAt, analysis, reportHash };
     reportStore.set(reportId, report);
 
-    res.json({
-      ...analysis,
-      reportId,
-      generatedAt,
-      reportHash,
-    });
+    // Persist applicant and verification result — non-blocking on failure
+    try {
+      const { score } = calculateCreditScore(analysis);
+      const applicant = await upsertApplicant(senderAddress, {
+        verificationStatus: analysis.eligible ? "ELIGIBLE" : "INELIGIBLE",
+        creditScore: score,
+      });
+      await createVerificationResult({
+        applicantId: applicant.id,
+        reportHash,
+        totalPayments: analysis.totalPayments,
+        totalVolume: Number(analysis.totalAmountUSDC),
+        spanMonths: analysis.spanMonths,
+        eligible: analysis.eligible,
+      });
+    } catch (dbErr) {
+      console.error("DB persist error (non-fatal):", dbErr);
+    }
+
+    res.json({ ...analysis, reportId, generatedAt, reportHash });
   } catch (error) {
     console.error("Verification error:", error);
     res.status(500).json({ error: "Verification service failed" });
@@ -251,7 +256,7 @@ verificationRouter.post("/challenge", verificationChallengeRateLimiter, validate
  *       410:
  *         description: Challenge expired or already used.
  */
-verificationRouter.post("/verify-ownership", verificationChallengeRateLimiter, validateMultiChainOwnership, (req, res) => {
+verificationRouter.post("/verify-ownership", verificationOwnershipRateLimiter, validateMultiChainOwnership, (req, res) => {
   const { walletAddress, network, challenge, signature } = req.body;
 
   if (!challenge || !signature) {

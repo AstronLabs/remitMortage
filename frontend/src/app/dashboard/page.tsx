@@ -8,7 +8,8 @@ import { useRouter } from "next/navigation";
 import { WalletProvider, useWallet } from "../../context/WalletContext";
 import SavingsProgressCard from "../../components/SavingsProgressCard";
 import LoanStatusCard from "../../components/LoanStatusCard";
-import DepositForm from "../../components/DepositForm";
+import DepositModal from "../../components/DepositModal";
+import WithdrawModal from "../../components/WithdrawModal";
 import {
   consumeTxSuccessFeedback,
   shortenAddress,
@@ -30,6 +31,8 @@ function DashboardInner() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txSuccess, setTxSuccess] = useState<{ hash: string; type: string } | null>(null);
+  const [showDeposit, setShowDeposit] = useState(false);
+  const [showWithdraw, setShowWithdraw] = useState(false);
 
   useEffect(() => {
     const feedback = consumeTxSuccessFeedback();
@@ -115,10 +118,31 @@ function DashboardInner() {
             />
             <div className="space-y-6">
               <LoanStatusCard loan={status.loan} />
-              <DepositForm address={status.address} />
+              <div className="flex flex-col gap-3 p-6 bg-[var(--bg-card)] rounded-md">
+                <h3 className="text-lg font-semibold mb-2">Deposit USDC</h3>
+                <button
+                  onClick={() => setShowDeposit(true)}
+                  className="btn-primary justify-center"
+                >
+                  Open Deposit
+                </button>
+                <button
+                  onClick={() => setShowWithdraw(true)}
+                  className="btn-outline justify-center"
+                >
+                  Early Withdrawal
+                </button>
+              </div>
             </div>
           </div>
         )}
+
+        <DepositModal isOpen={showDeposit} onClose={() => setShowDeposit(false)} />
+        <WithdrawModal
+          isOpen={showWithdraw}
+          onClose={() => setShowWithdraw(false)}
+          deposited={status?.escrow.deposited || "0"}
+        />
 
         {!loading && !error && !status && (
           <div className="p-6 bg-[var(--bg-card)] rounded-md">No borrower data available.</div>

@@ -137,6 +137,46 @@ impl VerificationRegistryContract {
         Self::read_record(&env, &borrower).ok_or(RegistryError::VerificationNotFound)
     }
 
+    /// Propose a new admin to take over the contract.
+    ///
+    /// Admin-only. This is the first step of a secure two-step admin
+    /// transfer: the proposed admin is recorded but does not gain any
+    /// authority until they explicitly call [`Self::accept_admin`]. Calling
+    /// this again overwrites any previously proposed admin, allowing the
+    /// current admin to correct a mistake before acceptance.
+    pub fn propose_new_admin(env: Env, new_admin: Address) -> Result<(), RegistryError> {
+        let admin = Self::read_admin(&env)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposedAdmin, &new_admin);
+        Self::bump_instance(&env);
+
+        Ok(())
+    }
+
+    /// Accept a pending admin proposal, completing the two-step transfer.
+    ///
+    /// Can only be called by the address previously set via
+    /// [`Self::propose_new_admin`]. On success the caller becomes the new
+    /// admin and the pending proposal is cleared, stripping the old admin of
+    /// all authority.
+    pub fn accept_admin(env: Env) -> Result<(), RegistryError> {
+        let proposed: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposedAdmin)
+            .ok_or(RegistryError::NoProposedAdmin)?;
+        proposed.require_auth();
+
+        env.storage().instance().set(&DataKey::Admin, &proposed);
+        env.storage().instance().remove(&DataKey::ProposedAdmin);
+        Self::bump_instance(&env);
+
+        Ok(())
+    }
+
     /// Returns the contract version.
     pub fn version(_env: Env) -> u32 {
         1
@@ -318,5 +358,172 @@ mod test {
             },
         }]);
         client.register_verification(&borrower, &report_hash, &100u32);
+    }
+
+    #[test]
+    fn test_two_step_admin_transfer_flow() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, client) = setup(&env);
+
+        let new_admin = Address::generate(&env);
+
+        // Step 1: current admin proposes a new admin.
+        client.propose_new_admin(&new_admin);
+
+        // Step 2: proposed admin accepts the role.
+        client.accept_admin();
+
+        // The new admin can now perform admin-only actions.
+        let borrower = Address::generate(&env);
+        let report_hash = BytesN::from_array(&env, &[3u8; 32]);
+        client.register_verification(&borrower, &report_hash, &100u32);
+        assert!(client.is_verified(&borrower));
+    }
+
+    #[test]
+    fn test_accept_admin_without_proposal_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, client) = setup(&env);
+
+        let result = client.try_accept_admin();
+        assert_eq!(result, Err(Ok(RegistryError::NoProposedAdmin)));
+    }
+
+    #[test]
+    fn test_propose_before_initialize_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(VerificationRegistryContract, ());
+        let client = VerificationRegistryContractClient::new(&env, &contract_id);
+
+        let new_admin = Address::generate(&env);
+        let result = client.try_propose_new_admin(&new_admin);
+        assert_eq!(result, Err(Ok(RegistryError::NotInitialized)));
+    }
+
+    #[test]
+    #[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
+    fn test_only_admin_can_propose() {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+        use soroban_sdk::IntoVal;
+
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+
+        let contract_id = env.register(VerificationRegistryContract, ());
+        let client = VerificationRegistryContractClient::new(&env, &contract_id);
+
+        env.mock_all_auths();
+        client.initialize(&admin);
+
+        let new_admin = Address::generate(&env);
+
+        // A non-admin signs the call, but the contract requires the current
+        // admin's authorization, so the proposal is rejected.
+        env.mock_auths(&[MockAuth {
+            address: &non_admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "propose_new_admin",
+                args: (new_admin.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.propose_new_admin(&new_admin);
+    }
+
+    #[test]
+    #[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
+    fn test_only_proposed_admin_can_accept() {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+        use soroban_sdk::IntoVal;
+
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let imposter = Address::generate(&env);
+
+        let contract_id = env.register(VerificationRegistryContract, ());
+        let client = VerificationRegistryContractClient::new(&env, &contract_id);
+
+        env.mock_all_auths();
+        client.initialize(&admin);
+        client.propose_new_admin(&new_admin);
+
+        // Someone other than the proposed admin tries to accept the role.
+        // The contract calls `proposed.require_auth()`, which the imposter's
+        // signature does not satisfy, so the call panics.
+        env.mock_auths(&[MockAuth {
+            address: &imposter,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "accept_admin",
+                args: ().into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.accept_admin();
+    }
+
+    #[test]
+    #[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
+    fn test_old_admin_loses_authority_after_transfer() {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+        use soroban_sdk::IntoVal;
+
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+
+        let contract_id = env.register(VerificationRegistryContract, ());
+        let client = VerificationRegistryContractClient::new(&env, &contract_id);
+
+        env.mock_all_auths();
+        client.initialize(&admin);
+        client.propose_new_admin(&new_admin);
+        client.accept_admin();
+
+        let borrower = Address::generate(&env);
+        let report_hash = BytesN::from_array(&env, &[5u8; 32]);
+
+        // The old admin signs, but it is no longer the admin, so the
+        // `admin.require_auth()` inside `register_verification` (which now
+        // checks `new_admin`) is not satisfied and the call panics.
+        env.mock_auths(&[MockAuth {
+            address: &admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "register_verification",
+                args: (borrower.clone(), report_hash.clone(), 100u32).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.register_verification(&borrower, &report_hash, &100u32);
+    }
+
+    #[test]
+    fn test_proposal_can_be_overwritten_before_acceptance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, client) = setup(&env);
+
+        let first_candidate = Address::generate(&env);
+        let second_candidate = Address::generate(&env);
+
+        // Admin proposes one address, then changes their mind.
+        client.propose_new_admin(&first_candidate);
+        client.propose_new_admin(&second_candidate);
+
+        // The latest proposal is the one that takes effect on acceptance.
+        client.accept_admin();
+
+        let borrower = Address::generate(&env);
+        let report_hash = BytesN::from_array(&env, &[6u8; 32]);
+        client.register_verification(&borrower, &report_hash, &100u32);
+        assert!(client.is_verified(&borrower));
     }
 }

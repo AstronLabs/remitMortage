@@ -1,5 +1,4 @@
-use soroban_sdk::{contracttype, Address, BytesN};
-use soroban_sdk::{contracttype, Address, Symbol};
+use soroban_sdk::{contracttype, Address, BytesN, Symbol};
 
 /// Configuration set during contract initialization.
 #[contracttype]
@@ -69,4 +68,6 @@ pub enum DataKey {
     UpgradeDelay,
     /// Emergency pause flag. When true, deposits and withdrawals are blocked.
     Paused,
+    /// Pending new admin address for two-step admin transfer.
+    PendingAdmin,
 }

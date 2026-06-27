@@ -1,6 +1,6 @@
 "use client";
 
-import { STELLARCHAIN_TX_BASE } from "../../lib/transaction-status";
+import { getTransactionExplorerLinks } from "../../lib/transaction-status";
 
 interface TransactionResultProps {
   hash: string;
@@ -79,14 +79,17 @@ export default function TransactionResult({
       )}
 
       <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-        <a
-          href={`${STELLARCHAIN_TX_BASE}${hash}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="btn-outline !py-2.5 !px-5 !text-sm"
-        >
-          View on Stellarchain
-        </a>
+        {getTransactionExplorerLinks(hash).map((link) => (
+          <a
+            key={link.label}
+            href={link.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-outline !py-2.5 !px-5 !text-sm"
+          >
+            {link.label}
+          </a>
+        ))}
         {success && onReturnToDashboard && (
           <button onClick={onReturnToDashboard} className="btn-primary !py-2.5 !px-5 !text-sm">
             Return to Dashboard

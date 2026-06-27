@@ -8,6 +8,8 @@ pub struct PendingUpgradeRecord {
     pub new_wasm_hash: BytesN<32>,
     /// The ledger sequence after which this upgrade may execute.
     pub execute_after: u32,
+}
+
 /// Tranche types for risk stratification of investor deposits.
 ///
 /// Senior tranche offers a lower, fixed yield rate but is protected from losses.
@@ -36,6 +38,8 @@ pub struct PoolConfig {
     pub interest_rate_bps: u32,
     /// Fixed yield rate allocated to senior tranche in basis points (e.g. 400 = 4%).
     pub senior_rate_bps: u32,
+    /// Protocol treasury address where withdrawal fees are routed.
+    pub treasury_address: Address,
 }
 
 /// Tracks an individual investor's capital contribution.
@@ -85,7 +89,7 @@ pub enum LoanStatus {
     /// Loan has defaulted after missed payments.
     Defaulted = 4,
 }
- 
+
 /// Repayment schedule for a loan, tracked on-chain.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -101,7 +105,7 @@ pub struct RepaymentSchedule {
     /// Count of installments missed (consecutive misses are used for default detection).
     pub payments_missed: u32,
 }
- 
+
 /// A loan record for a borrower.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -125,6 +129,8 @@ pub struct LoanRecord {
     pub last_interest_ledger: u32,
     /// Total outstanding debt including compounded interest, minus repayments.
     pub outstanding_debt: i128,
+    /// Optional escrow contract address that originated this loan via the bridge.
+    pub escrow_origin: Option<Address>,
 }
 
 /// Storage keys for the lending pool contract.
@@ -159,4 +165,17 @@ pub enum DataKey {
     PendingUpgrade,
     /// Number of ledgers the admin must wait between proposing and executing an upgrade.
     UpgradeDelay,
+    /// Emergency pause flag. When true, state-mutating operations are blocked.
+    Paused,
+    /// Pending new admin address for two-step admin transfer.
+    PendingAdmin,
+    /// Total withdrawal fees collected and routed to treasury.
+    TotalWithdrawalFees,
+    /// Address of the VerificationRegistry contract used to gate loan requests.
+    /// Absent until `set_verification_registry` is called by the admin.
+    VerificationRegistry,
+    /// Global daily borrow limit.
+    DailyBorrowLimit,
+    /// Tracks total amount borrowed in a specific daily window (day_id).
+    DailyBorrowed(u32),
 }

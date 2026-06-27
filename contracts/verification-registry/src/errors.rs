@@ -16,4 +16,6 @@ pub enum RegistryError {
     InvalidHash = 5,
     /// No verification record found for the borrower.
     VerificationNotFound = 6,
+    /// No pending admin proposal exists to accept.
+    NoProposedAdmin = 7,
 }
