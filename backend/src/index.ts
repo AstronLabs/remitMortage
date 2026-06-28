@@ -15,6 +15,7 @@ import { analyticsRouter } from "./routes/analytics.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { startEventListener } from "./services/eventListener.js";
 import { startNotificationScheduler } from "./services/notification.js";
+import { startScheduler } from "./jobs/scheduler.js";
 import { loadConfig } from "./config.js";
 
 const app = express();
@@ -73,6 +74,7 @@ app.listen(PORT, () => {
   // RPC node never takes down the API process.
   startEventListener();
   startNotificationScheduler();
+  startScheduler();
 });
 
 export default app;

@@ -1,6 +1,5 @@
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 generator client {
@@ -84,4 +83,10 @@ model LoanApplication {
   principal          Float
   status             LoanStatus @default(PENDING)
   createdAt          DateTime   @default(now())
+
+  // New fields for repayment tracking
+  dueDate            DateTime?
+  missedPayments     Int        @default(0)
+  lateFeeBalance     Float      @default(0)
+  gracePeriodEndsAt  DateTime?
 }
