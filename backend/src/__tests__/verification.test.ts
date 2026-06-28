@@ -241,6 +241,11 @@ describe("POST /api/verification/verify-ownership — Stellar", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ verified: true, walletAddress, network: "stellar" });
+    expect(res.headers["set-cookie"]).toBeDefined();
+    const cookie = res.headers["set-cookie"][0];
+    expect(cookie).toContain("token=");
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Strict");
   });
 
   it("returns 401 for an invalid Stellar signature", async () => {

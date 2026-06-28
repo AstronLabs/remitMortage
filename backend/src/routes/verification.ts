@@ -1,5 +1,6 @@
 import { Router } from "express";
 import crypto from "crypto";
+import jwt from "jsonwebtoken";
 import { Keypair } from "@stellar/stellar-sdk";
 import { analyzeRemittanceHistory } from "../services/stellar.js";
 import { hashReportContent, streamVerificationPdf, VerificationReport } from "../services/pdf.js";
@@ -290,6 +291,19 @@ verificationRouter.post("/verify-ownership", verificationOwnershipRateLimiter, v
     res.status(401).json({ error: "invalid_signature" });
     return;
   }
+
+  const token = jwt.sign(
+    { walletAddress, network },
+    process.env.JWT_SECRET || "default_jwt_secret",
+    { expiresIn: "24h" }
+  );
+
+  res.cookie("token", token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+  });
 
   res.json({ verified: true, walletAddress, network });
 });
