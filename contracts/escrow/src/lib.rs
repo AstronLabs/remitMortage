@@ -15,7 +15,10 @@ use crate::token_utils::get_token_client;
 use crate::types::DataKey;
 pub use crate::types::{BorrowerRecord, EscrowConfig, PendingUpgradeRecord};
 use lending_pool::LendingPoolContractClient;
-use soroban_sdk::{contract, contractimpl, symbol_short, xdr::ToXdr, Address, BytesN, Env, Symbol};
+use soroban_sdk::auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, vec, xdr::ToXdr, Address, BytesN, Env, IntoVal, Symbol,
+};
 
 const INSTANCE_BUMP_AMOUNT: u32 = 518_400; // ~30 days
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 129_600; // ~7.5 days
@@ -90,6 +93,10 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::TotalPooled)
             .unwrap_or(0i128)
+    }
+
+    fn read_lending_pool(env: &Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::LendingPool)
     }
 
     fn check_not_paused(env: &Env) -> Result<(), EscrowError> {
@@ -248,9 +255,37 @@ impl EscrowContract {
         let token = get_token_client(&env, &config.token);
         token.transfer(&env.current_contract_address(), &borrower, &refund);
 
-        // Update total pooled (reduce by full deposited amount; penalty stays).
+        // Update total pooled (reduce by full deposited amount).
         let total = Self::read_total_pooled(&env) - record.deposited;
         env.storage().instance().set(&DataKey::TotalPooled, &total);
+
+        // Route the early-exit penalty to the lending pool as investor yield,
+        // if one is configured. The escrow still holds the penalty tokens, so
+        // `deposit_fees` pulls them from this contract (whose own-address auth
+        // is granted implicitly as the caller). Otherwise the penalty stays in
+        // the contract.
+        if penalty > 0 {
+            if let Some(pool_addr) = Self::read_lending_pool(&env) {
+                let escrow_addr = env.current_contract_address();
+                // `deposit_fees` pulls the penalty from this contract via
+                // `token.transfer(escrow -> pool)`. That nested transfer needs
+                // this contract to authorize itself as the invoker.
+                env.authorize_as_current_contract(vec![
+                    &env,
+                    InvokerContractAuthEntry::Contract(SubContractInvocation {
+                        context: ContractContext {
+                            contract: config.token.clone(),
+                            fn_name: Symbol::new(&env, "transfer"),
+                            args: (escrow_addr.clone(), pool_addr.clone(), penalty)
+                                .into_val(&env),
+                        },
+                        sub_invocations: vec![&env],
+                    }),
+                ]);
+                let pool = LendingPoolContractClient::new(&env, &pool_addr);
+                pool.deposit_fees(&escrow_addr, &penalty);
+            }
+        }
 
         // Mark as withdrawn.
         record.withdrawn = true;
@@ -614,6 +649,29 @@ impl EscrowContract {
         Ok(())
     }
 
+    // ── Penalty Fee Routing ────────────────────────────────────────────
+
+    /// Configure the LendingPool contract that early-exit penalty fees are
+    /// routed to as investor yield. Admin-only. Once set, every `withdraw`
+    /// forwards the borrower's penalty to the pool via `deposit_fees` instead
+    /// of leaving it idle in the escrow.
+    pub fn set_lending_pool(env: Env, lending_pool: Address) -> Result<(), EscrowError> {
+        let config = Self::get_config(&env)?;
+        config.admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::LendingPool, &lending_pool);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Ok(())
+    }
+
+    /// Returns the configured penalty-fee LendingPool address, if any.
+    pub fn get_lending_pool(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::LendingPool)
+    }
+
     // ── Admin Transfer ─────────────────────────────────────────────────
 
     /// Propose a new admin address. The current admin initiates the transfer.
@@ -847,6 +905,71 @@ mod test {
 
         let goal_id = Symbol::new(env, "land");
         (admin, borrower, token_address, goal_id, client)
+    }
+
+    #[test]
+    fn test_early_withdrawal_penalty_routes_to_lending_pool() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        // ── Token (USDC SAC) ───────────────────────────────────────────
+        let token_admin = Address::generate(&env);
+        let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let token_address = token_id.address();
+        let sac = StellarAssetClient::new(&env, &token_address);
+
+        let admin = Address::generate(&env);
+        let borrower = Address::generate(&env);
+        let investor = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        sac.mint(&borrower, &50_000_0000000i128);
+        sac.mint(&investor, &10_000_0000000i128);
+
+        // ── Lending pool ───────────────────────────────────────────────
+        let pool_id = env.register(lending_pool::LendingPoolContract, ());
+        let pool = lending_pool::LendingPoolContractClient::new(&env, &pool_id);
+        pool.initialize(&admin, &token_address, &1_000u32, &500u32, &treasury);
+        // A single investor deposits, so all distributed fees accrue to them.
+        pool.deposit(&investor, &10_000_0000000i128, &lending_pool::Tranche::Junior);
+
+        // ── Escrow, pointed at the pool ────────────────────────────────
+        let escrow_id = env.register(EscrowContract, ());
+        let escrow = EscrowContractClient::new(&env, &escrow_id);
+        escrow.initialize(&EscrowConfig {
+            admin: admin.clone(),
+            token: token_address.clone(),
+            savings_target: 10_000_0000000i128,
+            max_duration_ledgers: 518_400u32,
+            early_withdrawal_penalty_bps: 500u32,
+            min_duration_ledgers: 0u32,
+            penalty_bps_tier1: 500u32, // 5% tier-1 penalty
+            penalty_bps_tier2: 300u32,
+            penalty_bps_tier3: 150u32,
+            penalty_bps_tier4: 50u32,
+            grace_period_ledgers: 10u32,
+            default_penalty_bps: 1000u32,
+        });
+        escrow.set_lending_pool(&pool_id);
+        assert_eq!(escrow.get_lending_pool(), Some(pool_id.clone()));
+
+        // ── Borrower deposits then exits early ─────────────────────────
+        let goal_id = Symbol::new(&env, "land");
+        let deposit_amount = 1_000_0000000i128;
+        escrow.deposit(&borrower, &goal_id, &deposit_amount);
+
+        let pool_liquidity_before = pool.get_liquidity();
+
+        let refund = escrow.withdraw(&borrower, &goal_id);
+        // 5% tier-1 penalty on the deposit.
+        let expected_penalty = deposit_amount * 500 / 10_000;
+        assert_eq!(refund, deposit_amount - expected_penalty);
+
+        // Pool TVL (liquidity) increased by exactly the penalty.
+        assert_eq!(pool.get_liquidity(), pool_liquidity_before + expected_penalty);
+
+        // The sole investor's claimable yield rose by the full penalty.
+        let claimed = pool.claim_yield(&investor);
+        assert_eq!(claimed, expected_penalty);
     }
 
     #[test]

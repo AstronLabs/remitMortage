@@ -429,6 +429,55 @@ impl LendingPoolContract {
         Ok(())
     }
 
+    /// Deposit penalty/fee revenue into the pool and distribute it as yield.
+    ///
+    /// Pulls `amount` USDC from `from` and books it as distributable interest:
+    /// total liquidity rises (so the new tokens are claimable) and the
+    /// total-repaid-interest accumulator rises, which increases every active
+    /// depositor's pending yield pro-rata to their deposited share — exactly
+    /// the same mechanism used for loan-interest repayments.
+    ///
+    /// Designed for the escrow contract to route early-exit penalty fees here
+    /// rather than leaving them idle. `from` must authorize the transfer, so a
+    /// caller can only move its own funds.
+    pub fn deposit_fees(env: Env, from: Address, amount: i128) -> Result<(), PoolError> {
+        Self::check_not_paused(&env)?;
+        from.require_auth();
+
+        if amount <= 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+
+        let config = Self::read_config(&env)?;
+
+        // Pull the fee tokens into the pool.
+        let token = Self::token_client(&env, &config.token);
+        token.transfer(&from, &env.current_contract_address(), &amount);
+
+        // Book the fees as claimable liquidity.
+        let liquidity = Self::read_total_liquidity(&env) + amount;
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalLiquidity, &liquidity);
+
+        // Distribute as yield pro-rata via the repaid-interest accumulator.
+        let total_interest = Self::read_total_repaid_interest(&env) + amount;
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalRepaidInterest, &total_interest);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events().publish(
+            (symbol_short!("dep_fees"),),
+            (from.clone(), amount, total_interest),
+        );
+
+        Ok(())
+    }
+
     /// Borrower requests a loan for the given principal amount.
     ///
     /// Creates a loan record in `Requested` state. The admin must

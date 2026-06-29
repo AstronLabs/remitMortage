@@ -51,4 +51,6 @@ pub enum PoolError {
     InterestRateTooLow = 22,
     /// Loan cannot be refinanced.
     RefinanceNotEligible = 23,
+    /// Loan is not yet overdue, so it cannot be marked as defaulted.
+    LoanNotOverdue = 24,
 }
