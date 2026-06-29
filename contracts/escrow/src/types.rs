@@ -8,6 +8,8 @@ pub struct EscrowConfig {
     pub admin: Address,
     /// USDC token contract address on Stellar.
     pub token: Address,
+    /// Lending pool contract address linked to this escrow.
+    pub lending_pool: Address,
     /// Savings target amount in USDC (in stroops, i.e. 7 decimals).
     pub savings_target: i128,
     /// Maximum savings period in ledger-sequence increments.
@@ -44,20 +46,8 @@ pub struct BorrowerRecord {
     pub released: bool,
     /// Whether the borrower withdrew early.
     pub withdrawn: bool,
-    /// Ledger sequence of the most recent contribution (updated on every deposit).
-    pub last_contribution_ledger: u32,
-    /// Savings target amount specific to this goal.
-    pub target_amount: i128,
-}
-
-/// Pending upgrade proposal (used when upgrade_delay_ledgers > 0).
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct PendingUpgradeRecord {
-    /// The WASM hash queued for deployment.
-    pub new_wasm_hash: BytesN<32>,
-    /// The ledger sequence after which this upgrade may execute.
-    pub execute_after: u32,
+    /// Whether the collateral was seized by the lending pool due to default.
+    pub seized: bool,
 }
 
 /// Storage keys for the escrow contract.
