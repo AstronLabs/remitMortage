@@ -66,7 +66,8 @@ app.use("/api/loan", loanRouter);
 app.use("/api/milestone", milestoneRouter);
 app.use("/api/analytics", analyticsRouter);
 app.use("/api/audit-logs", auditRouter);
-app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+// Swagger UI — excluded from rate limits so developers can inspect freely
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Global error handler (must be after routes)
 app.use(errorHandler);

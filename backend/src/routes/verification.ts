@@ -29,15 +29,14 @@ const reportStore = new Map<string, VerificationReport>();
  * /api/verification/check:
  *   post:
  *     summary: Analyze remittance payment history
- *     tags: [Verification]
+ *     tags:
+ *       - Verification
  *     description: |
  *       Accepts a Stellar sender wallet and recipient address, queries Horizon for
  *       outgoing USDC payments, and returns a remittance eligibility summary.
  *       The response also includes a `reportId` and `reportHash` — the SHA-256
  *       hash of the report content — ready for on-chain anchoring in the
  *       verification registry contract.
- *     tags:
- *       - Verification
  *     requestBody:
  *       required: true
  *       content:
@@ -163,10 +162,9 @@ verificationRouter.get("/report/:reportId", (req, res) => {
  * /api/verification/score:
  *   post:
  *     summary: Calculate borrower credit score
- *     tags: [Verification]
- *     description: Analyzes remittance history and calculates a 0-100 credit score with tier mapping.
  *     tags:
  *       - Verification
+ *     description: Analyzes remittance history and calculates a 0-100 credit score with tier mapping.
  *     requestBody:
  *       required: true
  *       content:
