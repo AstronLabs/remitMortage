@@ -1,4 +1,6 @@
 import { StrKey } from "@stellar/stellar-sdk";
+import { prisma } from "./db.js";
+
 // lightweight id generator to avoid adding dependencies
 function makeId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,9)}`;
@@ -22,48 +24,109 @@ export interface LoanApplication {
   updatedAt: string;
 }
 
-const store: Map<string, LoanApplication> = new Map();
+function mapLoanApplication(record: any): LoanApplication {
+  return {
+    id: record.id,
+    borrowerAddress: record.applicant.stellarAddress,
+    amount: record.principal,
+    status: record.status,
+    reason: record.reason ?? undefined,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
 
-export function createApplication(borrowerAddress: string, amount: string) {
-  // validate address
+async function findOrCreateApplicant(stellarAddress: string) {
+  return prisma.applicant.upsert({
+    where: { stellarAddress },
+    update: {},
+    create: { stellarAddress },
+  });
+}
+
+export async function createApplication(borrowerAddress: string, amount: string) {
   StrKey.decodeEd25519PublicKey(borrowerAddress);
 
+  const applicant = await findOrCreateApplicant(borrowerAddress);
   const id = makeId();
-  const now = new Date().toISOString();
-  const app: LoanApplication = {
-    id,
-    borrowerAddress,
-    amount,
-    status: "Pending",
-    createdAt: now,
-    updatedAt: now,
-  };
-  store.set(id, app);
-  return app;
+
+  const record = await prisma.loanApplication.create({
+    data: {
+      id,
+      applicantId: applicant.id,
+      principal: amount,
+      status: "Pending",
+    },
+    include: { applicant: true },
+  });
+
+  return mapLoanApplication(record);
 }
 
-export function getApplication(id: string) {
-  return store.get(id) ?? null;
+export async function getApplication(id: string) {
+  const record = await prisma.loanApplication.findUnique({
+    where: { id },
+    include: { applicant: true },
+  });
+
+  return record ? mapLoanApplication(record) : null;
 }
 
-export function getApplicationsByBorrower(address: string) {
-  const list: LoanApplication[] = [];
-  for (const v of store.values()) {
-    if (v.borrowerAddress === address) list.push(v);
-  }
-  return list;
+export async function getApplicationsByBorrower(address: string) {
+  const records = await prisma.loanApplication.findMany({
+    where: { applicant: { stellarAddress: address } },
+    include: { applicant: true },
+  });
+
+  return records.map(mapLoanApplication);
 }
 
-export function getPendingApplications() {
-  return Array.from(store.values()).filter((a) => a.status === "Pending");
+export async function getPendingApplications() {
+  const records = await prisma.loanApplication.findMany({
+    where: { status: "Pending" },
+    include: { applicant: true },
+  });
+
+  return records.map(mapLoanApplication);
 }
 
-export function updateApplication(id: string, patch: Partial<LoanApplication>) {
-  const existing = store.get(id);
+export async function updateApplication(id: string, patch: Partial<LoanApplication>) {
+  const existing = await prisma.loanApplication.findUnique({
+    where: { id },
+    include: { applicant: true },
+  });
+
   if (!existing) return null;
-  const updated = { ...existing, ...patch, updatedAt: new Date().toISOString() } as LoanApplication;
-  store.set(id, updated);
-  return updated;
+
+  if (patch.borrowerAddress) {
+    await prisma.applicant.update({
+      where: { id: existing.applicantId },
+      data: { stellarAddress: patch.borrowerAddress },
+    });
+  }
+
+  const updateData: {
+    principal?: string;
+    status?: LoanStatus;
+    reason?: string | null;
+  } = {};
+
+  if (patch.amount !== undefined) updateData.principal = patch.amount;
+  if (patch.status !== undefined) updateData.status = patch.status;
+  if (patch.reason !== undefined) updateData.reason = patch.reason ?? null;
+
+  const record = Object.keys(updateData).length
+    ? await prisma.loanApplication.update({
+        where: { id },
+        data: updateData,
+        include: { applicant: true },
+      })
+    : await prisma.loanApplication.findUnique({
+        where: { id },
+        include: { applicant: true },
+      });
+
+  return record ? mapLoanApplication(record) : null;
 }
 
 // Simple escrow check: for demo purposes consider escrow "met" when requested amount is <= 5000

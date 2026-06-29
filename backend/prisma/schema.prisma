@@ -13,25 +13,78 @@ enum NotificationStatus {
   Failed
 }
 
+enum LoanStatus {
+  Pending
+  Approved
+  Rejected
+  Disbursing
+  Repaying
+  Completed
+}
+
 model Notification {
-  id        String             @id @default(uuid())
-  recipient String
-  type      String             // "EMAIL" or "WEBHOOK"
-  content   String             // HTML for emails or JSON payload for webhooks
-  status    NotificationStatus @default(Pending)
-  createdAt DateTime           @default(now())
-  updatedAt DateTime           @updatedAt
-  attempts  Int                @default(0)
-  lastError String?
+  id          String             @id @default(uuid())
+  recipient   String
+  type        String // "EMAIL" or "WEBHOOK"
+  content     String // HTML for emails or JSON payload for webhooks
+  status      NotificationStatus @default(Pending)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  attempts    Int                @default(0)
+  lastError   String?
   nextRetryAt DateTime?
 }
 
 model UnpinnedCid {
   id           String   @id @default(uuid())
   cid          String
-  proposalId     String?
+  proposalId   String?
   success      Boolean
   pinataStatus Int?
   error        String?
   createdAt    DateTime @default(now())
+}
+
+model Applicant {
+  id                  String               @id @default(uuid())
+  stellarAddress      String               @unique
+  verifiedWallets Json?
+  creditScore         Int?
+  currentTier         String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  verificationResults VerificationResult[]
+  loanApplications    LoanApplication[]
+}
+
+model VerificationResult {
+  id             String      @id @default(uuid())
+  applicantId    String
+  applicant      Applicant   @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  reportHash     String
+  generatedAt    DateTime
+  analysis       Json
+  firstPayment   DateTime?
+  lastPayment    DateTime?
+  totalPayments  Int
+  eligible       Boolean
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model LoanApplication {
+  id                String      @id @default(uuid())
+  applicantId       String
+  applicant         Applicant   @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+
+  principal         String
+  status            LoanStatus  @default(Pending)
+  escrowContractId  String?
+  terms             String?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }

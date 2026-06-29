@@ -28,13 +28,12 @@ loanRouter.post("/apply", validatePositiveNumber("amount"), async (req, res) => 
       return res.status(400).json({ error: "invalid_address", field: "borrowerAddress", message: "Invalid Stellar G-address" });
     }
 
-    // Check escrow target is met (simulated)
     const escrowOk = escrowTargetMetForAmount(amount);
     if (!escrowOk) {
       return res.status(400).json({ error: "escrow_target_not_met", message: "Escrow target not reached for borrower" });
     }
 
-    const app = createApplication(borrowerAddress, String(amount));
+    const app = await createApplication(borrowerAddress, String(amount));
     return res.status(201).json(app);
   } catch (error) {
     console.error("Loan apply error:", error);
@@ -50,42 +49,36 @@ loanRouter.get("/borrower/:address", async (req, res) => {
   } catch (err) {
     return res.status(400).json({ error: "invalid_address", field: "address", message: "Invalid Stellar G-address" });
   }
-  const apps = getApplicationsByBorrower(address);
+  const apps = await getApplicationsByBorrower(address);
   return res.json(apps);
 });
 
 // GET /api/loan/pending
 loanRouter.get("/pending", async (req, res) => {
-  const pending = getPendingApplications();
+  const pending = await getPendingApplications();
   return res.json(pending);
 });
 
 // POST /api/loan/:id/approve
 loanRouter.post("/:id/approve", async (req, res) => {
   const { id } = req.params;
-  const app = getApplication(id);
+  const app = await getApplication(id);
   if (!app) return res.status(404).json({ error: "not_found" });
 
   if (app.status !== "Pending") {
     return res.status(400).json({ error: "invalid_state", message: "Application must be Pending to approve" });
   }
 
-  // Simulate on-chain lending pool interactions
   try {
-    // mark approved
-    const approved = updateApplication(id, { status: "Approved" });
+    const approved = await updateApplication(id, { status: "Approved" });
 
-    // simulate request_loan + approve_loan
     console.log(`Simulating on-chain request_loan for application ${id}`);
-    // After simulation, proceed to Disbursing
-    const disbursing = updateApplication(id, { status: "Disbursing" });
+    const disbursing = await updateApplication(id, { status: "Disbursing" });
 
-    // Trigger milestone approval notification!
     const email = req.body.email || `${app.borrowerAddress}@example.com`;
     const webhookUrl = req.body.webhookUrl || "https://partner-platform.com/webhooks";
 
     if (approved) {
-      // 1. Email notification
       await queueNotification(
         email,
         "EMAIL",
@@ -96,7 +89,6 @@ loanRouter.post("/:id/approve", async (req, res) => {
         })
       );
 
-      // 2. Webhook notification
       await queueNotification(
         webhookUrl,
         "WEBHOOK",
@@ -121,21 +113,21 @@ loanRouter.post("/:id/approve", async (req, res) => {
 loanRouter.post("/:id/reject", async (req, res) => {
   const { id } = req.params;
   const { reason } = req.body ?? {};
-  const app = getApplication(id);
+  const app = await getApplication(id);
   if (!app) return res.status(404).json({ error: "not_found" });
 
   if (app.status !== "Pending") {
     return res.status(400).json({ error: "invalid_state", message: "Application must be Pending to reject" });
   }
 
-  const updated = updateApplication(id, { status: "Rejected", reason: reason ?? "No reason provided" });
+  const updated = await updateApplication(id, { status: "Rejected", reason: reason ?? "No reason provided" });
   return res.json(updated);
 });
 
 // GET /api/loan/:id
 loanRouter.get("/:id", async (req, res) => {
   const { id } = req.params;
-  const app = getApplication(id);
+  const app = await getApplication(id);
   if (!app) return res.status(404).json({ error: "not_found" });
   return res.json(app);
 });
@@ -146,7 +138,7 @@ loanRouter.post("/:id/trigger-payment-due", async (req, res) => {
   const { id } = req.params;
   const { email, webhookUrl, amount, dueDate } = req.body ?? {};
 
-  const app = getApplication(id);
+  const app = await getApplication(id);
   if (!app) return res.status(404).json({ error: "not_found" });
 
   const targetEmail = email || `${app.borrowerAddress}@example.com`;

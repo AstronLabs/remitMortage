@@ -4,19 +4,14 @@ import { Keypair } from "@stellar/stellar-sdk";
 import { analyzeRemittanceHistory } from "../services/stellar.js";
 import { hashReportContent, streamVerificationPdf, VerificationReport } from "../services/pdf.js";
 import { calculateCreditScore } from "../services/scoring.js";
-import { validateVerificationBody, validateWalletAddress, validateMultiChainOwnership } from "../middleware/validate.js";
+import { validateVerificationBody, validateMultiChainOwnership } from "../middleware/validate.js";
 import { verificationChallengeRateLimiter } from "../middleware/rateLimit.js";
 import { createChallenge, consumeChallenge } from "../services/challengeStore.js";
 import { verifyEvmSignature } from "../services/evm.js";
 import { verifySolanaSignature } from "../services/solana.js";
+import { prisma } from "../services/db.js";
 
 export const verificationRouter = Router();
-
-/**
- * Simple in-memory store keyed by reportId.
- * In production this should be replaced by a persistent database (PostgreSQL).
- */
-const reportStore = new Map<string, VerificationReport>();
 
 /**
  * @openapi
@@ -49,32 +44,37 @@ const reportStore = new Map<string, VerificationReport>();
 verificationRouter.post("/check", validateVerificationBody, async (req, res) => {
   try {
     const { senderAddress, recipientAddress } = req.body;
-    const result = await analyzeRemittanceHistory(senderAddress, recipientAddress);
-    res.json(result);
-
     const analysis = await analyzeRemittanceHistory(senderAddress, recipientAddress);
 
-    // Generate a unique report ID and timestamp.
     const reportId = crypto.randomUUID();
-    const generatedAt = new Date().toISOString();
+    const generatedAt = new Date();
 
-    // Compute SHA-256 hash of the report content for on-chain anchoring.
-    const reportHash = hashReportContent(reportId, generatedAt, analysis);
+    const reportHash = hashReportContent(reportId, generatedAt.toISOString(), analysis);
 
-    const report: VerificationReport = {
-      reportId,
-      generatedAt,
-      analysis,
-      reportHash,
-    };
+    const applicant = await prisma.applicant.upsert({
+      where: { stellarAddress: senderAddress },
+      update: {},
+      create: { stellarAddress: senderAddress },
+    });
 
-    // Cache the report so it can be downloaded via GET /report/:reportId.
-    reportStore.set(reportId, report);
+    await prisma.verificationResult.create({
+      data: {
+        id: reportId,
+        applicantId: applicant.id,
+        reportHash,
+        generatedAt,
+        analysis,
+        firstPayment: analysis.firstPayment ? new Date(analysis.firstPayment) : null,
+        lastPayment: analysis.lastPayment ? new Date(analysis.lastPayment) : null,
+        totalPayments: analysis.totalPayments,
+        eligible: analysis.eligible,
+      },
+    });
 
     res.json({
       ...analysis,
       reportId,
-      generatedAt,
+      generatedAt: generatedAt.toISOString(),
       reportHash,
     });
   } catch (error) {
@@ -124,17 +124,26 @@ verificationRouter.post("/check", validateVerificationBody, async (req, res) => 
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-verificationRouter.get("/report/:reportId", (req, res) => {
+verificationRouter.get("/report/:reportId", async (req, res) => {
   try {
     const { reportId } = req.params;
-    const report = reportStore.get(reportId);
+    const record = await prisma.verificationResult.findUnique({
+      where: { id: reportId },
+    });
 
-    if (!report) {
+    if (!record) {
       return res.status(404).json({
         error: "report_not_found",
         message: `No report found for ID: ${reportId}`,
       });
     }
+
+    const report: VerificationReport = {
+      reportId: record.id,
+      generatedAt: record.generatedAt.toISOString(),
+      analysis: record.analysis as any,
+      reportHash: record.reportHash,
+    };
 
     const filename = `remitmortgage-verification-${reportId.slice(0, 8)}.pdf`;
 
