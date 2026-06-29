@@ -4,9 +4,9 @@ import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { getOnboardingStore, useOnboardingState } from "./useOnboardingState";
 import ProgressStepper from "./ProgressStepper";
-import { isConnected, getPublicKey } from "@stellar/freighter-api";
 import { toast } from "react-hot-toast";
 import { z } from "zod";
+import { useWallet } from "../context/WalletContext";
 
 // Stellar G... public key: starts with G, exactly 56 alphanumeric chars
 const stellarAddressSchema = z.string().regex(
@@ -26,6 +26,7 @@ const STEPS = ["Connect Wallet", "Verify History", "Set Goal", "First Deposit"];
 export default function OnboardingWizard() {
   const router = useRouter();
   const store = getOnboardingStore();
+  const { publicKey, connect } = useWallet();
 
   // State from Zustand store
   const step = useOnboardingState((s) => s.step);
@@ -36,7 +37,6 @@ export default function OnboardingWizard() {
   const firstDepositAmount = useOnboardingState((s) => s.firstDepositAmount);
 
   // Local component state
-  const [publicKey, setPublicKey] = useState("");
   const [usdcBalance, setUsdcBalance] = useState("0");
   const [isLoading, setIsLoading] = useState(false);
   const [verificationMessage, setVerificationMessage] = useState("");
@@ -54,10 +54,9 @@ export default function OnboardingWizard() {
   const handleConnect = async () => {
     setIsLoading(true);
     try {
-      if (await isConnected()) {
-        const key = await getPublicKey();
-        setPublicKey(key);
-        await fetchUSDCBalance(key);
+      const connectedPublicKey = await connect();
+      if (connectedPublicKey) {
+        await fetchUSDCBalance(connectedPublicKey);
         toast.success("Wallet connected!");
       } else {
         toast.error("Freighter is not available. Please install and set up the Freighter wallet extension.");
