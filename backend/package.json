@@ -31,7 +31,8 @@
     "pdfkit": "^0.19.1",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^4.6.3",
-    "tweetnacl": "^1.0.3"
+    "tweetnacl": "^1.0.3",
+    "winston": "^3.19.0"
   },
   "devDependencies": {
     "@types/bs58": "^4.0.4",

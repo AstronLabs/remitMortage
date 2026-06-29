@@ -1,4 +1,5 @@
 import { unpinFileFromIPFS } from "./ipfs.js";
+import logger from "../utils/logger.js";
 import { logUnpinnedCid } from "./ipfsAudit.js";
 
 /**
@@ -16,14 +17,14 @@ export async function unpinEvidenceCid(cid: string, proposalId?: string): Promis
     });
   } catch (error: any) {
     const message = error?.message ?? "Unknown unpin error";
-    console.warn(`[IPFSCleanup] Failed to unpin CID ${cid}:`, message);
+    logger.warn(`[IPFSCleanup] Failed to unpin CID ${cid}`, { message });
     await logUnpinnedCid({
       cid,
       proposalId,
       success: false,
       error: message,
     }).catch((auditError) => {
-      console.warn(`[IPFSCleanup] Failed to write unpin audit log for CID ${cid}:`, auditError);
+      logger.warn(`[IPFSCleanup] Failed to write unpin audit log for CID ${cid}`, { auditError });
     });
   }
 }

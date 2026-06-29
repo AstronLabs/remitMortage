@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
 
 const config = loadConfig();
@@ -131,7 +132,7 @@ export async function sendEmail(to: string, subject: string, htmlContent: string
     });
     return true;
   } catch (error) {
-    console.error(`[EmailService] Failed to send email to ${to}:`, error);
+    logger.error(`[EmailService] Failed to send email to ${to}`, { error });
     return false;
   }
 }

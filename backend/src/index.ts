@@ -5,6 +5,7 @@ import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
+import rTracer from "cls-rtracer";
 import { swaggerSpec } from "./docs/swagger.js";
 import { healthRouter } from "./routes/health.js";
 import { verificationRouter } from "./routes/verification.js";
@@ -19,6 +20,7 @@ import { startEventListener } from "./services/eventListener.js";
 import { startNotificationScheduler } from "./services/notification.js";
 import { startScheduler } from "./jobs/scheduler.js";
 import { loadConfig } from "./config.js";
+import logger from "./utils/logger.js";
 
 const app = express();
 const config = loadConfig();

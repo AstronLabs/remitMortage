@@ -227,7 +227,7 @@ describe("IPFS unpinning", () => {
 
   describe("unpinEvidenceCid", () => {
     it("logs a warning and audit failure without throwing when Pinata unpin fails", async () => {
-      const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+      const warnSpy = jest.spyOn(require("../utils/logger").default, "warn").mockImplementation(() => {});
       mockedAxios.delete.mockRejectedValue({
         response: { data: { error: { details: "Not pinned" } } },
         message: "Request failed",
@@ -240,8 +240,8 @@ describe("IPFS unpinning", () => {
       await expect(unpinEvidenceCid("QmFailCID", "proposal-fail")).resolves.toBeUndefined();
 
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("[IPFSCleanup] Failed to unpin CID QmFailCID:"),
-        expect.any(String)
+        expect.stringContaining("[IPFSCleanup] Failed to unpin CID QmFailCID"),
+        expect.any(Object)
       );
       expect(prisma.unpinnedCid.create).toHaveBeenCalledWith({
         data: expect.objectContaining({

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import logger from "../utils/logger.js";
 import { validateBorrowerParams } from "../middleware/validate.js";
 import { loadConfig } from "../config.js";
 import {
