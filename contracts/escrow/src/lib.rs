@@ -10,6 +10,9 @@ pub mod test_utils;
 #[cfg(test)]
 mod fuzz_tests;
 
+#[cfg(test)]
+mod test_penalty_bounds;
+
 pub use crate::errors::EscrowError;
 use crate::token_utils::get_token_client;
 use crate::types::DataKey;
