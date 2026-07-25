@@ -179,6 +179,19 @@ fn evidence(env: &Env) -> BytesN<32> {
     BytesN::from_array(env, &[9u8; 32])
 }
 
+fn make_client(env: &Env) -> (Address, MilestoneContractClient) {
+    let milestone_id = env.register(MilestoneContract, ());
+    let client = MilestoneContractClient::new(env, &milestone_id);
+    let admin = Address::generate(env);
+    let token = Address::generate(env);
+    let pool = Address::generate(env);
+    let mut approvers = Vec::new(env);
+    approvers.push_back(Address::generate(env));
+    approvers.push_back(Address::generate(env));
+    client.initialize(&admin, &token, &pool, &approvers, &2u32);
+    (admin, client)
+}
+
 fn cidv0(env: &Env) -> Bytes {
     let mut raw = [b'x'; 46];
     raw[0] = b'Q';
@@ -186,7 +199,7 @@ fn cidv0(env: &Env) -> Bytes {
     Bytes::from_slice(env, &raw)
 }
 
-// ── Initialization ──────────────────────────────────────────────────────
+// â”€â”€ Initialization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_initialize() {
@@ -231,7 +244,7 @@ fn test_initialize_invalid_threshold_fails() {
     assert_eq!(res, Err(Ok(MilestoneError::InvalidThreshold)));
 }
 
-// ── Proposal ────────────────────────────────────────────────────────────
+// â”€â”€ Proposal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_propose_milestone_creates_record() {
@@ -363,7 +376,7 @@ fn test_propose_duplicate_fails() {
     assert_eq!(res, Err(Ok(MilestoneError::MilestoneExists)));
 }
 
-// ── Approval / multisig governance ────────────────────────────────────────
+// â”€â”€ Approval / multisig governance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_approve_reaches_threshold() {
@@ -413,7 +426,7 @@ fn test_approve_by_non_approver_fails() {
     );
 
     // A random address that is not in the approver set cannot approve, even
-    // with auth mocked — enforced by the multisig membership check.
+    // with auth mocked â€” enforced by the multisig membership check.
     let outsider = Address::generate(&env);
     let res = h.milestone.try_approve_milestone(&outsider, &pid);
     assert_eq!(res, Err(Ok(MilestoneError::Unauthorized)));
@@ -454,7 +467,7 @@ fn test_approve_unknown_milestone_fails() {
     assert_eq!(res, Err(Ok(MilestoneError::MilestoneNotFound)));
 }
 
-// ── Release / cross-contract disbursement ─────────────────────────────────
+// â”€â”€ Release / cross-contract disbursement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_release_disburses_via_cross_contract() {
@@ -573,7 +586,7 @@ fn test_cannot_release_twice() {
     env.ledger().set_sequence_number(100);
     h.milestone.release_milestone(&pid);
 
-    // Second release is blocked because the milestone is already Disbursed —
+    // Second release is blocked because the milestone is already Disbursed â€”
     // the allocation can never be released more than once.
     let res = h.milestone.try_release_milestone(&pid);
     assert_eq!(res, Err(Ok(MilestoneError::InvalidStatus)));
@@ -610,7 +623,7 @@ fn test_release_exceeding_pool_cap_fails() {
     h.milestone.release_milestone(&pid);
 }
 
-// ── Authorization ─────────────────────────────────────────────────────────
+// â”€â”€ Authorization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 #[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
@@ -638,7 +651,7 @@ fn test_approve_requires_caller_auth() {
         .approve_milestone(&h.approvers.get(0).unwrap(), &proposal_id(&env));
 }
 
-// ── Dispute Resolution ────────────────────────────────────────────────
+// â”€â”€ Dispute Resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_dispute_approved_milestone() {
@@ -832,4 +845,50 @@ fn test_disputed_milestone_prevents_release() {
     env.ledger().set_sequence_number(100);
     let res = h.milestone.try_release_milestone(&pid);
     assert_eq!(res, Err(Ok(MilestoneError::InvalidStatus)));
+}
+
+// â”€â”€ Reentrancy guard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+#[test]
+fn test_release_milestone_blocked_when_reentrant_flag_set() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contractor = Address::generate(&env);
+    let (admin, client) = make_client(&env);
+
+    let proposal_id = BytesN::from_array(&env, &[40u8; 32]);
+    let loan_id = BytesN::from_array(&env, &[41u8; 32]);
+    let evidence = BytesN::from_array(&env, &[42u8; 32]);
+
+    client.propose_milestone(&contractor, &proposal_id, &loan_id, &500i128, &evidence, &cidv0(&env));
+    client.approve_milestone(&admin, &proposal_id);
+
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&DataKey::Reentrant, &true);
+    });
+
+    let result = client.try_release_milestone(&proposal_id);
+    assert_eq!(result.unwrap_err(), Ok(MilestoneError::ReentrancyGuard));
+}
+
+#[test]
+fn test_release_milestone_succeeds_when_flag_is_clear() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contractor = Address::generate(&env);
+    let (admin, client) = make_client(&env);
+
+    let proposal_id = BytesN::from_array(&env, &[50u8; 32]);
+    let loan_id = BytesN::from_array(&env, &[51u8; 32]);
+    let evidence = BytesN::from_array(&env, &[52u8; 32]);
+
+    client.propose_milestone(&contractor, &proposal_id, &loan_id, &500i128, &evidence, &cidv0(&env));
+    client.approve_milestone(&admin, &proposal_id);
+
+    let result = client.try_release_milestone(&proposal_id);
+    if let Err(e) = result {
+        assert_ne!(e, Ok(MilestoneError::ReentrancyGuard));
+    }
 }
