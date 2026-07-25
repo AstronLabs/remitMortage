@@ -24,7 +24,7 @@ pub enum MilestoneError {
     AlreadyVoted = 9,
     /// Approver set must be non-empty and threshold within 1..=approvers.
     InvalidThreshold = 10,
-    /// Provided IPFS CID does not match v0 (46-char "Qm…") or v1 (59-char "bafy…") format.
+    /// Provided IPFS CID does not match v0 (46-char "Qmâ€¦") or v1 (59-char "bafyâ€¦") format.
     InvalidCidFormat = 11,
     /// The minimum timelock between approval and release has not elapsed yet.
     TimelockNotElapsed = 12,
@@ -36,4 +36,6 @@ pub enum MilestoneError {
     RefundFailed = 15,
     /// Contractor cannot also be the borrower for the same loan.
     SelfDealingNotAllowed = 16,
+    /// Reentrancy guard prevented re-entrant call.
+    ReentrancyGuard = 17,
 }
