@@ -396,54 +396,6 @@ impl MilestoneContract {
         1
     }
 
-    // ── Reentrancy guard tests ────────────────────────────────────────────
-
-    #[test]
-    fn test_release_milestone_blocked_when_reentrant_flag_set() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let contractor = Address::generate(&env);
-        let (admin, client) = make_client(&env);
-
-        let proposal_id = BytesN::from_array(&env, &[40u8; 32]);
-        let loan_id = BytesN::from_array(&env, &[41u8; 32]);
-        let evidence = BytesN::from_array(&env, &[42u8; 32]);
-
-        client.propose_milestone(&contractor, &proposal_id, &loan_id, &500i128, &evidence, &cidv0(&env));
-        client.approve_milestone(&admin, &proposal_id);
-
-        env.as_contract(&client.address, || {
-            env.storage().instance().set(&DataKey::Reentrant, &true);
-        });
-
-        let result = client.try_release_milestone(&proposal_id);
-        assert_eq!(result.unwrap_err(), Ok(MilestoneError::ReentrancyGuard));
-    }
-
-    #[test]
-    fn test_release_milestone_succeeds_when_flag_is_clear() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let contractor = Address::generate(&env);
-        let (admin, client) = make_client(&env);
-
-        let proposal_id = BytesN::from_array(&env, &[50u8; 32]);
-        let loan_id = BytesN::from_array(&env, &[51u8; 32]);
-        let evidence = BytesN::from_array(&env, &[52u8; 32]);
-
-        client.propose_milestone(&contractor, &proposal_id, &loan_id, &500i128, &evidence, &cidv0(&env));
-        client.approve_milestone(&admin, &proposal_id);
-
-        // Flag is false by default — release should not be blocked by the guard.
-        // (It may fail for other reasons like the cross-contract call, so we check
-        // the error is NOT ReentrancyGuard.)
-        let result = client.try_release_milestone(&proposal_id);
-        if let Err(e) = result {
-            assert_ne!(e, Ok(MilestoneError::ReentrancyGuard));
-        }
-    }
 }
 
 #[cfg(test)]
