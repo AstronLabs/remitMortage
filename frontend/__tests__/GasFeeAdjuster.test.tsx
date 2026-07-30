@@ -2,7 +2,7 @@ import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import GasFeeAdjuster from "../src/components/tx/GasFeeAdjuster";
 import { INCLUSION_FEE_STROOPS } from "../src/lib/gas-fees";
-import type { SimulationEstimate } from "../src/lib/soroban";
+import type { SimulationEstimate } from "../src/lib/soroban-client";
 
 const ESTIMATE: SimulationEstimate = {
   minResourceFeeStroops: "50000",

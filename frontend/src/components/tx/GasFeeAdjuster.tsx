@@ -15,7 +15,7 @@
 
 import React, { useId, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronUp, Fuel, RotateCcw } from "lucide-react";
-import type { SimulationEstimate } from "../../lib/soroban";
+import type { SimulationEstimate } from "../../lib/soroban-client";
 import {
   baselineFeeStroops,
   buildFeeOptions,

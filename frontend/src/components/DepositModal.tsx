@@ -10,7 +10,7 @@ import {
   signAndSubmit,
   WalletSignatureError,
   type SimulationEstimate,
-} from "../lib/soroban";
+} from "../lib/soroban-client";
 import {
   formatTransactionErrorMessage,
   type TransactionModalPhase,

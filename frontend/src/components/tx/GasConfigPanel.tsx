@@ -36,7 +36,7 @@ import {
   RotateCcw,
   ShieldAlert,
 } from "lucide-react";
-import type { GasConfig, SimulationEstimate } from "../../lib/soroban";
+import type { GasConfig, SimulationEstimate } from "../../lib/soroban-client";
 
 // ---------------------------------------------------------------------------
 // Types
