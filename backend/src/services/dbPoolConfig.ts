@@ -53,13 +53,37 @@ export function resolvePoolSettings(
 }
 
 /**
- * Append the pool settings to `DATABASE_URL` as query-string parameters, which
+ * Read replica settings that may be used for analytics/reporting queries.
+ * The replica is optional: if unset, the primary database remains the only
+ * source of truth and all operations continue unchanged.
+ */
+export interface ReadReplicaSettings {
+  url?: string;
+  lagThresholdSeconds: number;
+}
+
+export function resolveReadReplicaSettings(
+  env: NodeJS.ProcessEnv = process.env
+): ReadReplicaSettings {
+  const url = env.DATABASE_REPLICA_URL || env.READ_REPLICA_URL || undefined;
+  return {
+    url,
+    lagThresholdSeconds: positiveInt(
+      env.DB_REPLICA_LAG_THRESHOLD_SECONDS,
+      30
+    ),
+  };
+}
+
+/**
+ * Append the pool settings to a database URL as query-string parameters, which
  * is how Prisma accepts them. Returns undefined when no base URL is set.
  */
 export function buildDatabaseUrl(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  databaseUrlKey: keyof NodeJS.ProcessEnv = "DATABASE_URL"
 ): string | undefined {
-  const base = env.DATABASE_URL;
+  const base = env[databaseUrlKey];
   if (!base) return undefined;
 
   const { connectionLimit, poolTimeout, connectTimeout } = resolvePoolSettings(env);

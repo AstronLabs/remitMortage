@@ -3,7 +3,10 @@ const { PrismaClient } = require("@prisma/client") as {
 };
 
 import { encrypt, decrypt } from "../utils/crypto.js";
-import { buildDatabaseUrl } from "./dbPoolConfig.js";
+import {
+  buildDatabaseUrl,
+  resolveReadReplicaSettings,
+} from "./dbPoolConfig.js";
 import {
   createDbPoolMetricsExtension,
   initDbPoolMetrics,
@@ -22,35 +25,62 @@ export type VerificationStatus = "PENDING" | "ELIGIBLE" | "INELIGIBLE";
 // actually enforces. See docs/DB_CONNECTION_POOL_TUNING.md for sizing guidance.
 //
 const dbUrl = buildDatabaseUrl();
+const { url: replicaUrl, lagThresholdSeconds } = resolveReadReplicaSettings();
 
-const baseClient = new PrismaClient(
-  dbUrl
-    ? {
-        datasources: {
-          db: { url: dbUrl },
-        },
-      }
-    : undefined
-);
+function createPrismaClient(url: string | undefined) {
+  const client = new PrismaClient(
+    url
+      ? {
+          datasources: {
+            db: { url },
+          },
+        }
+      : undefined
+  );
 
-// Route every operation through the pool-saturation instrumentation. The
-// extension is applied defensively: `$extends` is unavailable on some mocked
-// clients used in tests, and losing metrics is never a reason to take the
-// service down.
-export const prisma = (() => {
+  // Route every operation through the pool-saturation instrumentation. The
+  // extension is applied defensively: `$extends` is unavailable on some mocked
+  // clients used in tests, and losing metrics is never a reason to take the
+  // service down.
   initDbPoolMetrics();
-  if (typeof baseClient.$extends !== "function") {
-    return baseClient;
+  if (typeof client.$extends !== "function") {
+    return client;
   }
+
   try {
-    return baseClient.$extends(createDbPoolMetricsExtension());
+    return client.$extends(createDbPoolMetricsExtension());
   } catch {
-    return baseClient;
+    return client;
   }
-})();
+}
+
+export const prisma = createPrismaClient(dbUrl);
+export const readReplicaPrisma =
+  replicaUrl && buildDatabaseUrl({ ...process.env, DATABASE_URL: replicaUrl })
+    ? createPrismaClient(buildDatabaseUrl({ ...process.env, DATABASE_URL: replicaUrl }))
+    : prisma;
+
+export const READ_REPLICA_LAG_THRESHOLD_SECONDS = lagThresholdSeconds;
+
+export async function getReadReplicaLagSeconds(): Promise<number | null> {
+  if (!replicaUrl || readReplicaPrisma === prisma) {
+    return null;
+  }
+
+  try {
+    const rows = (await (readReplicaPrisma as any).$queryRaw`SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - pg_last_xact_replay_timestamp()))::int, 0) AS lag_seconds`) as Array<{ lag_seconds: number | string | null }>;
+    const lag = Number(rows?.[0]?.lag_seconds ?? 0);
+    return Number.isFinite(lag) ? lag : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function disconnect(): Promise<void> {
   await prisma.$disconnect();
+  if (readReplicaPrisma !== prisma) {
+    await readReplicaPrisma.$disconnect();
+  }
 }
 
 // ── Applicant ─────────────────────────────────────────────────────────────

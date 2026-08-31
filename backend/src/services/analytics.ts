@@ -14,7 +14,12 @@
 import { listApplications, type LoanStatus } from "./loanStore.js";
 import { balanceRepository } from "./balanceStore.js";
 import { listProposals, type MilestoneProposalStatus } from "./milestoneProposalStore.js";
-import { prisma } from "./db.js";
+import {
+  prisma,
+  readReplicaPrisma,
+  getReadReplicaLagSeconds,
+  READ_REPLICA_LAG_THRESHOLD_SECONDS,
+} from "./db.js";
 
 // ── Money helpers ──────────────────────────────────────────────────────────
 
@@ -384,6 +389,27 @@ export function getMonthlyVolume(months: number, deps?: AnalyticsDeps): MonthlyV
   );
 }
 
+async function withReadReplicaRouting<T>(
+  primaryQuery: () => Promise<T>,
+  replicaQuery: () => Promise<T>
+): Promise<T> {
+  const replicaClient = readReplicaPrisma as any;
+  if (!replicaClient || replicaClient === prisma) {
+    return primaryQuery();
+  }
+
+  const lagSeconds = await getReadReplicaLagSeconds();
+  if (lagSeconds !== null && lagSeconds > READ_REPLICA_LAG_THRESHOLD_SECONDS) {
+    return primaryQuery();
+  }
+
+  try {
+    return await replicaQuery();
+  } catch {
+    return primaryQuery();
+  }
+}
+
 // ── Materialized View Readers ────────────────────────────────────────────────
 // These functions read from the precomputed materialized views instead of
 // computing aggregates live, significantly speeding up analytics endpoints.
@@ -416,28 +442,56 @@ interface MonthlyVolumeRow {
  */
 export async function getProtocolOverviewFromView(): Promise<ProtocolOverview | null> {
   try {
-    const rawPrisma = prisma as any;
-    if (typeof rawPrisma.$queryRawUnsafe !== "function") {
-      return null;
-    }
+    return await withReadReplicaRouting(
+      async () => {
+        const rawPrisma = prisma as any;
+        if (typeof rawPrisma.$queryRawUnsafe !== "function") {
+          return null;
+        }
 
-    const rows: ProtocolAnalyticsRow[] = await rawPrisma.$queryRawUnsafe(
-      `SELECT * FROM protocol_analytics LIMIT 1`,
-    );
+        const rows: ProtocolAnalyticsRow[] = await rawPrisma.$queryRawUnsafe(
+          `SELECT * FROM protocol_analytics LIMIT 1`,
+        );
 
-    if (!rows || rows.length === 0) return null;
-    const row = rows[0];
+        if (!rows || rows.length === 0) return null;
+        const row = rows[0];
 
-    return {
-      tvl: {
-        escrow: row.total_escrow,
-        lendingPool: row.total_lending_pool,
-        total: row.total_tvl,
+        return {
+          tvl: {
+            escrow: row.total_escrow,
+            lendingPool: row.total_lending_pool,
+            total: row.total_tvl,
+          },
+          totalBorrowers: row.total_borrowers,
+          totalInvestors: 0,
+          totalLoans: row.total_loans,
+        };
       },
-      totalBorrowers: row.total_borrowers,
-      totalInvestors: 0,
-      totalLoans: row.total_loans,
-    };
+      async () => {
+        const rawPrisma = readReplicaPrisma as any;
+        if (typeof rawPrisma.$queryRawUnsafe !== "function") {
+          return null;
+        }
+
+        const rows: ProtocolAnalyticsRow[] = await rawPrisma.$queryRawUnsafe(
+          `SELECT * FROM protocol_analytics LIMIT 1`,
+        );
+
+        if (!rows || rows.length === 0) return null;
+        const row = rows[0];
+
+        return {
+          tvl: {
+            escrow: row.total_escrow,
+            lendingPool: row.total_lending_pool,
+            total: row.total_tvl,
+          },
+          totalBorrowers: row.total_borrowers,
+          totalInvestors: 0,
+          totalLoans: row.total_loans,
+        };
+      }
+    );
   } catch {
     return null;
   }
@@ -449,30 +503,60 @@ export async function getProtocolOverviewFromView(): Promise<ProtocolOverview | 
  */
 export async function getLoanPerformanceFromView(): Promise<LoanPerformance | null> {
   try {
-    const rawPrisma = prisma as any;
-    if (typeof rawPrisma.$queryRawUnsafe !== "function") {
-      return null;
-    }
+    return await withReadReplicaRouting(
+      async () => {
+        const rawPrisma = prisma as any;
+        if (typeof rawPrisma.$queryRawUnsafe !== "function") {
+          return null;
+        }
 
-    const rows: ProtocolAnalyticsRow[] = await rawPrisma.$queryRawUnsafe(
-      `SELECT * FROM protocol_analytics LIMIT 1`,
+        const rows: ProtocolAnalyticsRow[] = await rawPrisma.$queryRawUnsafe(
+          `SELECT * FROM protocol_analytics LIMIT 1`,
+        );
+
+        if (!rows || rows.length === 0) return null;
+        const row = rows[0];
+
+        const concluded = row.repaid_loans;
+        const defaulted = 0;
+
+        return {
+          activeLoans: row.active_loans,
+          repaidLoans: row.repaid_loans,
+          defaultedLoans: defaulted,
+          totalLoans: row.total_loans,
+          repaymentRate: concluded > 0 ? Math.round((row.repaid_loans / concluded) * 10000) / 100 : 0,
+          defaultRate: concluded > 0 ? Math.round((defaulted / concluded) * 10000) / 100 : 0,
+          onTimePaymentPercentage: 0,
+        };
+      },
+      async () => {
+        const rawPrisma = readReplicaPrisma as any;
+        if (typeof rawPrisma.$queryRawUnsafe !== "function") {
+          return null;
+        }
+
+        const rows: ProtocolAnalyticsRow[] = await rawPrisma.$queryRawUnsafe(
+          `SELECT * FROM protocol_analytics LIMIT 1`,
+        );
+
+        if (!rows || rows.length === 0) return null;
+        const row = rows[0];
+
+        const concluded = row.repaid_loans;
+        const defaulted = 0;
+
+        return {
+          activeLoans: row.active_loans,
+          repaidLoans: row.repaid_loans,
+          defaultedLoans: defaulted,
+          totalLoans: row.total_loans,
+          repaymentRate: concluded > 0 ? Math.round((row.repaid_loans / concluded) * 10000) / 100 : 0,
+          defaultRate: concluded > 0 ? Math.round((defaulted / concluded) * 10000) / 100 : 0,
+          onTimePaymentPercentage: 0,
+        };
+      }
     );
-
-    if (!rows || rows.length === 0) return null;
-    const row = rows[0];
-
-    const concluded = row.repaid_loans;
-    const defaulted = 0;
-
-    return {
-      activeLoans: row.active_loans,
-      repaidLoans: row.repaid_loans,
-      defaultedLoans: defaulted,
-      totalLoans: row.total_loans,
-      repaymentRate: concluded > 0 ? Math.round((row.repaid_loans / concluded) * 10000) / 100 : 0,
-      defaultRate: concluded > 0 ? Math.round((defaulted / concluded) * 10000) / 100 : 0,
-      onTimePaymentPercentage: 0,
-    };
   } catch {
     return null;
   }
@@ -484,24 +568,48 @@ export async function getLoanPerformanceFromView(): Promise<LoanPerformance | nu
  */
 export async function getDisbursementProgressFromView(): Promise<DisbursementProgress | null> {
   try {
-    const rawPrisma = prisma as any;
-    if (typeof rawPrisma.$queryRawUnsafe !== "function") {
-      return null;
-    }
+    return await withReadReplicaRouting(
+      async () => {
+        const rawPrisma = prisma as any;
+        if (typeof rawPrisma.$queryRawUnsafe !== "function") {
+          return null;
+        }
 
-    const rows: ProtocolAnalyticsRow[] = await rawPrisma.$queryRawUnsafe(
-      `SELECT * FROM protocol_analytics LIMIT 1`,
+        const rows: ProtocolAnalyticsRow[] = await rawPrisma.$queryRawUnsafe(
+          `SELECT * FROM protocol_analytics LIMIT 1`,
+        );
+
+        if (!rows || rows.length === 0) return null;
+        const row = rows[0];
+
+        return {
+          totalDisbursed: row.total_lending_pool,
+          milestonesCompleted: row.milestones_completed,
+          milestonesPending: row.milestones_pending,
+          averageMilestoneCompletionMs: 0,
+        };
+      },
+      async () => {
+        const rawPrisma = readReplicaPrisma as any;
+        if (typeof rawPrisma.$queryRawUnsafe !== "function") {
+          return null;
+        }
+
+        const rows: ProtocolAnalyticsRow[] = await rawPrisma.$queryRawUnsafe(
+          `SELECT * FROM protocol_analytics LIMIT 1`,
+        );
+
+        if (!rows || rows.length === 0) return null;
+        const row = rows[0];
+
+        return {
+          totalDisbursed: row.total_lending_pool,
+          milestonesCompleted: row.milestones_completed,
+          milestonesPending: row.milestones_pending,
+          averageMilestoneCompletionMs: 0,
+        };
+      }
     );
-
-    if (!rows || rows.length === 0) return null;
-    const row = rows[0];
-
-    return {
-      totalDisbursed: row.total_lending_pool,
-      milestonesCompleted: row.milestones_completed,
-      milestonesPending: row.milestones_pending,
-      averageMilestoneCompletionMs: 0,
-    };
   } catch {
     return null;
   }
@@ -513,24 +621,48 @@ export async function getDisbursementProgressFromView(): Promise<DisbursementPro
  */
 export async function getMonthlyVolumeFromView(months: number): Promise<MonthlyVolumePoint[] | null> {
   try {
-    const rawPrisma = prisma as any;
-    if (typeof rawPrisma.$queryRawUnsafe !== "function") {
-      return null;
-    }
+    return await withReadReplicaRouting(
+      async () => {
+        const rawPrisma = prisma as any;
+        if (typeof rawPrisma.$queryRawUnsafe !== "function") {
+          return null;
+        }
 
-    const clamped = Math.min(Math.max(Math.trunc(months) || 0, 1), 24);
-    const rows: MonthlyVolumeRow[] = await rawPrisma.$queryRawUnsafe(
-      `SELECT * FROM monthly_volume_series ORDER BY month DESC LIMIT ${clamped}`,
+        const clamped = Math.min(Math.max(Math.trunc(months) || 0, 1), 24);
+        const rows: MonthlyVolumeRow[] = await rawPrisma.$queryRawUnsafe(
+          `SELECT * FROM monthly_volume_series ORDER BY month DESC LIMIT ${clamped}`,
+        );
+
+        if (!rows || rows.length === 0) return null;
+
+        return rows.reverse().map((row) => ({
+          month: row.month,
+          deposits: row.deposits,
+          repayments: row.repayments,
+          disbursements: row.disbursements,
+        }));
+      },
+      async () => {
+        const rawPrisma = readReplicaPrisma as any;
+        if (typeof rawPrisma.$queryRawUnsafe !== "function") {
+          return null;
+        }
+
+        const clamped = Math.min(Math.max(Math.trunc(months) || 0, 1), 24);
+        const rows: MonthlyVolumeRow[] = await rawPrisma.$queryRawUnsafe(
+          `SELECT * FROM monthly_volume_series ORDER BY month DESC LIMIT ${clamped}`,
+        );
+
+        if (!rows || rows.length === 0) return null;
+
+        return rows.reverse().map((row) => ({
+          month: row.month,
+          deposits: row.deposits,
+          repayments: row.repayments,
+          disbursements: row.disbursements,
+        }));
+      }
     );
-
-    if (!rows || rows.length === 0) return null;
-
-    return rows.reverse().map((row) => ({
-      month: row.month,
-      deposits: row.deposits,
-      repayments: row.repayments,
-      disbursements: row.disbursements,
-    }));
   } catch {
     return null;
   }
