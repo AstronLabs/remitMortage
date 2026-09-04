@@ -52,6 +52,10 @@ pub struct EscrowConfig {
     pub persistent_lifetime_threshold: u32,
     /// Optional lending protocol vault address for yield routing.
     pub yield_vault: Option<Address>,
+    /// When true, only whitelisted addresses may deposit. Toggleable by admin
+    /// for regulated or pilot deployments. `false` — the deployment default —
+    /// preserves existing permissionless behaviour.
+    pub permissioned_mode: bool,
 }
 
 /// Tracks an individual borrower's escrow balance and status per goal.
@@ -124,4 +128,8 @@ pub enum DataKey {
     LendingPool,
     /// Reentrancy guard flag.
     ReentrancyGuard,
+    /// Whitelist flag for a permissioned-mode address. Present and `true` means
+    /// the address is allowed to interact with the contract when permissioned
+    /// mode is enabled.
+    Whitelist(Address),
 }

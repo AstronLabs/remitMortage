@@ -108,4 +108,6 @@ pub enum PoolError {
     AssumptionAlreadyRequested = 49,
     /// Withdrawal amount exceeds the pool's configured per-transaction limit.
     WithdrawalExceedsMaxSingleLimit = 50,
+    /// Address is not whitelisted when permissioned mode is enabled.
+    AddressNotWhitelisted = 51,
 }

@@ -794,6 +794,8 @@ impl LendingPoolContract {
             // integrations are unaffected until an admin opts in via
             // `set_max_single_withdrawal`.
             max_single_withdrawal: 0,
+            // Permissionless by default; admin opts in via `set_permissioned_mode`.
+            permissioned_mode: false,
         };
 
         env.storage().instance().set(&DataKey::Config, &config);
@@ -872,6 +874,7 @@ impl LendingPoolContract {
         tranche: Tranche,
     ) -> Result<(), PoolError> {
         Self::check_not_paused(&env)?;
+        Self::check_whitelist(&env, &investor)?;
         investor.require_auth();
         Self::non_reentrant(&env, || {
             if amount <= 0 {
@@ -1002,6 +1005,7 @@ impl LendingPoolContract {
         principal: i128,
     ) -> Result<(), PoolError> {
         Self::check_not_paused(&env)?;
+        Self::check_whitelist(&env, &borrower)?;
         borrower.require_auth();
         Self::do_request_loan(&env, borrower, loan_id, principal, None)
     }
@@ -1014,6 +1018,7 @@ impl LendingPoolContract {
         escrow_origin: Address,
     ) -> Result<(), PoolError> {
         Self::check_not_paused(&env)?;
+        Self::check_whitelist(&env, &borrower)?;
         borrower.require_auth();
         Self::do_request_loan(&env, borrower, loan_id, principal, Some(escrow_origin))
     }
@@ -2632,6 +2637,7 @@ impl LendingPoolContract {
     /// protocol treasury address. The net amount is transferred to the investor.
     pub fn withdraw(env: Env, investor: Address, amount: i128) -> Result<(), PoolError> {
         Self::check_not_paused(&env)?;
+        Self::check_whitelist(&env, &investor)?;
         investor.require_auth();
         Self::non_reentrant(&env, || {
             if amount <= 0 {
@@ -3654,6 +3660,101 @@ impl LendingPoolContract {
     /// Returns whether `contractor` is on the disbursement whitelist.
     pub fn is_whitelisted(env: Env, contractor: Address) -> bool {
         Self::is_contractor_whitelisted(&env, &contractor)
+    }
+
+    // ── Permissioned Mode ────────────────────────────────────────────────
+
+    /// Toggle permissioned mode on or off. Admin/governance-only.
+    ///
+    /// When enabled, only whitelisted addresses may call `deposit`,
+    /// `request_loan`, and `withdraw`. When disabled, the contract
+    /// operates in its original permissionless mode.
+    pub fn set_permissioned_mode(env: Env, enabled: bool) -> Result<(), PoolError> {
+        let mut config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        config.permissioned_mode = enabled;
+        env.storage().instance().set(&DataKey::Config, &config);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events()
+            .publish((symbol_short!("perm_mode"),), enabled);
+
+        Ok(())
+    }
+
+    /// Add an address to the permissioned-mode whitelist. Admin-only.
+    pub fn add_to_whitelist(env: Env, address: Address) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Whitelist(address.clone()), &true);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events()
+            .publish((symbol_short!("wl_add"),), (address,));
+
+        Ok(())
+    }
+
+    /// Remove an address from the permissioned-mode whitelist. Admin-only.
+    pub fn remove_from_whitelist(env: Env, address: Address) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Whitelist(address.clone()));
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events()
+            .publish((symbol_short!("wl_rm"),), (address,));
+
+        Ok(())
+    }
+
+    /// Returns whether `address` is on the permissioned-mode whitelist.
+    pub fn is_address_whitelisted(env: Env, address: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::Whitelist(address))
+            .unwrap_or(false)
+    }
+
+    /// Returns whether permissioned mode is currently enabled.
+    pub fn get_permissioned_mode(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get::<DataKey, PoolConfig>(&DataKey::Config)
+            .map(|c| c.permissioned_mode)
+            .unwrap_or(false)
+    }
+
+    /// Internal helper: rejects the call if permissioned mode is on and the
+    /// caller is not on the whitelist.
+    fn check_whitelist(env: &Env, caller: &Address) -> Result<(), PoolError> {
+        let config = Self::read_config(env)?;
+        if !config.permissioned_mode {
+            return Ok(());
+        }
+        let whitelisted = env
+            .storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::Whitelist(caller.clone()))
+            .unwrap_or(false);
+        if whitelisted {
+            Ok(())
+        } else {
+            Err(PoolError::AddressNotWhitelisted)
+        }
     }
 
     // ── Upgrade Functions ────────────────────────────────────────────────
