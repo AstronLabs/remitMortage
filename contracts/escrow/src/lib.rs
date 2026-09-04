@@ -350,6 +350,7 @@ impl EscrowContract {
     ) -> Result<(), EscrowError> {
         borrower.require_auth();
         Self::check_not_paused(&env)?;
+        Self::check_whitelist(&env, &borrower)?;
         Self::non_reentrant(&env, || {
             if amount <= 0 {
                 return Err(EscrowError::InvalidAmount);
@@ -1027,6 +1028,94 @@ impl EscrowContract {
     /// Returns the pending upgrade proposal, if any.
     pub fn get_pending_upgrade(env: Env) -> Option<PendingUpgradeRecord> {
         env.storage().instance().get(&DataKey::PendingUpgrade)
+    }
+
+    // ── Permissioned Mode ────────────────────────────────────────────────
+
+    /// Toggle permissioned mode on or off. Admin/governance-only.
+    ///
+    /// When enabled, only whitelisted addresses may call `deposit`.
+    /// When disabled, the contract operates in its original permissionless mode.
+    pub fn set_permissioned_mode(env: Env, enabled: bool) -> Result<(), EscrowError> {
+        let mut config = Self::get_config(&env)?;
+        config.admin.require_auth();
+
+        config.permissioned_mode = enabled;
+        env.storage().instance().set(&DataKey::Config, &config);
+        Self::extend_instance_ttl(&env);
+
+        env.events()
+            .publish((symbol_short!("perm_mode"),), enabled);
+
+        Ok(())
+    }
+
+    /// Add an address to the permissioned-mode whitelist. Admin-only.
+    pub fn add_to_whitelist(env: Env, address: Address) -> Result<(), EscrowError> {
+        let config = Self::get_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Whitelist(address.clone()), &true);
+        Self::extend_instance_ttl(&env);
+
+        env.events()
+            .publish((symbol_short!("wl_add"),), (address,));
+
+        Ok(())
+    }
+
+    /// Remove an address from the permissioned-mode whitelist. Admin-only.
+    pub fn remove_from_whitelist(env: Env, address: Address) -> Result<(), EscrowError> {
+        let config = Self::get_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Whitelist(address.clone()));
+        Self::extend_instance_ttl(&env);
+
+        env.events()
+            .publish((symbol_short!("wl_rm"),), (address,));
+
+        Ok(())
+    }
+
+    /// Returns whether `address` is on the permissioned-mode whitelist.
+    pub fn is_address_whitelisted(env: Env, address: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::Whitelist(address))
+            .unwrap_or(false)
+    }
+
+    /// Returns whether permissioned mode is currently enabled.
+    pub fn get_permissioned_mode(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get::<DataKey, EscrowConfig>(&DataKey::Config)
+            .map(|c| c.permissioned_mode)
+            .unwrap_or(false)
+    }
+
+    /// Internal helper: rejects the call if permissioned mode is on and the
+    /// caller is not on the whitelist.
+    fn check_whitelist(env: &Env, caller: &Address) -> Result<(), EscrowError> {
+        let config = Self::get_config(env)?;
+        if !config.permissioned_mode {
+            return Ok(());
+        }
+        let whitelisted = env
+            .storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::Whitelist(caller.clone()))
+            .unwrap_or(false);
+        if whitelisted {
+            Ok(())
+        } else {
+            Err(EscrowError::AddressNotWhitelisted)
+        }
     }
 }
 

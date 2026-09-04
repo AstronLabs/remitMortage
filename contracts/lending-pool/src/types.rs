@@ -81,6 +81,11 @@ pub struct PoolConfig {
     /// behaviour is unchanged until an admin opts in via
     /// `set_max_single_withdrawal`.
     pub max_single_withdrawal: i128,
+    /// When true, only whitelisted addresses may call deposit, request_loan,
+    /// and withdraw. Toggleable by admin for regulated or pilot deployments.
+    /// `false` — the deployment default — preserves existing permissionless
+    /// behaviour.
+    pub permissioned_mode: bool,
 }
 
 /// Tracks an individual investor's capital contribution.
