@@ -17,6 +17,7 @@ import {
   getLoanComparisonStore,
   useLoanComparison,
 } from "@/hooks/useLoanComparison";
+import FieldTooltip from "./ui/FieldTooltip";
 
 export interface LoanOfferComparisonProps {
   /** Token ticker shown alongside figures. */
@@ -30,6 +31,7 @@ type MetricRow = {
   key: string;
   label: string;
   hint?: string;
+  tooltip?: string;
   render: (entry: ScenarioComparison, symbol: string) => React.ReactNode;
 };
 
@@ -69,22 +71,26 @@ export default function LoanOfferComparison({
         key: "downPayment",
         label: "Down payment",
         hint: "Saved before borrowing",
+        tooltip: "The 30% down payment you accumulate in your escrow savings account before the lending pool approves your mortgage.",
         render: (entry) => money(entry.downPayment),
       },
       {
         key: "monthlySavings",
         label: "Monthly savings",
         hint: "To reach the down payment",
+        tooltip: "How much you need to deposit each month into your escrow to reach your savings target within the chosen duration.",
         render: (entry) => money(entry.monthlySavings),
       },
       {
         key: "principal",
         label: "Amount financed",
+        tooltip: "The 70% loan portion provided by the lending pool after your down payment target is met.",
         render: (entry) => money(entry.principal),
       },
       {
         key: "ltv",
         label: "Loan-to-value",
+        tooltip: "The ratio of the loan amount to the property value. Lower LTV means better terms and lower risk.",
         render: (entry) => `${(entry.ltvBps / 100).toFixed(1)}%`,
       },
       {
@@ -367,7 +373,10 @@ export default function LoanOfferComparison({
             {rows.map((row) => (
               <tr key={row.key} className="border-t border-[var(--text-muted)]/10">
                 <th scope="row" className="px-3 py-3 text-left font-normal align-top">
-                  {row.label}
+                  <span className="flex items-center gap-1">
+                    {row.label}
+                    {row.tooltip && <FieldTooltip content={row.tooltip} />}
+                  </span>
                   {row.hint && (
                     <span className="block text-xs text-[var(--text-muted)]">
                       {row.hint}

@@ -50,4 +50,6 @@ pub enum EscrowError {
     PenaltyProposalNotPending = 22,
     /// Escrow goal does not exist or has no deposits.
     EscrowGoalNotFound = 23,
+    /// Address is not whitelisted when permissioned mode is enabled.
+    AddressNotWhitelisted = 24,
 }

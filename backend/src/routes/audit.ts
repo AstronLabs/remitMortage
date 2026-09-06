@@ -78,7 +78,7 @@ auditRouter.get("/", requireAdmin, async (req, res) => {
       where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: limit + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      ...(cursor ? ({ cursor: ({ id: cursor } as any), skip: 1 } as any) : {}),
     });
 
     const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;

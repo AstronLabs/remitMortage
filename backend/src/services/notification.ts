@@ -95,16 +95,18 @@ export async function queueNotification(
   content: string,
   delayMs: number = 0
 ) {
-  const notification = await prisma.notification.create({
-    data: {
-      recipient,
-      type,
-      content,
-      status: delayMs > 0 ? "Pending" : "Pending",
-      attempts: 0,
-      nextRetryAt: delayMs > 0 ? new Date(Date.now() + delayMs) : null,
-    },
-  });
+  const createData: any = {
+    recipient,
+    type,
+    content,
+    status: "Pending",
+    attempts: 0,
+  };
+  if (delayMs > 0) {
+    createData.nextRetryAt = new Date(Date.now() + delayMs);
+  }
+
+  const notification = await prisma.notification.create({ data: createData });
 
   // Dispatch via BullMQ queue (load-balanced across workers)
   await queueService.addNotificationJob({

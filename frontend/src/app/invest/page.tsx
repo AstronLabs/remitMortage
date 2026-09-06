@@ -10,6 +10,7 @@ import { useGovernanceProposals, type GovernanceProposal } from "../../hooks/use
 import { GovernanceVotingModal } from "../../components/governance/GovernanceVotingModal";
 import { SubmitProposalModal } from "../../components/governance/SubmitProposalModal";
 import { QuorumProgressBar } from "../../components/governance/QuorumProgressBar";
+import { track } from "../../lib/analytics";
 
 type Tranche = "Senior" | "Junior";
 
@@ -102,6 +103,10 @@ export default function InvestPage() {
 function InvestPageInner() {
   const { publicKey, isConnected, connect } = useWallet();
 
+  useEffect(() => {
+    if (isConnected) track("portfolio_viewed");
+  }, [isConnected]);
+
   const [metrics, setMetrics] = useState<PoolMetrics | null>(null);
   const [position, setPosition] = useState<InvestorPosition | null>(null);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
@@ -187,6 +192,7 @@ function InvestPageInner() {
     );
     if (!confirmed) return;
 
+    track("investment_started", { tranche: selectedTranche });
     setDepositing(true);
     try {
       await new Promise((r) => setTimeout(r, 1000));
@@ -200,6 +206,7 @@ function InvestPageInner() {
 
       setDepositAmount("");
       setDepositSuccess(true);
+      track("investment_completed", { tranche: selectedTranche });
       setTimeout(() => setDepositSuccess(false), 5000);
     } catch (err: any) {
       setDepositError(err?.message || "Deposit transaction failed.");
@@ -236,6 +243,7 @@ function InvestPageInner() {
     try {
       await new Promise((r) => setTimeout(r, 800));
       setPosition({ deposited: "0", tranche: null, accruedYield: "0", startLedger: 0 });
+      track("investment_withdrawal_completed");
     } catch (err: any) {
       setWithdrawError(err?.message || "Withdrawal failed.");
     } finally {

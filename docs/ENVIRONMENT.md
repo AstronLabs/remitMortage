@@ -48,3 +48,18 @@ See `backend/src/utils/demo-rate-limit.ts` for configuration details.
 Refer to `.env.example` at the project root for the full list of supported
 environment variables, including Stellar network settings, database connection
 strings, CORS origins, contract IDs, and API keys.
+
+### Product usage analytics
+
+Product usage analytics is enabled by default. Set the following variable to
+`false` to disable frontend tracking and backend persistence without changing
+application code:
+
+```env
+ANALYTICS_ENABLED=false
+NEXT_PUBLIC_ANALYTICS_ENABLED=false
+```
+
+Authenticated events are buffered through the existing Redis/BullMQ analytics
+queue and persisted in PostgreSQL in batches. Run the backend worker with the
+same Redis configuration as the API process so queued events are drained.

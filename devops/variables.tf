@@ -22,6 +22,32 @@ variable "db_password" {
   sensitive   = true
 }
 
+variable "database_secret_arn" {
+  description = "Secrets Manager ARN containing the database connection URL"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "sendgrid_secret_arn" {
+  description = "Secrets Manager ARN containing the SendGrid API key"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "secrets_rotation_lambda_arn" {
+  description = "Optional Lambda ARN implementing Secrets Manager rotation"
+  type        = string
+  default     = ""
+}
+
+variable "secrets_rotation_days" {
+  description = "Rotation interval; old credentials remain valid for the provider grace window"
+  type        = number
+  default     = 30
+}
+
 variable "app_image" {
   description = "ECR Image URI for the App Runner service"
   type        = string

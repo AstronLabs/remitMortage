@@ -9,6 +9,7 @@
 import axios from "axios";
 import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
+import { configuredSecretId, secrets } from "./secretsManager.js";
 
 const SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send";
 
@@ -20,13 +21,19 @@ export interface SendGridMessage {
 }
 
 /** Resolved lazily so tests and runtime env changes are picked up. */
-function credentials(): { apiKey: string; from: string } {
+async function credentials(): Promise<{ apiKey: string; from: string }> {
   const config = loadConfig();
-  return { apiKey: config.sendgridApiKey, from: config.sendgridFrom };
+  const secretId = configuredSecretId("SENDGRID_SECRET_ID");
+  if (!secretId) return { apiKey: config.sendgridApiKey, from: config.sendgridFrom };
+  const secret = await secrets.getJson(secretId);
+  return {
+    apiKey: secret.apiKey ?? secret.value ?? config.sendgridApiKey,
+    from: secret.from ?? config.sendgridFrom,
+  };
 }
 
-export function isSendGridConfigured(): boolean {
-  return credentials().apiKey.length > 0;
+export async function isSendGridConfigured(): Promise<boolean> {
+  return (await credentials()).apiKey.length > 0;
 }
 
 /** Loads `@sendgrid/mail` if present; returns null when it is not installed. */
@@ -46,7 +53,7 @@ async function loadOfficialClient(apiKey: string): Promise<any | null> {
  * path must not be interrupted by a mail provider outage.
  */
 export async function sendGridSend(message: SendGridMessage): Promise<boolean> {
-  const { apiKey, from } = credentials();
+  const { apiKey, from } = await credentials();
   if (!apiKey) {
     logger.warn("[sendgrid] SENDGRID_API_KEY not set, skipping email dispatch");
     return false;

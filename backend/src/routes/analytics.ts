@@ -14,8 +14,67 @@ import { feeEstimator } from "../services/feeEstimator.js";
 import { cacheMiddleware } from "../middleware/cache.js";
 import { loadConfig } from "../config.js";
 import { convertUsdTo } from "../services/fx.js";
+import { authMiddleware, requireAdmin } from "../middleware/auth.js";
+import {
+  enqueueAnalyticsEvents,
+  getAnalyticsCounts,
+  getAnalyticsFunnel,
+  MAX_ANALYTICS_BATCH_SIZE,
+  validateAnalyticsInput,
+} from "../services/analyticsEvents.js";
 
 export const analyticsRouter = Router();
+
+function queryDateRange(req: any): { start: Date; end: Date } | null {
+  const start = new Date(String(req.query.start ?? ""));
+  const end = new Date(String(req.query.end ?? ""));
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) return null;
+  return { start, end };
+}
+
+analyticsRouter.post("/events", authMiddleware, async (req: any, res) => {
+  if (!req.user?.walletAddress || typeof req.user.walletAddress !== "string") {
+    return res.status(401).json({ error: "unauthorized", message: "Authenticated wallet identity missing" });
+  }
+  const body = req.body ?? {};
+  const inputs = Array.isArray(body.events) ? body.events : [body];
+  if (inputs.length < 1 || inputs.length > MAX_ANALYTICS_BATCH_SIZE || inputs.some((event: unknown) => !validateAnalyticsInput(event))) {
+    return res.status(400).json({ error: "invalid_analytics_event", message: `Provide 1-${MAX_ANALYTICS_BATCH_SIZE} valid events.` });
+  }
+  try {
+    // userId is intentionally taken from the verified JWT, never the body.
+    await enqueueAnalyticsEvents(req.user.walletAddress, inputs);
+    return res.status(202).json({ accepted: inputs.length });
+  } catch (error) {
+    console.error("Analytics ingestion error:", error);
+    return res.status(503).json({ error: "analytics_unavailable" });
+  }
+});
+
+analyticsRouter.get("/events/counts", requireAdmin, async (req, res) => {
+  const range = queryDateRange(req);
+  if (!range) return res.status(400).json({ error: "invalid_date_range", message: "start and end must be valid dates with start before end." });
+  try {
+    return res.json(await getAnalyticsCounts(range.start, range.end, typeof req.query.event === "string" ? req.query.event : undefined));
+  } catch (error) {
+    console.error("Analytics counts error:", error);
+    return res.status(500).json({ error: "analytics_query_failed" });
+  }
+});
+
+analyticsRouter.get("/events/funnel", requireAdmin, async (req, res) => {
+  const range = queryDateRange(req);
+  const requested = typeof req.query.events === "string" ? req.query.events.split(",").map((event) => event.trim()).filter(Boolean) : [];
+  if (!range || requested.length < 2 || requested.length > 10 || requested.some((event) => !/^[a-z][a-z0-9_.-]{1,99}$/.test(event))) {
+    return res.status(400).json({ error: "invalid_funnel", message: "Provide 2-10 event names and a valid date range." });
+  }
+  try {
+    return res.json(await getAnalyticsFunnel(range.start, range.end, requested));
+  } catch (error) {
+    console.error("Analytics funnel error:", error);
+    return res.status(500).json({ error: "analytics_query_failed" });
+  }
+});
 
 const DEFAULT_VOLUME_MONTHS = 6;
 const MAX_VOLUME_MONTHS = 24;

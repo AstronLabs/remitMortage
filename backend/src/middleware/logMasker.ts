@@ -10,7 +10,7 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /x-auth-token/i,
   /bearer/i,
   /passport/i,
-  /national_id/i,
+  /national[_-]?id/i,
   /driver.?licen[cs]e/i,
   /ssn/i,
   /social_security/i,
@@ -20,6 +20,7 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /cvv/i,
   /pin/i,
   /private_key/i,
+  /private[_-]?key/i,
   /secret_key/i,
   /wallet_seed/i,
   /mnemonic/i,
@@ -52,7 +53,7 @@ function maskSensitiveValues(value: unknown, depth = 0): unknown {
     const masked: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
       const keyLower = key.toLowerCase();
-      if (SENSITIVE_FIELD_NAMES.has(keyLower)) {
+      if (SENSITIVE_PATTERNS.some((p) => p.test(keyLower))) {
         masked[key] = MASK;
       } else if (typeof val === "string" && SENSITIVE_PATTERNS.some((p) => p.test(val))) {
         masked[key] = MASK;

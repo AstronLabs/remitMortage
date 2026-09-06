@@ -21,6 +21,10 @@ export interface Config {
   usdcTokenId: string;
   pinataApiKey: string;
   pinataSecretApiKey: string;
+  /** Secondary IPFS provider API key for redundancy (e.g., NFT.storage or Web3.storage). */
+  secondaryIpfsProvider: "nft.storage" | "web3.storage" | null;
+  /** Secondary IPFS provider API key. */
+  secondaryIpfsApiKey: string | null;
   smtpHost: string;
   smtpPort: number;
   smtpUser: string;
@@ -96,6 +100,8 @@ export interface Config {
   draftStaleThresholdDays: number;
   /** Days after a stale notice before an unresumed Draft is soft-deleted (expired). */
   draftStaleExpiryGraceDays: number;
+  /** When true, registration requires a valid unused invite code (soft-launch gating). */
+  inviteCodeRequired: boolean;
 }
 
 /** Parses APPLICATION_SLA_HOURS (a JSON map of status -> SLA hours). */
@@ -166,6 +172,8 @@ export function loadConfig(): Config {
     usdcTokenId: process.env.USDC_TOKEN_ID || "",
     pinataApiKey: process.env.PINATA_API_KEY || "",
     pinataSecretApiKey: process.env.PINATA_SECRET_API_KEY || "",
+    secondaryIpfsProvider: (process.env.SECONDARY_IPFS_PROVIDER as "nft.storage" | "web3.storage") || null,
+    secondaryIpfsApiKey: process.env.SECONDARY_IPFS_API_KEY || null,
     smtpHost: process.env.SMTP_HOST || "localhost",
     smtpPort: parseInt(process.env.SMTP_PORT || "587", 10),
     smtpUser: process.env.SMTP_USER || "",
@@ -239,5 +247,6 @@ export function loadConfig(): Config {
       process.env.DRAFT_STALE_EXPIRY_GRACE_DAYS || "7",
       10
     ),
+    inviteCodeRequired: process.env.INVITE_CODE_REQUIRED === "true",
   };
 }

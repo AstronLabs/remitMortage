@@ -11,6 +11,10 @@ import {
   verificationChallengeRateLimiter,
   verificationOwnershipRateLimiter,
 } from "../middleware/rateLimit.js";
+import { prisma } from "../services/db.js";
+
+// Simple in-memory report cache for generated verification reports
+const reportStore = new Map<string, VerificationReport>();
 import { createChallenge, consumeChallenge } from "../services/challengeStore.js";
 import { verifyEvmSignature } from "../services/evm.js";
 import { verifySolanaSignature } from "../services/solana.js";
@@ -134,10 +138,9 @@ verificationRouter.post("/check", validateVerificationBody, async (req, res) => 
  */
 verificationRouter.get("/report/:reportId", async (req, res) => {
   try {
-    const { reportId } = req.params;
-    const record = await prisma.verificationResult.findUnique({
-      where: { id: reportId },
-    });
+    const rawReportId = req.params.reportId;
+    const reportId = Array.isArray(rawReportId) ? rawReportId[0] : rawReportId;
+    const record = await prisma.verificationResult.findUnique({ where: { id: reportId } });
 
     if (!record) {
       return res.status(404).json({
@@ -146,10 +149,11 @@ verificationRouter.get("/report/:reportId", async (req, res) => {
       });
     }
 
+    const generated = (record as any).generatedAt ?? (record as any).analyzedAt ?? new Date();
     const report: VerificationReport = {
       reportId: record.id,
-      generatedAt: record.generatedAt.toISOString(),
-      analysis: record.analysis as any,
+      generatedAt: new Date(generated).toISOString(),
+      analysis: (record as any).analysis ?? {},
       reportHash: record.reportHash,
     };
 

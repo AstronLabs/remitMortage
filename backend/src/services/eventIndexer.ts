@@ -39,7 +39,7 @@ const defaultSleep = (ms: number): Promise<void> =>
 
 export class SorobanEventIndexer {
   private fetcher: EventFetcher | null;
-  private readonly logger: EventIndexerOptions["logger"];
+  private readonly logger: { info: (msg: string) => void; warn: (msg: string) => void; error: (msg: string) => void };
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly pollIntervalMs: number;
   private readonly baseBackoffMs: number;

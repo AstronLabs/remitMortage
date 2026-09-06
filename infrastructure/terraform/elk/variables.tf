@@ -81,3 +81,21 @@ variable "log_retention_days" {
   type        = number
   default     = 30
 }
+
+variable "log_cold_storage_days" {
+  description = "Days before logs transition to cold storage (Glacier)"
+  type        = number
+  default     = 30
+}
+
+variable "log_deep_archive_days" {
+  description = "Days before logs transition to deep archive"
+  type        = number
+  default     = 90
+}
+
+variable "log_retention_years" {
+  description = "Total log retention period in years (for compliance)"
+  type        = number
+  default     = 7
+}

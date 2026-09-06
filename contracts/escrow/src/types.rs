@@ -1,4 +1,12 @@
-use soroban_sdk::{contracttype, Address, BytesN, Symbol};
+use soroban_sdk::{contracttype, Address, BytesN, Symbol, Vec};
+
+/// Admin-controlled signer set used for death/incapacity attestations.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BeneficiaryAttestorConfig {
+    pub signers: Vec<Address>,
+    pub threshold: u32,
+}
 
 /// Configuration set during contract initialization.
 #[contracttype]
@@ -44,6 +52,10 @@ pub struct EscrowConfig {
     pub persistent_lifetime_threshold: u32,
     /// Optional lending protocol vault address for yield routing.
     pub yield_vault: Option<Address>,
+    /// When true, only whitelisted addresses may deposit. Toggleable by admin
+    /// for regulated or pilot deployments. `false` — the deployment default —
+    /// preserves existing permissionless behaviour.
+    pub permissioned_mode: bool,
 }
 
 /// Tracks an individual borrower's escrow balance and status per goal.
@@ -116,4 +128,8 @@ pub enum DataKey {
     LendingPool,
     /// Reentrancy guard flag.
     ReentrancyGuard,
+    /// Whitelist flag for a permissioned-mode address. Present and `true` means
+    /// the address is allowed to interact with the contract when permissioned
+    /// mode is enabled.
+    Whitelist(Address),
 }

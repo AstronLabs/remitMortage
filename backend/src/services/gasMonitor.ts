@@ -1,5 +1,5 @@
-import { logger } from '../utils/logger';
-import { config } from '../config';
+import logger from '../utils/logger';
+import { loadConfig } from '../config';
 
 interface GasFeeThreshold {
   network: 'stellar' | 'evm' | 'solana';
@@ -23,22 +23,11 @@ class GasMonitorService {
 
   constructor() {
     this.circuitBreakers = new Map();
+    const config = loadConfig();
     this.thresholds = [
-      {
-        network: 'stellar',
-        maxBaseFee: config.maxStellarBaseFee || 100000, // 0.01 XLM in stroops
-        warningThreshold: 80,
-      },
-      {
-        network: 'evm',
-        maxBaseFee: config.maxEvmBaseFee || 100000000000, // 100 gwei
-        warningThreshold: 80,
-      },
-      {
-        network: 'solana',
-        maxBaseFee: config.maxSolanaBaseFee || 10000, // 0.00001 SOL in lamports
-        warningThreshold: 80,
-      },
+      { network: 'stellar', maxBaseFee: config.maxStellarBaseFee || 100000, warningThreshold: 80 },
+      { network: 'evm', maxBaseFee: config.maxEvmBaseFee || 100000000000, warningThreshold: 80 },
+      { network: 'solana', maxBaseFee: config.maxSolanaBaseFee || 10000, warningThreshold: 80 },
     ];
 
     // Initialize circuit breakers

@@ -1,0 +1,151 @@
+# Prometheus alerting rules for synthetic uptime monitoring of public API
+# endpoints. Probes are executed by the Prometheus Blackbox Exporter from
+# multiple regions to detect outages before users report them.
+#
+# Load alongside existing rule files, e.g.:
+#
+#   # prometheus.yml
+#   rule_files:
+#     - /etc/prometheus/rules/synthetic-monitoring.yml
+#
+# Or, under the Prometheus Operator, wrap `groups` below in a PrometheusRule
+# custom resource.
+#
+# Thresholds are tuned for a mortgage protocol where even brief downtime
+# can block time-sensitive loan submissions and escrow deposits.
+
+groups:
+  - name: remitmortgage-synthetic-uptime
+    interval: 30s
+    rules:
+      # ── Health Endpoint ────────────────────────────────────────────────
+      # The /api/health endpoint is the primary liveness signal. Three
+      # consecutive failures from any single region indicates a real outage,
+      # not a transient blip.
+      - alert: SyntheticHealthEndpointDown
+        expr: |
+          probe_success{job="synthetic-monitor", endpoint="/api/health"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: ops
+          component: api
+        annotations:
+          summary: >-
+            Health endpoint DOWN from region {{ $labels.region }}.
+          description: >-
+            Synthetic probe to {{ $labels.instance }}/api/health has failed
+            for 3 consecutive checks (1 minute). Region: {{ $labels.region }}.
+            Begin triage immediately — check backend logs, database
+            connectivity, and Stellar Horizon availability.
+          runbook_url: https://github.com/AstronLabs/remitMortage/blob/main/docs/DEPLOYMENT.md
+
+      # ── Latency Spike on Health Endpoint ──────────────────────────────
+      # A healthy health endpoint should respond in < 500ms. If the p95
+      # latency exceeds 2 seconds for 5 minutes, the service is degraded.
+      - alert: SyntheticHealthEndpointSlow
+        expr: |
+          probe_duration_seconds{job="synthetic-monitor", endpoint="/api/health"} > 2
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+          component: api
+        annotations:
+          summary: >-
+            Health endpoint responding slowly from region {{ $labels.region }}.
+          description: >-
+            Probe latency to {{ $labels.instance }}/api/health is
+            {{ $value | humanizeDuration }} (threshold: 2s) from
+            region {{ $labels.region }} for 5 minutes. Check for database
+            pool saturation or upstream dependency slowdowns.
+
+      # ── Auth Endpoint Down ────────────────────────────────────────────
+      # The auth endpoint must be available for wallet-based login. A
+      # failure here blocks all authenticated operations.
+      - alert: SyntheticAuthEndpointDown
+        expr: |
+          probe_success{job="synthetic-monitor", endpoint="/api/auth"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: ops
+          component: api
+        annotations:
+          summary: >-
+            Auth endpoint DOWN from region {{ $labels.region }}.
+          description: >-
+            Synthetic probe to {{ $labels.instance }}/api/auth has failed
+            for 3 consecutive checks. Region: {{ $labels.region }}.
+            Users cannot authenticate — check auth middleware, JWT
+            signing keys, and session store connectivity.
+
+      # ── Loan Submission Endpoint Down ─────────────────────────────────
+      # The loan apply endpoint is the most revenue-critical public API.
+      # Any outage here directly impacts borrower conversions.
+      - alert: SyntheticLoanEndpointDown
+        expr: |
+          probe_success{job="synthetic-monitor", endpoint="/api/loan/pending"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: ops
+          component: api
+        annotations:
+          summary: >-
+            Loan endpoint DOWN from region {{ $labels.region }}.
+          description: >-
+            Synthetic probe to {{ $labels.instance }}/api/loan/pending has
+            failed for 3 consecutive checks. Region: {{ $labels.region }}.
+            Loan submissions are blocked — check backend deployment,
+            Prisma connection pool, and Redis availability.
+
+      # ── Cross-Region Consensus Failure ────────────────────────────────
+      # If probes from ALL regions fail simultaneously, this is a global
+      # outage requiring immediate escalation.
+      - alert: SyntheticGlobalOutage
+        expr: |
+          count by (instance, endpoint) (
+            probe_success{job="synthetic-monitor"} == 0
+          ) == count by (instance, endpoint) (
+            probe_success{job="synthetic-monitor"}
+          )
+        for: 2m
+        labels:
+          severity: page
+          team: ops
+          component: api
+        annotations:
+          summary: >-
+            GLOBAL OUTAGE detected on {{ $labels.endpoint }}.
+          description: >-
+            All synthetic monitoring regions are failing for
+            {{ $labels.endpoint }} on {{ $labels.instance }}. This is a
+            confirmed global outage. Escalate immediately — check DNS,
+            CDN, load balancer, and backend deployment status.
+          runbook_url: https://github.com/AstronLabs/remitMortage/blob/main/docs/DEPLOYMENT.md
+
+      # ── Probe Failure Rate Elevated ───────────────────────────────────
+      # More than 10% of probes failing across any endpoint over a 15-minute
+      # window suggests an intermittent issue that may worsen.
+      - alert: SyntheticElevatedFailureRate
+        expr: |
+          (
+            sum by (instance, endpoint) (increase(probe_success{job="synthetic-monitor"}[15m])) == 0
+          )
+          /
+          (
+            sum by (instance, endpoint) (increase(probe_failed_scrapes_total{job="synthetic-monitor"}[15m]))
+          ) > 0.1
+        for: 0m
+        labels:
+          severity: warning
+          team: ops
+          component: api
+        annotations:
+          summary: >-
+            Elevated probe failure rate on {{ $labels.endpoint }}.
+          description: >-
+            More than 10% of synthetic probes to {{ $labels.endpoint }} on
+            {{ $labels.instance }} have failed in the last 15 minutes.
+            Monitor for escalation to a full outage.

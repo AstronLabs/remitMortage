@@ -13,6 +13,7 @@ import {
   shortenAddress,
   STELLARCHAIN_TX_BASE,
 } from "../../lib/transaction-status";
+import { track } from "../../lib/analytics";
 
 const Navbar = loadDynamic(() => import("../../components/Navbar"), { ssr: false });
 
@@ -364,6 +365,7 @@ function RepayInner() {
 
       setPayAmount("");
       setPaySuccess(true);
+      track("loan_repayment_completed");
       setTimeout(() => setPaySuccess(false), 5000);
     } catch (err: any) {
       setPayError(err?.message || "Repayment transaction failed.");

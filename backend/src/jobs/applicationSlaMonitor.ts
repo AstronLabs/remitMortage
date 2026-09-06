@@ -23,7 +23,6 @@ export async function runApplicationSlaMonitorJob(): Promise<{ scannedCount: num
       status: {
         in: pendingStatuses as any,
       },
-      deletedAt: null,
     },
     include: {
       applicant: true,

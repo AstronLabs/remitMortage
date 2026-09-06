@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useForm, useWatch, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { getOnboardingStore, useOnboardingState } from "@/hooks/useOnboardingState";
@@ -10,11 +10,18 @@ import { onboardingSchema, STEP_FIELDS, type OnboardingFormValues } from "@/lib/
 import ProgressStepper from "./ProgressStepper";
 import { toast } from "react-hot-toast";
 import { useWallet } from "@/context/WalletContext";
+import {
+  attributeReferralCode,
+  persistReferralCode,
+  readPersistedReferralCode,
+  REFERRAL_QUERY_PARAM,
+} from "@/lib/referralApi";
 
 const STEPS = ["Connect Wallet", "Verify History", "Set Goal", "First Deposit"];
 
 export default function OnboardingWizard() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const store = getOnboardingStore();
   const { publicKey, connect } = useWallet();
 
@@ -74,6 +81,22 @@ export default function OnboardingWizard() {
 
   const HORIZON_URL = process.env.NEXT_PUBLIC_HORIZON_URL!;
   const USDC_TOKEN_ID = process.env.NEXT_PUBLIC_USDC_TOKEN_ID!;
+
+  useEffect(() => {
+    const refCode = searchParams.get(REFERRAL_QUERY_PARAM);
+    if (refCode) {
+      persistReferralCode(refCode);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const referralCode = readPersistedReferralCode();
+    if (!referralCode || !publicKey) return;
+
+    attributeReferralCode(referralCode, publicKey).catch(() => {
+      // Attribution is best-effort during onboarding.
+    });
+  }, [publicKey]);
 
   useEffect(() => {
     if (step === 1 && publicKey) {
