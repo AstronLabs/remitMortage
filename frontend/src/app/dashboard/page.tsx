@@ -29,11 +29,13 @@ import {
 } from "@/lib/statementExport";
 
 import MaturityAlertOverlay from "../../components/MaturityAlertOverlay";
+import ReferralStatsCard from "../../components/dashboard/ReferralStatsCard";
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { useWidgetStore, WidgetId } from '../stores/useWidgetStore';
 import { SortableWidget } from '../../components/dashboard/SortableWidget';
 import { WidgetSettingsModal } from '../../components/dashboard/WidgetSettingsModal';
+import { track } from "../../lib/analytics";
 
 
 const Navbar = loadDynamic(() => import("../../components/Navbar"), { ssr: false });
@@ -122,6 +124,10 @@ export default function DashboardPage() {
   const [milestones, setMilestones] = useState<MilestoneNode[]>([]);
   const [recoveryPlan, setRecoveryPlan] = useState<ReturnType<typeof generateRecoveryPlan> | null>(null);
   const [showRecoveryTimeline, setShowRecoveryTimeline] = useState(false);
+
+  useEffect(() => {
+    if (isConnected && publicKey) track("borrower_dashboard_viewed");
+  }, [isConnected, publicKey]);
 
   const { order, visibility, setOrder } = useWidgetStore();
   const sensors = useSensors(
@@ -512,6 +518,8 @@ export default function DashboardPage() {
               onOpenDeposit={() => setShowDeposit(true)}
               onOpenRecovery={() => setShowRecoveryTimeline(true)}
             />
+
+            {publicKey && <ReferralStatsCard ownerAddress={publicKey} />}
 
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
               <SortableContext items={order} strategy={verticalListSortingStrategy}>

@@ -14,7 +14,9 @@ jest.mock("../services/db.js", () => ({
       findMany: jest.fn(),
       update: jest.fn(),
     },
+    getNotificationPreference: jest.fn(),
   },
+  getNotificationPreference: jest.fn(),
 }));
 
 describe("Notification Services and Dispatcher Tests", () => {

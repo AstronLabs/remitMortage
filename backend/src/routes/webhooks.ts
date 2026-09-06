@@ -204,7 +204,8 @@ webhooksRouter.get(
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const sub = await getSubscription(req.params.id);
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const sub = await getSubscription(id);
       if (!sub) {
         res.status(404).json({ error: "not_found", message: "Subscription not found" });
         return;
@@ -267,16 +268,14 @@ webhooksRouter.patch(
     }
 
     try {
-      const existing = await getSubscription(req.params.id);
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const existing = await getSubscription(id);
       if (!existing) {
         res.status(404).json({ error: "not_found", message: "Subscription not found" });
         return;
       }
 
-      const updated = await updateSubscriptionStatus(
-        req.params.id,
-        status as "active" | "paused" | "revoked"
-      );
+      const updated = await updateSubscriptionStatus(id, status as "active" | "paused" | "revoked");
       res.json({ subscription: updated });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to update status";
@@ -319,13 +318,14 @@ webhooksRouter.post(
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const existing = await getSubscription(req.params.id);
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const existing = await getSubscription(id);
       if (!existing) {
         res.status(404).json({ error: "not_found", message: "Subscription not found" });
         return;
       }
 
-      const { plaintextSecret } = await rotateSecret(req.params.id);
+      const { plaintextSecret } = await rotateSecret(id);
       res.json({
         secret: plaintextSecret,
         _warning:
@@ -376,7 +376,8 @@ webhooksRouter.get(
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const existing = await getSubscription(req.params.id);
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const existing = await getSubscription(id);
       if (!existing) {
         res.status(404).json({ error: "not_found", message: "Subscription not found" });
         return;
@@ -386,7 +387,8 @@ webhooksRouter.get(
       const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
       const skip = (page - 1) * limit;
 
-      const where: Record<string, unknown> = { subscriptionId: req.params.id };
+      const subscriptionId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const where: Record<string, unknown> = { subscriptionId };
       if (req.query.success !== undefined) {
         where.success = req.query.success === "true";
       }
@@ -464,7 +466,9 @@ webhooksRouter.post(
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const result = await replayDelivery(req.params.deliveryId);
+      const rawDeliveryId = req.params.deliveryId;
+      const deliveryId = Array.isArray(rawDeliveryId) ? rawDeliveryId[0] : rawDeliveryId;
+      const result = await replayDelivery(deliveryId);
       res.json({ result });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Replay failed";

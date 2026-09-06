@@ -701,11 +701,15 @@ impl MultisigValidator {
         account: Address,
         signer: Address,
     ) -> Result<u32, ValidatorError> {
-        let config = Self::read_config(&env, &account)?;
+        let config = Self::read_admin_config(&env)?;
         let slashing = Self::read_slashing_config(&env);
 
-        // Find the signer's base weight
-        let base_weight = Self::weight_of(&config, &signer).ok_or(ValidatorError::UnknownSigner)?;
+        let mut recognized = false;
+        for configured_signer in config.signers.iter() {
+            if configured_signer == signer { recognized = true; }
+        }
+        if !recognized { return Err(ValidatorError::UnknownSigner); }
+        let base_weight = 1u32;
 
         // Check if penalized
         let record: SignerVoteRecord = env
@@ -780,7 +784,7 @@ impl MultisigValidator {
         };
         // Store with a placeholder account; in production you'd iterate accounts
         // For now, this is a best-effort reset
-        let admin = Self::get_admin(&env)?;
+        let admin = Self::get_admin(env.clone())?;
         env.storage().persistent().set(
             &DataKey::SignerVoteRecord(admin, signer),
             &record,

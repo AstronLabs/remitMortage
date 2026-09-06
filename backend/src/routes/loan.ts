@@ -13,6 +13,10 @@ import {
   discardDraftApplication,
   escrowTargetMetForAmount,
 } from "../services/loanStore.js";
+import {
+  verifyStellarGuarantorSignature,
+  buildGuarantorCommitment,
+} from "../services/guarantor.js";
 import { queueNotification } from "../services/notification.js";
 import { hasExpiredKycDocuments } from "../jobs/kycExpiryReminder.js";
 import { prisma } from "../services/db.js";
@@ -31,15 +35,23 @@ loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"
   try {
     const { borrowerAddress, amount, fullName, address, idDocumentNumber, taxId } = req.body ?? {};
 
-    if (!borrowerAddress) {
-      return res.status(400).json({ error: "missing_field", field: "borrowerAddress", message: "borrowerAddress is required" });
-    }
+      if (!borrowerAddress) {
+        return res.status(400).json({
+          error: "missing_field",
+          field: "borrowerAddress",
+          message: "borrowerAddress is required",
+        });
+      }
 
-    try {
-      StrKey.decodeEd25519PublicKey(borrowerAddress);
-    } catch (err) {
-      return res.status(400).json({ error: "invalid_address", field: "borrowerAddress", message: "Invalid Stellar G-address" });
-    }
+      try {
+        StrKey.decodeEd25519PublicKey(borrowerAddress);
+      } catch {
+        return res.status(400).json({
+          error: "invalid_address",
+          field: "borrowerAddress",
+          message: "Invalid Stellar G-address",
+        });
+      }
 
     // Block loan submissions when any KYC document is expired
     const applicant = await prisma.applicant.findFirst({ where: { stellarAddress: borrowerAddress, deletedAt: null } });
@@ -88,6 +100,30 @@ loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"
     if (dupStatus === "MANUAL_REVIEW") {
       await updateApplication(app.id, { status: "MANUAL_REVIEW" });
       app.status = "MANUAL_REVIEW";
+      return res.status(201).json({ ...app, duplicateCheck: dupDetails });
+    }
+
+    const applicantRecord = await prisma.applicant.findFirst({
+      where: { stellarAddress: borrowerAddress, deletedAt: null },
+    });
+    if (applicantRecord) {
+      const notifyEmail = req.body?.email || `${borrowerAddress}@example.com`;
+      const { autoRejected, evaluation } = await applyAutoRejectionIfNeeded(
+        app.id,
+        applicantRecord.id,
+        Number(amount),
+        notifyEmail
+      );
+
+      if (autoRejected) {
+        const rejected = await getApplication(app.id);
+        return res.status(422).json({
+          error: "auto_rejected",
+          message: "Application failed baseline eligibility rules.",
+          application: rejected,
+          autoRejection: evaluation,
+        });
+      }
     }
 
     return res.status(201).json({ ...app, duplicateCheck: dupDetails });
@@ -95,26 +131,33 @@ loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"
     logger.error("Loan apply error", { error });
     return res.status(500).json({ error: "failed_to_create_application" });
   }
-});
+);
 
+// ---------------------------------------------------------------------------
 // GET /api/loan/borrower/:address
+// ---------------------------------------------------------------------------
 loanRouter.get("/borrower/:address", async (req, res) => {
   const { address } = req.params ?? {};
   try {
     StrKey.decodeEd25519PublicKey(address);
-  } catch (err) {
-    return res.status(400).json({ error: "invalid_address", field: "address", message: "Invalid Stellar G-address" });
+  } catch {
+    return res
+      .status(400)
+      .json({ error: "invalid_address", field: "address", message: "Invalid Stellar G-address" });
   }
   const apps = await getApplicationsByBorrower(address);
   return res.json(apps);
 });
 
+// ---------------------------------------------------------------------------
 // GET /api/loan/pending
+// ---------------------------------------------------------------------------
 loanRouter.get("/pending", async (req, res) => {
   const pending = await getPendingApplications();
   return res.json(pending);
 });
 
+// ---------------------------------------------------------------------------
 // POST /api/loan/:id/approve
 loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
   const { id } = req.params;
@@ -122,7 +165,20 @@ loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
   if (!app) return res.status(404).json({ error: "not_found" });
 
   if (app.status !== "Pending") {
-    return res.status(400).json({ error: "invalid_state", message: "Application must be Pending to approve" });
+    return res.status(400).json({
+      error: "invalid_state",
+      message: "Application must be Pending to approve",
+    });
+  }
+
+  // Block approval when a guarantor address is present but not accepted
+  if (app.guarantorAddress && app.guarantorStatus !== "Accepted") {
+    return res.status(400).json({
+      error: "guarantor_not_accepted",
+      message:
+        "This loan has a guarantor whose authorization is missing or invalid. " +
+        "Guarantor must provide a valid signature before the loan can be approved.",
+    });
   }
 
   try {
@@ -134,7 +190,8 @@ loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
     const disbursing = updateApplication(id, { status: "Disbursing" });
 
     const email = req.body.email || `${app.borrowerAddress}@example.com`;
-    const webhookUrl = req.body.webhookUrl || "https://partner-platform.com/webhooks";
+    const webhookUrl =
+      req.body.webhookUrl || "https://partner-platform.com/webhooks";
 
     if (approved) {
       await queueNotification(
@@ -143,7 +200,7 @@ loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
         JSON.stringify({
           template: "loan_status_update",
           loanId: id,
-          status: "Approved"
+          status: "Approved",
         })
       );
 
@@ -155,7 +212,7 @@ loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
           loanId: id,
           borrowerAddress: approved.borrowerAddress,
           status: "Approved",
-          timestamp: Date.now()
+          timestamp: Date.now(),
         })
       );
     }
@@ -167,7 +224,9 @@ loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
 // POST /api/loan/:id/reject
+// ---------------------------------------------------------------------------
 loanRouter.post("/:id/reject", async (req, res) => {
   const { id } = req.params;
   const { reason } = req.body ?? {};
@@ -175,10 +234,16 @@ loanRouter.post("/:id/reject", async (req, res) => {
   if (!app) return res.status(404).json({ error: "not_found" });
 
   if (app.status !== "Pending") {
-    return res.status(400).json({ error: "invalid_state", message: "Application must be Pending to reject" });
+    return res.status(400).json({
+      error: "invalid_state",
+      message: "Application must be Pending to reject",
+    });
   }
 
-  const updated = await updateApplication(id, { status: "Rejected", reason: reason ?? "No reason provided" });
+  const updated = await updateApplication(id, {
+    status: "Rejected",
+    reason: reason ?? "No reason provided",
+  });
   return res.json(updated);
 });
 
@@ -241,8 +306,9 @@ loanRouter.get("/:id", async (req, res) => {
   return res.json(app);
 });
 
+// ---------------------------------------------------------------------------
 // POST /api/loan/:id/trigger-payment-due
-// Simulates a payment due date checker trigger, queuing email and webhook alerts.
+// ---------------------------------------------------------------------------
 loanRouter.post("/:id/trigger-payment-due", async (req, res) => {
   const { id } = req.params;
   const { email, webhookUrl, amount, dueDate } = req.body ?? {};
@@ -251,9 +317,12 @@ loanRouter.post("/:id/trigger-payment-due", async (req, res) => {
   if (!app) return res.status(404).json({ error: "not_found" });
 
   const targetEmail = email || `${app.borrowerAddress}@example.com`;
-  const targetWebhookUrl = webhookUrl || "https://partner-platform.com/webhooks";
+  const targetWebhookUrl =
+    webhookUrl || "https://partner-platform.com/webhooks";
   const targetAmount = amount || app.amount;
-  const targetDueDate = dueDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const targetDueDate =
+    dueDate ||
+    new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
   try {
     const emailNotif = await queueNotification(
@@ -262,7 +331,7 @@ loanRouter.post("/:id/trigger-payment-due", async (req, res) => {
       JSON.stringify({
         template: "repayment_reminder",
         amount: targetAmount,
-        dueDate: targetDueDate
+        dueDate: targetDueDate,
       })
     );
 
@@ -275,18 +344,20 @@ loanRouter.post("/:id/trigger-payment-due", async (req, res) => {
         borrowerAddress: app.borrowerAddress,
         amount: targetAmount,
         dueDate: targetDueDate,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       })
     );
 
     return res.json({
       message: "Payment due notifications triggered and queued.",
       emailNotificationId: emailNotif.id,
-      webhookNotificationId: webhookNotif.id
+      webhookNotificationId: webhookNotif.id,
     });
   } catch (error: any) {
     logger.error("Trigger payment due error", { error });
-    return res.status(500).json({ error: "failed_to_trigger_notifications", message: error.message });
+    return res
+      .status(500)
+      .json({ error: "failed_to_trigger_notifications", message: error.message });
   }
 });
 
@@ -345,6 +416,144 @@ loanRouter.post("/:id/review", async (req, res) => {
   } catch (error: any) {
     logger.error("Manual review decision error", { error });
     return res.status(500).json({ error: "failed_to_process_review", message: error.message });
+  }
+});
+
+// ── Collaborative Commenting ───────────────────────────────────────────────
+
+function extractMentions(content: string): string[] {
+  const mentionRegex = /@([A-Za-z0-9_.-]+)/g;
+  const mentions: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = mentionRegex.exec(content)) !== null) {
+    mentions.push(match[1]);
+  }
+  return [...new Set(mentions)];
+}
+
+/**
+ * GET /api/loan/:id/comments
+ * Returns threaded comments scoped to a loan application, ordered by createdAt.
+ * Also serves as the poll endpoint for real-time display.
+ */
+loanRouter.get("/:id/comments", async (req, res) => {
+  const { id } = req.params;
+  const app = await getApplication(id);
+  if (!app) return res.status(404).json({ error: "not_found" });
+
+  const comments = await prisma.loanComment.findMany({
+    where: { loanApplicationId: id },
+    orderBy: { createdAt: "asc" },
+  });
+
+  // Build threaded tree: parentId -> replies
+  const map = new Map<string, any>();
+  const roots: any[] = [];
+  for (const c of comments) {
+    map.set(c.id, { ...c, replies: [] });
+  }
+  for (const c of comments) {
+    const node = map.get(c.id);
+    if (c.parentId && map.has(c.parentId)) {
+      map.get(c.parentId).replies.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  return res.json({ loanApplicationId: id, comments: roots, total: comments.length });
+});
+
+/**
+ * POST /api/loan/:id/comments
+ * Adds a threaded comment, supports @-mentions triggering notifications,
+ * and persists to audit trail.
+ */
+loanRouter.post("/:id/comments", async (req, res) => {
+  const { id } = req.params;
+  const { authorAddress, author, content, parentId } = req.body ?? {};
+  const authorAddr = authorAddress || author;
+
+  if (!authorAddr || typeof authorAddr !== "string") {
+    return res.status(400).json({ error: "invalid_request", message: "authorAddress is required" });
+  }
+  if (!content || typeof content !== "string" || content.trim().length === 0) {
+    return res.status(400).json({ error: "invalid_request", message: "content is required" });
+  }
+  if (content.length > 5000) {
+    return res.status(400).json({ error: "invalid_request", message: "content too long (max 5000)" });
+  }
+
+  const app = await getApplication(id);
+  if (!app) return res.status(404).json({ error: "not_found" });
+
+  if (parentId) {
+    const parent = await prisma.loanComment.findUnique({ where: { id: parentId } });
+    if (!parent || parent.loanApplicationId !== id) {
+      return res.status(400).json({ error: "invalid_request", message: "parent comment not found for this application" });
+    }
+  }
+
+  const mentions = extractMentions(content);
+
+  try {
+    const comment = await prisma.loanComment.create({
+      data: {
+        loanApplicationId: id,
+        authorAddress: authorAddr,
+        content: content.trim(),
+        parentId: parentId || null,
+        mentions,
+      },
+    });
+
+    // Persist as part of audit trail
+    try {
+      await prisma.auditLog.create({
+        data: {
+          action: "loan_comment",
+          actorAddress: authorAddr,
+          metadata: {
+            loanApplicationId: id,
+            commentId: comment.id,
+            parentId: parentId || null,
+            mentions,
+            contentPreview: content.slice(0, 200),
+          },
+        },
+      });
+    } catch (auditErr) {
+      logger.warn("Failed to write loan_comment audit log", { err: auditErr });
+    }
+
+    // Notify mentioned reviewers - creates InAppNotification linking directly to thread
+    for (const mentioned of mentions) {
+      try {
+        // mentions may be wallet address or username; store as walletAddress if matches G... else treat as identifier
+        await prisma.inAppNotification.create({
+          data: {
+            walletAddress: mentioned,
+            title: `You were mentioned in loan ${id}`,
+            message: `${authorAddr} mentioned you: "${content.slice(0, 120)}"`,
+            variant: "info",
+            metadata: {
+              loanApplicationId: id,
+              commentId: comment.id,
+              parentId: parentId || null,
+              anchor: `comment-${comment.id}`,
+              href: `/admin?loan=${id}#comment-${comment.id}`,
+            },
+          },
+        });
+      } catch (notifErr) {
+        logger.warn("Failed to create mention notification", { mentioned, err: notifErr });
+      }
+    }
+
+    return res.status(201).json(comment);
+  } catch (err: any) {
+    logger.error("Create comment error", { err });
+    return res.status(500).json({ error: "failed_to_create_comment" });
   }
 });
 

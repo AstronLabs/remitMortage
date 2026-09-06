@@ -323,6 +323,131 @@ resource "aws_iam_role_policy_attachment" "logstash_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# S3 Bucket for Log Archival (Cold Storage)
+resource "aws_s3_bucket" "log_archive" {
+  bucket = "${var.project_name}-log-archive-${var.environment}-${data.aws_caller_identity.current.account_id}"
+
+  tags = {
+    Name        = "${var.project_name}-log-archive"
+    Environment = var.environment
+    Purpose     = "Cold storage for archived logs"
+  }
+}
+
+# Enable versioning for audit and compliance
+resource "aws_s3_bucket_versioning" "log_archive_versioning" {
+  bucket = aws_s3_bucket.log_archive.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+# Enable encryption for archived logs
+resource "aws_s3_bucket_server_side_encryption_configuration" "log_archive_encryption" {
+  bucket = aws_s3_bucket.log_archive.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# Lifecycle policy to transition to Glacier after 30 days
+resource "aws_s3_bucket_lifecycle_configuration" "log_archive_lifecycle" {
+  bucket = aws_s3_bucket.log_archive.id
+
+  rule {
+    id     = "archive-to-glacier"
+    status = "Enabled"
+
+    # Transition to Glacier after configured days for cost optimization
+    transition {
+      days          = var.log_cold_storage_days
+      storage_class = "GLACIER"
+    }
+
+    # Deep Archive after configured days for long-term compliance retention
+    transition {
+      days          = var.log_deep_archive_days
+      storage_class = "DEEP_ARCHIVE"
+    }
+
+    # Expire objects after configured years (compliance requirement)
+    expiration {
+      days = var.log_retention_years * 365
+    }
+  }
+}
+
+# Block public access to archive bucket
+resource "aws_s3_bucket_public_access_block" "log_archive_pab" {
+  bucket = aws_s3_bucket.log_archive.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# IAM role for Elasticsearch to write snapshots to S3
+resource "aws_iam_role" "elasticsearch_snapshot_role" {
+  name = "${var.project_name}-es-snapshot-role-${var.environment}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "es.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "${var.project_name}-es-snapshot-role"
+    Environment = var.environment
+  }
+}
+
+# IAM policy for Elasticsearch snapshot access to S3
+resource "aws_iam_role_policy" "elasticsearch_snapshot_policy" {
+  name   = "${var.project_name}-es-snapshot-policy"
+  role   = aws_iam_role.elasticsearch_snapshot_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:ListBucket",
+          "s3:GetBucketVersioning",
+          "s3:GetBucketLocation",
+          "s3:ListBucketVersions"
+        ]
+        Resource = aws_s3_bucket.log_archive.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:GetObjectVersion"
+        ]
+        Resource = "${aws_s3_bucket.log_archive.arn}/*"
+      }
+    ]
+  })
+}
+
+# Data source to get current AWS account ID
+data "aws_caller_identity" "current" {}
+
 output "elasticsearch_endpoint" {
   value       = aws_elasticsearch_domain.elk_cluster.endpoint
   description = "Elasticsearch cluster endpoint"
@@ -346,4 +471,19 @@ output "vpc_id" {
 output "private_subnet_ids" {
   value       = aws_subnet.elk_private_subnet[*].id
   description = "Private subnet IDs"
+}
+
+output "log_archive_bucket_name" {
+  value       = aws_s3_bucket.log_archive.id
+  description = "S3 bucket name for log archival"
+}
+
+output "log_archive_bucket_arn" {
+  value       = aws_s3_bucket.log_archive.arn
+  description = "S3 bucket ARN for log archival"
+}
+
+output "elasticsearch_snapshot_role_arn" {
+  value       = aws_iam_role.elasticsearch_snapshot_role.arn
+  description = "ARN of Elasticsearch snapshot IAM role"
 }

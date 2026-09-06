@@ -21,6 +21,42 @@ jest.mock("../config.js", () => ({
   }),
 }));
 
+// The updated kyc.ts imports kycOcrStore → db.ts → PrismaClient.
+// Mock db.ts so Prisma is never instantiated in these existing tests.
+jest.mock("../services/db.js", () => ({
+  prisma: {
+    kycOcrResult: {
+      create: jest.fn(),
+      findUnique: jest.fn(),
+      update: jest.fn(),
+    },
+  },
+}));
+
+// Stub the OCR store so the upload route still works end-to-end without a DB.
+// createOcrResult resolves to a minimal record; getOcrResult returns null
+// (no OCR record for documents in these tests — preserves existing behavior).
+jest.mock("../services/kycOcrStore.js", () => ({
+  createOcrResult: jest.fn().mockResolvedValue({
+    id: "ocr-stub",
+    documentId: "stub-doc",
+    applicantAddress: "",
+    extractedName: null,
+    nameConfirmed: false,
+    extractedIdNumber: null,
+    idNumberConfirmed: false,
+    extractedAddress: null,
+    addressConfirmed: false,
+    ocrFailed: false,
+    ocrError: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }),
+  getOcrResult: jest.fn().mockResolvedValue(null),
+  confirmOcrFields: jest.fn(),
+  getUnconfirmedFields: jest.fn().mockReturnValue([]),
+}));
+
 describe("kmsEncryption envelope encryption", () => {
   it("round-trips a buffer through encrypt/decrypt", () => {
     const plaintext = Buffer.from("passport-scan-bytes-not-really-a-pdf");

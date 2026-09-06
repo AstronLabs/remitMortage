@@ -11,8 +11,11 @@ const PushNotificationPanel = dynamic(
   () => import("../../components/PushNotificationPanel"),
   { ssr: false }
 );
+const ReferralInvitePanel = dynamic(() => import("../../components/ReferralInvitePanel"), {
+  ssr: false,
+});
 
-type SettingsTab = "profile" | "wallets" | "notifications" | "contractor";
+type SettingsTab = "profile" | "wallets" | "notifications" | "referrals" | "contractor";
 
 type NotificationKey =
   | "emailAlerts"
@@ -33,6 +36,7 @@ const tabs: { id: SettingsTab; label: string }[] = [
   { id: "profile", label: "Profile" },
   { id: "wallets", label: "Wallets" },
   { id: "notifications", label: "Notifications & Alerts" },
+  { id: "referrals", label: "Referrals" },
   { id: "contractor", label: "Developer/Contractor" },
 ];
 
@@ -583,6 +587,12 @@ export default function SettingsPage() {
                     <span>Active Notification Rules:</span>
                     <span className="font-bold text-white">{enabledNotificationCount} of 7 enabled</span>
                   </div>
+                </section>
+              )}
+
+              {activeTab === "referrals" && (
+                <section role="tabpanel" aria-label="Referral settings" className="space-y-6">
+                  <ReferralInvitePanel ownerAddress={stellarAddress} />
                 </section>
               )}
 

@@ -10,6 +10,7 @@ import { ClipboardList, Hammer, History } from "lucide-react";
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 import ActiveLoansMapView from "../../components/ActiveLoansMapView";
 import AuditLogViewer from "../../components/AuditLogViewer";
+import LoanCommentsPanel from "../../components/LoanCommentsPanel";
 
 // The admin wallet authorized to approve loans and milestones. Configured via
 // NEXT_PUBLIC_ADMIN_ADDRESS at build time.
@@ -142,23 +143,18 @@ function AdminDashboard() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      // Placeholder data. Swap for the Soroban query layer once wired:
-      //   pool.get_pending_loans(), milestone.get_pending(), pool overview.
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      setLoans([
-        {
-          id: "loan-1",
-          borrower: "GBORROWER1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-          principal: 70000,
-          verificationScore: 82,
-        },
-        {
-          id: "loan-2",
-          borrower: "GBORROWER2BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-          principal: 45000,
-          verificationScore: 67,
-        },
-      ]);
+      const pendingResponse = await fetch("/api/loan/pending");
+      if (pendingResponse.ok) {
+        const pending = await pendingResponse.json();
+        setLoans((Array.isArray(pending) ? pending : []).map((loan: any) => ({
+          id: loan.id,
+          borrower: loan.borrowerAddress,
+          principal: Number(loan.amount),
+          verificationScore: Number(loan.verificationScore ?? 0),
+        })));
+      } else {
+        setLoans([]);
+      }
       setMilestones([
         {
           id: "ms-1",
@@ -189,8 +185,14 @@ function AdminDashboard() {
     if (!pendingAction) return;
     setSubmitting(true);
     try {
-      // TODO: build and submit the matching Soroban transaction via Freighter.
-      await new Promise((resolve) => setTimeout(resolve, 900));
+      if (pendingAction.kind === "approve-loan") {
+        const response = await fetch(`/api/loan/${pendingAction.loan.id}/approve`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (!response.ok) throw new Error("Loan approval failed.");
+      }
 
       if (pendingAction.kind === "approve-loan") {
         toast.success("Loan approved.");
@@ -336,6 +338,8 @@ function PendingLoansTab({
   onApprove: (loan: PendingLoan) => void;
   onReject: (loan: PendingLoan) => void;
 }) {
+  const { publicKey } = useWallet();
+  const [expandedLoanId, setExpandedLoanId] = useState<string | null>(null);
   if (loading) return <EmptyRow text="Loading pending loans…" />;
   if (loans.length === 0) {
     return (
@@ -353,38 +357,50 @@ function PendingLoansTab({
       {loans.map((loan) => (
         <div
           key={loan.id}
-          className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 bg-[var(--bg-card)] rounded-lg border border-[var(--border-color)]"
+          className="p-4 bg-[var(--bg-card)] rounded-lg border border-[var(--border-color)]"
         >
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
-            <div>
-              <p className="text-xs text-[var(--text-muted)]">Borrower</p>
-              <p className="text-sm font-mono">{shortenAddress(loan.borrower)}</p>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+              <div>
+                <p className="text-xs text-[var(--text-muted)]">Borrower</p>
+                <p className="text-sm font-mono">{shortenAddress(loan.borrower)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-[var(--text-muted)]">Principal</p>
+                <p className="text-sm font-semibold">{formatUsdc(loan.principal)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-[var(--text-muted)]">Verification Score</p>
+                <p className="text-sm font-semibold">
+                  <ScoreBadge score={loan.verificationScore} />
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-xs text-[var(--text-muted)]">Principal</p>
-              <p className="text-sm font-semibold">{formatUsdc(loan.principal)}</p>
-            </div>
-            <div>
-              <p className="text-xs text-[var(--text-muted)]">Verification Score</p>
-              <p className="text-sm font-semibold">
-                <ScoreBadge score={loan.verificationScore} />
-              </p>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => setExpandedLoanId(expandedLoanId === loan.id ? null : loan.id)}
+                className="px-3 py-2 rounded-lg text-sm font-medium bg-sky-500/10 text-sky-400 border border-sky-500/30 hover:bg-sky-500/20 transition-colors"
+              >
+                {expandedLoanId === loan.id ? "Hide Discussion" : "Discuss"}
+              </button>
+              <button
+                data-testid={`admin-approve-${loan.id}`}
+                onClick={() => onApprove(loan)}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors"
+              >
+                Approve
+              </button>
+              <button
+                onClick={() => onReject(loan)}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors"
+              >
+                Reject
+              </button>
             </div>
           </div>
-          <div className="flex gap-2 shrink-0">
-            <button
-              onClick={() => onApprove(loan)}
-              className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors"
-            >
-              Approve
-            </button>
-            <button
-              onClick={() => onReject(loan)}
-              className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors"
-            >
-              Reject
-            </button>
-          </div>
+          {expandedLoanId === loan.id && publicKey && (
+            <LoanCommentsPanel loanApplicationId={loan.id} currentUserAddress={publicKey} />
+          )}
         </div>
       ))}
     </div>
@@ -517,6 +533,7 @@ function ConfirmationModal({
             Cancel
           </button>
           <button
+            data-testid="admin-confirm-approval"
             onClick={onConfirm}
             disabled={submitting}
             className="btn-primary flex-1 !py-2.5"

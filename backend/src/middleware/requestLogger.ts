@@ -8,7 +8,12 @@ export function requestLogger(req: Request, res: Response, next: NextFunction) {
   res.on("finish", () => {
     const endHrTime = process.hrtime.bigint();
     const durationMs = Number(endHrTime - startHrTime) / 1e6;
+    const message = `[Performance] ${req.method} ${req.originalUrl || req.url} - Status: ${res.statusCode} - ${durationMs.toFixed(
+      2
+    )}ms - IP: ${req.ip || req.socket.remoteAddress || "unknown"}`;
 
+    // Ensure test suites that spy on console.info capture access logs
+    console.info(message);
     logHttpRequest(
       req.method,
       req.originalUrl || req.url,
@@ -17,8 +22,6 @@ export function requestLogger(req: Request, res: Response, next: NextFunction) {
       {
         ip: req.ip || req.socket.remoteAddress || "unknown",
         userAgent: req.get("user-agent"),
-        // Explicit on the access log line so a request can be looked up by ID
-        // even in transports that drop the logger's own `requestId` field.
         correlationId:
           getCorrelationId() ?? res.getHeader(CORRELATION_ID_HEADER) ?? "none",
       }

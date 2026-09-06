@@ -2,7 +2,7 @@ import { Queue, QueueOptions, Job, JobsOptions } from "bullmq";
 import { getClusterClient, isClusterMode, getClusterStatus } from "./redisCluster.js";
 import logger from "../utils/logger.js";
 
-export type NotificationJobType = "EMAIL" | "WEBHOOK";
+export type NotificationJobType = "EMAIL" | "WEBHOOK" | "SMS";
 
 export interface NotificationJobData {
   notificationId: string;
@@ -38,6 +38,16 @@ export interface EmailJobData {
   content: string;
 }
 
+export interface AnalyticsJobData {
+  events: Array<{
+    id: string;
+    event: string;
+    userId: string;
+    properties: Record<string, unknown>;
+    timestamp: string;
+  }>;
+}
+
 const DEFAULT_JOB_OPTIONS: JobsOptions = {
   attempts: 5,
   backoff: {
@@ -67,6 +77,7 @@ class QueueService {
   public readonly notificationQueue: Queue<NotificationJobData>;
   public readonly webhookQueue: Queue<WebhookJobData>;
   public readonly emailQueue: Queue<EmailJobData>;
+  public readonly analyticsQueue: Queue<AnalyticsJobData>;
 
   private initialized = false;
 
@@ -81,6 +92,10 @@ class QueueService {
     );
     this.emailQueue = new Queue<EmailJobData>(
       "remitmortgage-emails",
+      buildQueueOptions()
+    );
+    this.analyticsQueue = new Queue<AnalyticsJobData>(
+      "remitmortgage-analytics",
       buildQueueOptions()
     );
   }
@@ -102,12 +117,23 @@ class QueueService {
       await this.notificationQueue.waitUntilReady();
       await this.webhookQueue.waitUntilReady();
       await this.emailQueue.waitUntilReady();
+      await this.analyticsQueue.waitUntilReady();
 
       this.initialized = true;
       logger.info("[queue-service] all queues ready");
     } catch (error) {
       logger.error("[queue-service] failed to initialize queues", { error });
       throw error;
+    }
+  }
+
+  async addAnalyticsJob(data: AnalyticsJobData, opts?: JobsOptions): Promise<Job<AnalyticsJobData> | undefined> {
+    if (!this.initialized) return undefined;
+    try {
+      return await this.analyticsQueue.add("persist-analytics", data, opts);
+    } catch (error) {
+      logger.error("[queue-service] failed to add analytics job", { error, count: data.events.length });
+      return undefined;
     }
   }
 
@@ -187,7 +213,7 @@ class QueueService {
   }
 
   async close(): Promise<void> {
-    const queues = [this.notificationQueue, this.webhookQueue, this.emailQueue];
+    const queues = [this.notificationQueue, this.webhookQueue, this.emailQueue, this.analyticsQueue];
     await Promise.allSettled(queues.map((q) => q.close()));
     this.initialized = false;
     logger.info("[queue-service] all queues closed");

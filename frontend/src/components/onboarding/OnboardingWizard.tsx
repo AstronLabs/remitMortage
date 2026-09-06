@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useForm, useWatch, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { getOnboardingStore, useOnboardingState } from "@/hooks/useOnboardingState";
@@ -10,11 +10,18 @@ import { onboardingSchema, STEP_FIELDS, type OnboardingFormValues } from "@/lib/
 import ProgressStepper from "./ProgressStepper";
 import { toast } from "react-hot-toast";
 import { useWallet } from "@/context/WalletContext";
+import {
+  attributeReferralCode,
+  persistReferralCode,
+  readPersistedReferralCode,
+  REFERRAL_QUERY_PARAM,
+} from "@/lib/referralApi";
 
 const STEPS = ["Connect Wallet", "Verify History", "Set Goal", "First Deposit"];
 
 export default function OnboardingWizard() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const store = getOnboardingStore();
   const { publicKey, connect } = useWallet();
 
@@ -74,6 +81,22 @@ export default function OnboardingWizard() {
 
   const HORIZON_URL = process.env.NEXT_PUBLIC_HORIZON_URL!;
   const USDC_TOKEN_ID = process.env.NEXT_PUBLIC_USDC_TOKEN_ID!;
+
+  useEffect(() => {
+    const refCode = searchParams.get(REFERRAL_QUERY_PARAM);
+    if (refCode) {
+      persistReferralCode(refCode);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    const referralCode = readPersistedReferralCode();
+    if (!referralCode || !publicKey) return;
+
+    attributeReferralCode(referralCode, publicKey).catch(() => {
+      // Attribution is best-effort during onboarding.
+    });
+  }, [publicKey]);
 
   useEffect(() => {
     if (step === 1 && publicKey) {
@@ -215,7 +238,7 @@ export default function OnboardingWizard() {
                 </div>
               </div>
             ) : (
-              <button onClick={handleConnect} className="btn-cta py-3.5 px-8" disabled={isLoading}>
+              <button data-testid="onboarding-connect-wallet" onClick={handleConnect} className="btn-cta py-3.5 px-8" disabled={isLoading}>
                 {isLoading ? "Connecting..." : "Connect Freighter Wallet"}
               </button>
             )}
@@ -236,6 +259,7 @@ export default function OnboardingWizard() {
               render={({ field }) => (
                 <div className="flex flex-col sm:flex-row gap-3">
                   <input
+                    data-testid="onboarding-recipient"
                     type="text"
                     placeholder="Recipient's G... address"
                     className="input-field flex-1 font-mono text-xs"
@@ -248,6 +272,7 @@ export default function OnboardingWizard() {
                     disabled={isLoading || isVerified}
                   />
                   <button
+                    data-testid="onboarding-verify"
                     onClick={handleVerify}
                     className="btn-cta py-2.5 px-5 !text-xs w-full sm:w-auto"
                     disabled={isLoading || !field.value || isVerified}
@@ -288,6 +313,7 @@ export default function OnboardingWizard() {
                   control={control}
                   render={({ field }) => (
                     <input
+                      data-testid="onboarding-savings-target"
                       type="number"
                       className="input-field w-full font-mono"
                       value={Number.isNaN(field.value) ? "" : field.value}
@@ -357,6 +383,7 @@ export default function OnboardingWizard() {
                 control={control}
                 render={({ field }) => (
                   <input
+                    data-testid="onboarding-first-deposit"
                     type="number"
                     className="input-field w-full font-mono"
                     value={Number.isNaN(field.value) ? "" : field.value}
@@ -374,6 +401,7 @@ export default function OnboardingWizard() {
               )}
             </div>
             <button
+              data-testid="onboarding-deposit"
               onClick={handleDeposit}
               className="btn-cta w-full justify-center py-3.5"
               disabled={isLoading}
@@ -456,6 +484,7 @@ export default function OnboardingWizard() {
         </button>
         {step < STEPS.length && (
           <button
+            data-testid="onboarding-next"
             onClick={handleNext}
             disabled={isLoading}
             className="btn-cta text-xs !py-2.5 !px-5"

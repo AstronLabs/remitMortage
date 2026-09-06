@@ -63,7 +63,8 @@ workspaceRouter.post("/", async (req: AuthenticatedRequest, res) => {
 
 workspaceRouter.post("/:workspaceId/invitations", requireWorkspaceAccess, async (req: AuthenticatedRequest, res) => {
   try {
-    const { workspaceId } = req.params;
+    const rawWorkspaceId = req.params.workspaceId;
+    const workspaceId = Array.isArray(rawWorkspaceId) ? rawWorkspaceId[0] : rawWorkspaceId;
     const { inviteeAddress, role } = req.body ?? {};
 
     if (!inviteeAddress || typeof inviteeAddress !== "string") {
@@ -108,7 +109,8 @@ workspaceRouter.post("/:workspaceId/invitations", requireWorkspaceAccess, async 
 
 workspaceRouter.get("/:workspaceId/dashboard", requireWorkspaceAccess, async (req: AuthenticatedRequest, res) => {
   try {
-    const { workspaceId } = req.params;
+    const rawWorkspaceId = req.params.workspaceId;
+    const workspaceId = Array.isArray(rawWorkspaceId) ? rawWorkspaceId[0] : rawWorkspaceId;
     const walletAddress = req.user?.walletAddress;
 
     if (!walletAddress) {
@@ -126,26 +128,14 @@ workspaceRouter.get("/:workspaceId/dashboard", requireWorkspaceAccess, async (re
       return res.status(403).json({ error: "forbidden", message: "You do not have access to this workspace" });
     }
 
-    const workspace = await prisma.workspace.findUnique({
-      where: { id: workspaceId },
-      include: {
-        members: true,
-        invitations: true,
-      },
-    });
+    const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, include: { members: true, invitations: true } });
 
     if (!workspace) {
       return res.status(404).json({ error: "workspace_not_found", message: "Workspace not found" });
     }
 
-    return res.json({
-      workspace,
-      accessRole: membership.role,
-      dashboard: {
-        memberCount: workspace.members.length,
-        pendingInvites: workspace.invitations.filter((invitation: any) => invitation.status === "PENDING").length,
-      },
-    });
+    const w = workspace as any;
+    return res.json({ workspace: w, accessRole: membership.role, dashboard: { memberCount: w.members.length, pendingInvites: w.invitations.filter((invitation: any) => invitation.status === "PENDING").length } });
   } catch (error) {
     return res.status(500).json({ error: "workspace_dashboard_failed", message: "Unable to load workspace dashboard" });
   }

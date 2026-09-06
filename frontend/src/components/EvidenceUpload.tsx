@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef } from "react";
+import { track } from "../lib/analytics";
 
 interface EvidenceUploadProps {
   milestoneId: string;
@@ -84,6 +85,7 @@ export default function EvidenceUpload({ milestoneId, onUploadSuccess }: Evidenc
       const data = await res.json();
       if (data.cid) {
         setCid(data.cid);
+        track("document_uploaded", { documentType: "milestone_evidence" });
         onUploadSuccess(data.cid, hashHex);
       } else {
         throw new Error("Invalid response from server");
