@@ -153,6 +153,48 @@ resource "aws_security_group" "redis" {
   }
 }
 
+# App Runner fetches secret values at startup. The application refresh job uses
+# the secret IDs to fetch the next version and swaps database pools gracefully.
+resource "aws_iam_role" "app_runner_instance" {
+  name = "remit-mortgage-app-runner-${var.environment}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "tasks.apprunner.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "app_runner_secrets" {
+  count = length(compact([var.database_secret_arn, var.sendgrid_secret_arn])) > 0 ? 1 : 0
+  role = aws_iam_role.app_runner_instance.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+      Resource = compact([var.database_secret_arn, var.sendgrid_secret_arn])
+    }]
+  })
+}
+
+resource "aws_secretsmanager_secret_rotation" "database" {
+  count               = var.secrets_rotation_lambda_arn != "" && var.database_secret_arn != "" ? 1 : 0
+  secret_id           = var.database_secret_arn
+  rotation_lambda_arn = var.secrets_rotation_lambda_arn
+  rotation_rules { automatically_after_days = var.secrets_rotation_days }
+}
+
+resource "aws_secretsmanager_secret_rotation" "sendgrid" {
+  count               = var.secrets_rotation_lambda_arn != "" && var.sendgrid_secret_arn != "" ? 1 : 0
+  secret_id           = var.sendgrid_secret_arn
+  rotation_lambda_arn = var.secrets_rotation_lambda_arn
+  rotation_rules { automatically_after_days = var.secrets_rotation_days }
+}
+
 # ------------------------------------------------------------------------------
 # PostgreSQL Database (RDS)
 # ------------------------------------------------------------------------------
@@ -210,19 +252,31 @@ resource "aws_apprunner_service" "app" {
     image_repository {
       image_configuration {
         port = "8080"
-        runtime_environment_variables = {
-          DATABASE_URL                = "postgres://${var.db_username}:${var.db_password}@${aws_db_instance.postgres.endpoint}/${aws_db_instance.postgres.db_name}"
+        runtime_environment_variables = merge({
+          DATABASE_SECRET_ID          = var.database_secret_arn
+          SENDGRID_SECRET_ID          = var.sendgrid_secret_arn
+          SECRETS_ROTATION_IDS        = join(",", compact([var.database_secret_arn, var.sendgrid_secret_arn]))
           REDIS_URL                   = "redis://${aws_elasticache_cluster.redis.cache_nodes[0].address}:6379"
           REDIS_CLUSTER_ENABLED       = "false"
           REDIS_CLUSTER_NODES         = "${aws_elasticache_cluster.redis.cache_nodes[0].address}:6379"
           OTEL_EXPORTER_OTLP_ENDPOINT = var.otel_exporter_otlp_endpoint
           OTEL_SERVICE_NAME           = "remitmortgage-backend"
           OTEL_TRACES_SAMPLER_RATIO   = var.otel_traces_sampler_ratio
-        }
+        }, var.database_secret_arn == "" ? {
+          DATABASE_URL = "postgres://${var.db_username}:${var.db_password}@${aws_db_instance.postgres.endpoint}/${aws_db_instance.postgres.db_name}"
+        } : {})
+        runtime_environment_secrets = merge(
+          var.database_secret_arn == "" ? {} : { DATABASE_URL = var.database_secret_arn },
+          var.sendgrid_secret_arn == "" ? {} : { SENDGRID_API_KEY = var.sendgrid_secret_arn }
+        )
       }
       image_identifier      = var.app_image
       image_repository_type = "ECR_PUBLIC"
     }
+  }
+
+  instance_configuration {
+    instance_role_arn = aws_iam_role.app_runner_instance.arn
   }
 
   network_configuration {

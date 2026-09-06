@@ -10,6 +10,7 @@ import {
   createDbPoolMetricsExtension,
   initDbPoolMetrics,
 } from "./dbPoolMetrics.js";
+import { configuredSecretId, secrets } from "./secretsManager.js";
 
 export type VerificationStatus = "PENDING" | "ELIGIBLE" | "INELIGIBLE";
 
