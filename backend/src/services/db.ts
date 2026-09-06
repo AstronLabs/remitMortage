@@ -2,7 +2,10 @@ import { PrismaClient, Prisma } from "@prisma/client";
 import { createHash } from "crypto";
 
 import { encrypt, decrypt } from "../utils/crypto.js";
-import { buildDatabaseUrl } from "./dbPoolConfig.js";
+import {
+  buildDatabaseUrl,
+  resolveReadReplicaSettings,
+} from "./dbPoolConfig.js";
 import {
   createDbPoolMetricsExtension,
   initDbPoolMetrics,
@@ -21,15 +24,15 @@ export type VerificationStatus = "PENDING" | "ELIGIBLE" | "INELIGIBLE";
 // actually enforces. See docs/DB_CONNECTION_POOL_TUNING.md for sizing guidance.
 //
 const dbUrl = buildDatabaseUrl();
+const { url: replicaUrl, lagThresholdSeconds } = resolveReadReplicaSettings();
 
-if (dbUrl) {
-  process.env.DATABASE_URL = dbUrl;
-}
-
-let baseClient: any;
-try {
-  baseClient = new PrismaClient();
-} catch (err) {
+function createPrismaClient(url: string | undefined): any {
+  let baseClient: any;
+  try {
+    baseClient = new PrismaClient(
+      url ? { datasources: { db: { url } } } : undefined
+    );
+  } catch {
   // Prisma v7 requires a driver adapter; when running in unit tests we
   // prefer a harmless in-process mock so imports don't throw during test
   // discovery. Create a proxy that supplies common model methods which can
@@ -53,41 +56,62 @@ try {
     );
   };
 
-  baseClient = new Proxy(
-    {},
-    {
-      get(_t, prop: string) {
-        if (!(prop in modelCache)) {
-          modelCache[prop] = makeModel();
-        }
-        return modelCache[prop];
-      },
-      set(_t, prop: string, value) {
-        modelCache[prop] = value;
-        return true;
-      },
-    }
-  );
-}
-
-// Route every operation through the pool-saturation instrumentation. The
-// extension is applied defensively: `$extends` is unavailable on some mocked
-// clients used in tests, and losing metrics is never a reason to take the
-// service down.
-export const prisma = (() => {
-  initDbPoolMetrics();
-  if (typeof baseClient.$extends !== "function") {
-    return baseClient;
+    baseClient = new Proxy(
+      {},
+      {
+        get(_t, prop: string) {
+          if (!(prop in modelCache)) modelCache[prop] = makeModel();
+          return modelCache[prop];
+        },
+        set(_t, prop: string, value) {
+          modelCache[prop] = value;
+          return true;
+        },
+      }
+    );
   }
+
+  // Route every operation through the pool-saturation instrumentation. The
+  // extension is applied defensively: `$extends` is unavailable on some mocked
+  // clients used in tests, and losing metrics is never a reason to take the
+  // service down.
+  initDbPoolMetrics();
+  if (typeof baseClient.$extends !== "function") return baseClient;
+
   try {
     return baseClient.$extends(createDbPoolMetricsExtension());
   } catch {
     return baseClient;
   }
-})();
+}
+
+export const prisma = createPrismaClient(dbUrl);
+export const readReplicaPrisma =
+  replicaUrl && buildDatabaseUrl({ ...process.env, DATABASE_URL: replicaUrl })
+    ? createPrismaClient(buildDatabaseUrl({ ...process.env, DATABASE_URL: replicaUrl }))
+    : prisma;
+
+export const READ_REPLICA_LAG_THRESHOLD_SECONDS = lagThresholdSeconds;
+
+export async function getReadReplicaLagSeconds(): Promise<number | null> {
+  if (!replicaUrl || readReplicaPrisma === prisma) {
+    return null;
+  }
+
+  try {
+    const rows = (await (readReplicaPrisma as any).$queryRaw`SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - pg_last_xact_replay_timestamp()))::int, 0) AS lag_seconds`) as Array<{ lag_seconds: number | string | null }>;
+    const lag = Number(rows?.[0]?.lag_seconds ?? 0);
+    return Number.isFinite(lag) ? lag : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function disconnect(): Promise<void> {
   await prisma.$disconnect();
+  if (readReplicaPrisma !== prisma) {
+    await readReplicaPrisma.$disconnect();
+  }
 }
 
 // ── Applicant ─────────────────────────────────────────────────────────────

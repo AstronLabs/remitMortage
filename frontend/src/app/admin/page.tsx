@@ -143,23 +143,18 @@ function AdminDashboard() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      // Placeholder data. Swap for the Soroban query layer once wired:
-      //   pool.get_pending_loans(), milestone.get_pending(), pool overview.
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      setLoans([
-        {
-          id: "loan-1",
-          borrower: "GBORROWER1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-          principal: 70000,
-          verificationScore: 82,
-        },
-        {
-          id: "loan-2",
-          borrower: "GBORROWER2BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-          principal: 45000,
-          verificationScore: 67,
-        },
-      ]);
+      const pendingResponse = await fetch("/api/loan/pending");
+      if (pendingResponse.ok) {
+        const pending = await pendingResponse.json();
+        setLoans((Array.isArray(pending) ? pending : []).map((loan: any) => ({
+          id: loan.id,
+          borrower: loan.borrowerAddress,
+          principal: Number(loan.amount),
+          verificationScore: Number(loan.verificationScore ?? 0),
+        })));
+      } else {
+        setLoans([]);
+      }
       setMilestones([
         {
           id: "ms-1",
@@ -190,8 +185,14 @@ function AdminDashboard() {
     if (!pendingAction) return;
     setSubmitting(true);
     try {
-      // TODO: build and submit the matching Soroban transaction via Freighter.
-      await new Promise((resolve) => setTimeout(resolve, 900));
+      if (pendingAction.kind === "approve-loan") {
+        const response = await fetch(`/api/loan/${pendingAction.loan.id}/approve`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (!response.ok) throw new Error("Loan approval failed.");
+      }
 
       if (pendingAction.kind === "approve-loan") {
         toast.success("Loan approved.");
@@ -383,6 +384,7 @@ function PendingLoansTab({
                 {expandedLoanId === loan.id ? "Hide Discussion" : "Discuss"}
               </button>
               <button
+                data-testid={`admin-approve-${loan.id}`}
                 onClick={() => onApprove(loan)}
                 className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors"
               >
@@ -531,6 +533,7 @@ function ConfirmationModal({
             Cancel
           </button>
           <button
+            data-testid="admin-confirm-approval"
             onClick={onConfirm}
             disabled={submitting}
             className="btn-primary flex-1 !py-2.5"

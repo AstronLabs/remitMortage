@@ -238,7 +238,7 @@ export default function OnboardingWizard() {
                 </div>
               </div>
             ) : (
-              <button onClick={handleConnect} className="btn-cta py-3.5 px-8" disabled={isLoading}>
+              <button data-testid="onboarding-connect-wallet" onClick={handleConnect} className="btn-cta py-3.5 px-8" disabled={isLoading}>
                 {isLoading ? "Connecting..." : "Connect Freighter Wallet"}
               </button>
             )}
@@ -259,6 +259,7 @@ export default function OnboardingWizard() {
               render={({ field }) => (
                 <div className="flex flex-col sm:flex-row gap-3">
                   <input
+                    data-testid="onboarding-recipient"
                     type="text"
                     placeholder="Recipient's G... address"
                     className="input-field flex-1 font-mono text-xs"
@@ -271,6 +272,7 @@ export default function OnboardingWizard() {
                     disabled={isLoading || isVerified}
                   />
                   <button
+                    data-testid="onboarding-verify"
                     onClick={handleVerify}
                     className="btn-cta py-2.5 px-5 !text-xs w-full sm:w-auto"
                     disabled={isLoading || !field.value || isVerified}
@@ -311,6 +313,7 @@ export default function OnboardingWizard() {
                   control={control}
                   render={({ field }) => (
                     <input
+                      data-testid="onboarding-savings-target"
                       type="number"
                       className="input-field w-full font-mono"
                       value={Number.isNaN(field.value) ? "" : field.value}
@@ -380,6 +383,7 @@ export default function OnboardingWizard() {
                 control={control}
                 render={({ field }) => (
                   <input
+                    data-testid="onboarding-first-deposit"
                     type="number"
                     className="input-field w-full font-mono"
                     value={Number.isNaN(field.value) ? "" : field.value}
@@ -397,6 +401,7 @@ export default function OnboardingWizard() {
               )}
             </div>
             <button
+              data-testid="onboarding-deposit"
               onClick={handleDeposit}
               className="btn-cta w-full justify-center py-3.5"
               disabled={isLoading}
@@ -479,6 +484,7 @@ export default function OnboardingWizard() {
         </button>
         {step < STEPS.length && (
           <button
+            data-testid="onboarding-next"
             onClick={handleNext}
             disabled={isLoading}
             className="btn-cta text-xs !py-2.5 !px-5"
