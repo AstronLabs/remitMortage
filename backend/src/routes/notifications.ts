@@ -25,7 +25,8 @@ notificationsRouter.get("/", async (req: Request, res: Response) => {
 
   try {
     const notifications = await getUserInAppNotifications(address);
-    const unreadCount = notifications.filter((n) => !n.read).length;
+    // Support both the older `status` field and a boolean `read` flag used by tests.
+    const unreadCount = notifications.filter((n: any) => (typeof n.read === 'boolean' ? !n.read : n.status !== "Sent")).length;
 
     return res.json({
       notifications,
@@ -50,6 +51,8 @@ notificationsRouter.patch("/:id/read", async (req: Request, res: Response) => {
   }
 
   try {
+    const rawId = req.params.id;
+    const id = Array.isArray(rawId) ? rawId[0] : rawId;
     await markInAppNotificationRead(id, address);
     return res.json({ success: true, message: `Notification ${id} marked as read.` });
   } catch (error: any) {

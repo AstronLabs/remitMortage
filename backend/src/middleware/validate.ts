@@ -121,3 +121,30 @@ export function validatePositiveNumber(fieldName: string) {
     return next();
   };
 }
+
+/**
+ * When the request body contains a `guarantorAddress` field, validates that it
+ * is a syntactically correct Stellar G-address.  Requests without the field
+ * pass through unchanged so existing borrower-only loans are unaffected.
+ *
+ * Does NOT verify the guarantor signature — that is done in the route handler
+ * after the address is known to be syntactically valid.
+ */
+export function validateOptionalGuarantorAddress(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  const { guarantorAddress } = req.body ?? {};
+  if (guarantorAddress === undefined || guarantorAddress === null) {
+    return next(); // no guarantor — allowed
+  }
+  if (!isValidGAddress(guarantorAddress)) {
+    return res.status(400).json({
+      error: "invalid_address",
+      field: "guarantorAddress",
+      message: "guarantorAddress must be a valid Stellar G-address",
+    });
+  }
+  return next();
+}

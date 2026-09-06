@@ -1,4 +1,5 @@
-import { Router } from "express";
+import { Router, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth.js";
 import jwt from "jsonwebtoken";
 import logger from "../utils/logger.js";
 import { validateMultiChainOwnership } from "../middleware/validate.js";
@@ -18,7 +19,7 @@ didRouter.post("/challenge", validateMultiChainOwnership, (req, res) => {
   res.json({ challenge });
 });
 
-didRouter.post("/verify", authMiddleware, async (req, res) => {
+didRouter.post("/verify", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { didDocument, proof } = req.body;
 
@@ -121,9 +122,9 @@ didRouter.post("/verify", authMiddleware, async (req, res) => {
   }
 });
 
-didRouter.get("/credential/:did", authMiddleware, async (req, res) => {
+didRouter.get("/credential/:did", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { did } = req.params;
+    const { did } = req.params as { did: string };
     const credential = await prisma.borrowerCredential.findUnique({
       where: { did },
       include: { applicant: true },
@@ -149,9 +150,9 @@ didRouter.get("/credential/:did", authMiddleware, async (req, res) => {
   }
 });
 
-didRouter.get("/applicant/:address", authMiddleware, async (req, res) => {
+didRouter.get("/applicant/:address", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { address } = req.params;
+    const { address } = req.params as { address: string };
     const applicant = await prisma.applicant.findFirst({
       where: { stellarAddress: address, deletedAt: null },
       include: { borrowerCredentials: true },

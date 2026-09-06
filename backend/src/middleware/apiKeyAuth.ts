@@ -1,7 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
+import { prisma } from "../services/db.js";
 
 export function requireScopedApiKey(requiredScope: string) {
   return async (req: Request, res: Response, next: NextFunction) => {

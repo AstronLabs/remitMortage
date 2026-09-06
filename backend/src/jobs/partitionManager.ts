@@ -1,8 +1,6 @@
 import cron from "node-cron";
-import { PrismaClient } from "@prisma/client";
 import logger from "../utils/logger.js";
-
-const prisma = new PrismaClient();
+import { prisma } from "../services/db.js";
 
 async function managePartitions() {
   logger.info("[partition-manager] Running partition management job");

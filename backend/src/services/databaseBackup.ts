@@ -3,7 +3,7 @@ import { promisify } from "util";
 import { createReadStream, unlinkSync } from "fs";
 import { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand, CopyObjectCommand } from "@aws-sdk/client-s3";
 import { Storage } from "@google-cloud/storage";
-import { createCipher } from "crypto";
+import { createCipheriv, randomBytes, createHash } from "crypto";
 import { loadConfig } from "../config.js";
 import logger from "../utils/logger.js";
 
@@ -146,9 +146,14 @@ export class DatabaseBackupService {
 
     return new Promise((resolve, reject) => {
       try {
-        const cipher = createCipher("aes-256-cbc", encryptionKey);
+        const key = createHash("sha256").update(encryptionKey).digest();
+        const iv = randomBytes(16);
+        const cipher = createCipheriv("aes-256-cbc", key, iv);
         const input = createReadStream(inputPath);
         const output = require("fs").createWriteStream(outputPath);
+
+        // Prepend IV to the output so it can be used for decryption
+        output.write(iv);
 
         input
           .pipe(cipher)
@@ -301,7 +306,7 @@ export class DatabaseBackupService {
       const file = bucket.file(key);
       const archiveFile = bucket.file(key.replace("backups/", "cold-storage/"));
 
-      await file.copy(archiveFile, { destination: archiveFile });
+      await file.copy(archiveFile);
       await file.delete();
     } else {
       throw new Error(`Unsupported cloud provider: ${this.options.provider}`);
@@ -374,7 +379,7 @@ export class DatabaseBackupService {
       const writeStream = require("fs").createWriteStream(outputPath);
 
       await new Promise((resolve, reject) => {
-        response.Body.pipe(writeStream)
+        (response as any).Body.pipe(writeStream)
           .on("finish", resolve)
           .on("error", reject);
       });

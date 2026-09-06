@@ -14,6 +14,7 @@ use soroban_sdk::{
     token::StellarAssetClient,
     Address, Env, Symbol,
 };
+use soroban_sdk::testutils::storage::{Instance, Persistent};
 
 /// Testnet-style TTL profile: short bumps, cheap to maintain.
 const TESTNET_INSTANCE_BUMP: u32 = 100_000;

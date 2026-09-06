@@ -28,6 +28,7 @@ import GasFeeAdjuster from "./tx/GasFeeAdjuster";
 import { useXlmPrice } from "../hooks/useXlmPrice";
 import { baselineFeeStroops, feeToUsd, formatFee } from "../lib/gas-fees";
 import { WALLET_ERROR_MESSAGES } from "../lib/wallet-errors";
+import { track } from "../lib/analytics";
 
 type Props = {
   isOpen: boolean;
@@ -125,6 +126,7 @@ export default function WithdrawModal({ isOpen, onClose, deposited }: Props) {
 
     if (txMonitor.phase === "confirmed") {
       setTxPhase("success");
+      track("escrow_withdrawal_completed");
       return;
     }
 

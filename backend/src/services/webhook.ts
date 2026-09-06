@@ -143,7 +143,7 @@ export function signPayload(
     .createHmac("sha256", secret)
     .update(signed)
     .digest("hex");
-  return `sha256=${hex}`;
+  return hex;
 }
 
 /**
@@ -168,16 +168,15 @@ export function verifySignature(
     return false;
   }
 
+  // Accept either raw hex or the "sha256=<hex>" form.
+  const sig = signature && signature.startsWith("sha256=") ? signature.slice(7) : signature;
   const expected = signPayload(secret, timestamp, rawBody);
 
-  // Constant-time comparison to prevent timing attacks.
   try {
-    return crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expected)
-    );
+    const sigBuf = Buffer.from(sig, "hex");
+    const expBuf = Buffer.from(expected, "hex");
+    return crypto.timingSafeEqual(sigBuf, expBuf);
   } catch {
-    // Buffers of different length throw — signatures don't match.
     return false;
   }
 }

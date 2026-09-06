@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
+import FieldTooltip from "./ui/FieldTooltip";
 
 // Types
 type FrequencyOption =
@@ -274,8 +275,9 @@ export default function CreditCalculator() {
             {/* Consistency Percentage */}
             <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800/40">
               <div className="flex justify-between items-center mb-2">
-                <label className="text-sm font-semibold text-slate-300">
+                <label className="text-sm font-semibold text-slate-300 flex items-center gap-1.5">
                   Remittance Consistency
+                  <FieldTooltip content="The percentage of months where you sent remittances on time. Higher consistency significantly boosts your credit score (weighted 40% in the scoring formula)." />
                 </label>
                 <span className="text-sm font-bold text-cyan-400 font-mono">
                   {safeConsistency}% On-Time
@@ -300,8 +302,9 @@ export default function CreditCalculator() {
             {/* Sending History (Months) */}
             <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800/40">
               <div className="flex justify-between items-center mb-2">
-                <label className="text-sm font-semibold text-slate-300">
+                <label className="text-sm font-semibold text-slate-300 flex items-center gap-1.5">
                   Payment History Duration
+                  <FieldTooltip content="How long you've been consistently sending remittances. Longer history demonstrates reliability and unlocks higher credit scores and lower interest rates." />
                 </label>
                 <span className="text-sm font-bold text-emerald-400 font-mono">
                   {safeHistory} Months
@@ -359,8 +362,9 @@ export default function CreditCalculator() {
             {/* Target Home Price */}
             <div className="border-t border-slate-800/80 pt-4">
               <div className="flex justify-between items-center mb-2">
-                <label className="text-sm font-semibold text-slate-300">
+                <label className="text-sm font-semibold text-slate-300 flex items-center gap-1.5">
                   Target Purchase Price
+                  <FieldTooltip content="The total price of the property you intend to purchase. Your down payment target is 30% of this amount, accumulated in your escrow savings account." />
                 </label>
                 <span className="text-sm font-bold text-indigo-400 font-mono">
                   ${safePurchasePrice.toLocaleString()} USDC

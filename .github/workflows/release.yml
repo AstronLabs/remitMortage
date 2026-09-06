@@ -1,0 +1,88 @@
+name: Release
+
+# Generate categorized release notes from conventional commits and publish a
+# GitHub Release when a version tag is pushed. Malformed commits are skipped by
+# the changelog parser and do not fail the workflow.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    name: Generate changelog and publish GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate release notes for tag
+        id: changelog
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          PREV_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          if [ -n "${PREV_TAG}" ]; then
+            RANGE="${PREV_TAG}..${TAG}"
+          else
+            RANGE="${TAG}"
+          fi
+
+          if ! npx --yes conventional-changelog-cli@4.1.0 \
+            -n .github/changelog-config.cjs \
+            -r 1 \
+            --commit-path . \
+            "${RANGE}" > RELEASE_NOTES.md; then
+            echo "## ${TAG}" > RELEASE_NOTES.md
+            echo "" >> RELEASE_NOTES.md
+            echo "_No conventional commits found for this range._" >> RELEASE_NOTES.md
+          fi
+
+          echo "range=${RANGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Update CHANGELOG.md
+        run: |
+          if [ -f CHANGELOG.md ]; then
+            npx --yes conventional-changelog-cli@4.1.0 \
+              -n .github/changelog-config.cjs \
+              -i CHANGELOG.md \
+              -s \
+              -r 0 || true
+          else
+            npx --yes conventional-changelog-cli@4.1.0 \
+              -n .github/changelog-config.cjs \
+              -i CHANGELOG.md \
+              -s \
+              -r 0 || echo "# Changelog" > CHANGELOG.md
+          fi
+
+      - name: Commit changelog update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(release): update CHANGELOG for ${{ github.ref_name }}"
+            git push
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

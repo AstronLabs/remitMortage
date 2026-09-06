@@ -1,10 +1,9 @@
 import { Router } from "express";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../services/db.js";
 import { requireAdmin } from "../middleware/auth.js";
 import crypto from "crypto";
 
 const router = Router();
-const prisma = new PrismaClient();
 
 function generateApiKey() {
   return "rm_" + crypto.randomBytes(32).toString("hex");
@@ -34,7 +33,8 @@ router.post("/", requireAdmin, async (req, res) => {
 });
 
 router.post("/:id/revoke", requireAdmin, async (req, res) => {
-  const { id } = req.params;
+  const rawId = req.params.id;
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
   try {
     const apiKey = await prisma.apiKey.update({

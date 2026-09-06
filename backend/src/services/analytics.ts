@@ -288,12 +288,7 @@ export interface AnalyticsDeps {
 }
 
 function defaultLoans(): AnalyticsLoan[] {
-  return listApplications().map((a) => ({
-    borrowerAddress: a.borrowerAddress,
-    status: a.status,
-    amount: a.amount,
-    createdAt: a.createdAt,
-  }));
+  return (listApplications() as any).map((a: any) => ({ borrowerAddress: a.borrowerAddress, status: a.status, amount: a.amount, createdAt: a.createdAt }));
 }
 
 function defaultBalances(): AnalyticsBalance[] {

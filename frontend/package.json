@@ -36,7 +36,7 @@
     "react-hot-toast": "^2.6.0",
     "recharts": "^2.15.0",
     "zod": "^4.4.3",
-    "zustand": "^5.0.14",
+    "zustand": "^5.0.15",
     "react-joyride": "^3.2.0"
   },
   "devDependencies": {

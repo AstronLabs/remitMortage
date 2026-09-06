@@ -63,7 +63,7 @@ describe("enqueueLedgerEvent", () => {
   });
 
   it("should return false when Redis is unavailable", async () => {
-    const { getRedisClient } = await import("../services/redis.js");
+    const { getRedisClient } = require("../services/redis.js");
     (getRedisClient as jest.Mock).mockReturnValueOnce(null);
     const ok = await enqueueLedgerEvent(makeJob());
     expect(ok).toBe(false);

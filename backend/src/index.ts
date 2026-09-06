@@ -31,11 +31,15 @@ import { didRouter } from "./routes/did.js";
 import { adminRouter } from "./routes/admin.js";
 import { adminAuthRouter } from "./routes/adminAuth.js";
 import { workspaceRouter } from "./routes/workspace.js";
+import { userRouter } from "./routes/user.js";
 import { metricsRouter } from "./routes/metrics.js";
 import { getTrackedConnectionLimit } from "./services/dbPoolMetrics.js";
 import { webhooksRouter } from "./routes/webhooks.js";
 import { incidentWebhookRouter } from "./routes/incidentWebhooks.js";
 import { apiKeysRouter } from "./routes/apiKeys.js";
+import { waitlistRouter } from "./routes/waitlist.js";
+import { loanImportRouter } from "./routes/loanImport.js";
+import { authRouter } from "./routes/auth.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { logMasker } from "./middleware/logMasker.js";
@@ -66,6 +70,7 @@ import { initializeRedisCluster, closeCluster } from "./services/redisCluster.js
 import { queueService } from "./services/queueService.js";
 import { startNotificationWorker, stopNotificationWorker } from "./workers/notificationWorker.js";
 import { startWebhookWorker, stopWebhookWorker } from "./workers/webhookWorker.js";
+import { startAnalyticsWorker, stopAnalyticsWorker } from "./workers/analyticsWorker.js";
 
 const app = express();
 const config = loadConfig();
@@ -108,6 +113,7 @@ void (async () => {
     await Promise.all([
       startNotificationWorker(),
       startWebhookWorker(),
+      startAnalyticsWorker(),
     ]);
     logger.info("[queue] BullMQ workers started", {
       mode: config.redisClusterEnabled ? "cluster" : "single",
@@ -188,6 +194,7 @@ app.use("/api/verification", verificationLimiter, verificationRouter);
 app.use("/api/verify", verificationLimiter, verifyRouter);
 app.use("/api/borrower", mutationRateLimiter, authMiddleware, borrowerRouter);
 app.use("/api/loan", mutationRateLimiter, authMiddleware, loanRouter);
+app.use("/api/loan/import", mutationRateLimiter, authMiddleware, loanImportRouter);
 app.use("/api/milestone", mutationRateLimiter, milestoneRouter);
 app.use("/api/analytics", analyticsRouter);
 app.use("/api/did", sensitiveRateLimiter, didRouter);
@@ -196,12 +203,15 @@ app.use("/api/audit-logs", auditRouter);
 // operator API key on token issuance/decryption), so it is mounted bare.
 app.use("/api/kyc", kycRouter);
 app.use("/api/notifications", notificationsRouter);
+app.use("/api/referral", referralRouter);
 app.use("/api/admin", authMiddleware, adminRouter);
 app.use("/api/admin", adminAuthRouter);
 app.use("/api/admin/api-keys", apiKeysRouter);
 app.use("/api/webhooks/pagerduty", incidentWebhookRouter);
 app.use("/api/webhooks", authMiddleware, webhooksRouter);
 app.use("/api/user", userRouter);
+app.use("/api/waitlist", waitlistRouter);
+app.use("/api/auth", authRouter);
 // Swagger UI — excluded from rate limits so developers can inspect freely
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
@@ -239,6 +249,7 @@ async function shutdown(signal: string) {
   await Promise.allSettled([
     stopNotificationWorker(),
     stopWebhookWorker(),
+    stopAnalyticsWorker(),
     queueService.close(),
     closeCluster(),
   ]);

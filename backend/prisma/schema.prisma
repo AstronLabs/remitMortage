@@ -22,6 +22,19 @@ enum LoanStatus {
   Completed
 }
 
+/// Authorization state of an attached co-signer/guarantor.
+///
+/// A loan submitted with a guarantor address starts in Pending until the
+/// guarantor's cryptographic signature over the loan commitment is verified.
+/// Only Accepted loans are eligible for admin approval; Rejected or absent
+/// authorization blocks the approval path.
+enum GuarantorStatus {
+  /// Signature provided and cryptographically verified.
+  Accepted
+  /// Signature missing, invalid, or explicitly rejected.
+  Rejected
+}
+
 model Notification {
   id          String             @id @default(uuid())
   recipient   String
@@ -185,10 +198,58 @@ model VerificationResult {
   @@index([eligible])
 }
 
+// ---------------------------------------------------------------------------
+// KYC OCR auto-fill
+// ---------------------------------------------------------------------------
+//
+// When a borrower uploads a KYC document the backend runs OCR extraction
+// on the plaintext buffer (before encryption) and stores any extracted
+// values here.  Each field carries an "unconfirmed" flag that the applicant
+// must explicitly clear before the onboarding submission is accepted.
+//
+// Confirmation endpoint: POST /api/kyc/:documentId/confirm
+//   Body: { confirmName?: true, confirmIdNumber?: true, confirmAddress?: true }
+//
+// The three extracted fields mirror the three onboarding fields that OCR
+// is allowed to pre-fill: full legal name, government ID number, and
+// residential address.
+model KycOcrResult {
+  id               String   @id @default(uuid())
+  /// The KYC document this result was extracted from.
+  documentId       String   @unique
+  /// Wallet address of the applicant who uploaded the document.
+  applicantAddress String
+
+  /// Extracted full legal name, or null when OCR could not find it.
+  extractedName     String?
+  /// Whether the applicant has explicitly confirmed the extracted name.
+  nameConfirmed     Boolean  @default(false)
+
+  /// Extracted government-issued ID number (passport, national ID, etc.).
+  extractedIdNumber String?
+  /// Whether the applicant has explicitly confirmed the extracted ID number.
+  idNumberConfirmed Boolean  @default(false)
+
+  /// Extracted residential address.
+  extractedAddress  String?
+  /// Whether the applicant has explicitly confirmed the extracted address.
+  addressConfirmed  Boolean  @default(false)
+
+  /// True when OCR ran but could not extract any usable fields.
+  ocrFailed  Boolean  @default(false)
+  /// Raw OCR engine error message, if any.
+  ocrError   String?
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([applicantAddress])
+}
+
 model LoanApplication {
-  id                 String     @id @default(uuid())
+  id                 String           @id @default(uuid())
   applicantId        String
-  applicant          Applicant  @relation(fields: [applicantId], references: [id])
+  applicant          Applicant        @relation(fields: [applicantId], references: [id])
   escrowContractId   String?
   loanId             String?
   principal          Float // DB CHECK: principal > 0 (enforced via migration LoanApplication_principal_check)
@@ -196,10 +257,10 @@ model LoanApplication {
   status             LoanStatus @default(Pending)
   createdAt          DateTime   @default(now())
 
-  // New fields for repayment tracking
+  // Repayment tracking
   dueDate            DateTime?
-  missedPayments     Int        @default(0)
-  lateFeeBalance     Float      @default(0)
+  missedPayments     Int              @default(0)
+  lateFeeBalance     Float            @default(0)
   gracePeriodEndsAt  DateTime?
 
   // SLA and reviewer tracking fields
@@ -213,6 +274,12 @@ model LoanApplication {
   // Set when the stale-draft cleanup job first flags/notifies this draft.
   // Cleared on resume, so it also marks whether a notice is outstanding.
   draftStaleNotifiedAt   DateTime?
+  comments           LoanComment[]
+
+  // Human-readable rejection reason (manual or auto-rejection).
+  reason                 String?
+  autoRejectedAt         DateTime?
+  autoRejectionLogs      LoanAutoRejectionLog[]
 
   // Index backing getApplicationsByBorrower(): filter by applicant then sort by createdAt
   @@index([applicantId, createdAt])
@@ -225,6 +292,24 @@ model LoanApplication {
   @@index([deletedAt])
   // Composite index backing the stale draft cleanup scan: WHERE status = 'Draft' AND lastActivityAt < cutoff
   @@index([status, lastActivityAt])
+}
+
+model LoanComment {
+  id                String   @id @default(uuid())
+  loanApplicationId String
+  loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id], onDelete: Cascade)
+  authorAddress     String
+  content           String
+  parentId          String?
+  parent            LoanComment? @relation("ThreadedComments", fields: [parentId], references: [id], onDelete: Cascade)
+  replies           LoanComment[] @relation("ThreadedComments")
+  mentions          String[] @default([])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([loanApplicationId, createdAt])
+  @@index([parentId])
+  @@index([authorAddress])
 }
 
 model AuditLog {
@@ -519,5 +604,34 @@ model SessionToken {
 
   @@index([walletAddress])
   @@index([expiresAt])
+  @@index([createdAt])
+}
+
+model InviteCode {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  email     String?
+  used      Boolean   @default(false)
+  usedBy    String?
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  expiresAt DateTime?
+
+  @@index([code])
+  @@index([used])
+}
+
+model WaitlistEntry {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  walletAddress String?
+  status        String    @default("pending")
+  inviteCode    String?
+  position      Int?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([email])
+  @@index([status])
   @@index([createdAt])
 }

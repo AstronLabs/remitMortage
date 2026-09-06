@@ -1195,6 +1195,190 @@ fn test_release_milestone_blocked_when_reentrant_flag_set() {
     assert_eq!(res, Err(Ok(MilestoneError::ReentrancyGuard)));
 }
 
+// ── Concurrency / race-condition regression tests ───────────────────────
+//
+// Soroban executes transactions serially per contract, but these tests
+// simulate overlapping approval submissions by exercising every quorum-
+// reaching permutation and asserting vote-count / disbursement invariants
+// that must hold regardless of submission order.
+
+/// Submit approvals with rotated starting signers and assert the milestone
+/// always ends Approved with exactly `threshold` votes and a single disbursement.
+fn assert_all_approval_permutations_reach_consistent_quorum(
+    approver_count: u32,
+    threshold: u32,
+) {
+    for start in 0..approver_count {
+        let env = Env::default();
+        env.mock_all_auths();
+        let h = setup(&env, approver_count, threshold, 5_000, 10_000);
+        let pid = proposal_id(&env);
+
+        h.milestone.propose_milestone(
+            &h.contractor,
+            &pid,
+            &loan_id(&env),
+            &1_000i128,
+            &evidence(&env),
+            &cidv0(&env),
+        );
+
+        for offset in 0..threshold {
+            let idx = (start + offset) % approver_count;
+            h.milestone
+                .approve_milestone(&h.approvers.get(idx).unwrap(), &pid);
+        }
+
+        let record = h.milestone.get_milestone(&pid);
+        assert_eq!(record.status, MilestoneStatus::Approved);
+        assert_eq!(record.votes, threshold);
+
+        env.ledger().set_sequence_number(200);
+        h.milestone.release_milestone(&pid);
+        assert_eq!(h.pool.total_disbursed(), 1_000i128);
+        let after = h.milestone.get_milestone(&pid);
+        assert_eq!(after.status, MilestoneStatus::Disbursed);
+    }
+}
+
+#[test]
+fn test_concurrent_quorum_approvals_disburse_exactly_once() {
+    assert_all_approval_permutations_reach_consistent_quorum(5, 3);
+}
+
+#[test]
+fn test_simultaneous_threshold_vote_does_not_overcount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let h = setup(&env, 4, 2, 5_000, 10_000);
+
+    let pid = proposal_id(&env);
+    h.milestone.propose_milestone(
+        &h.contractor,
+        &pid,
+        &loan_id(&env),
+        &750i128,
+        &evidence(&env),
+        &cidv0(&env),
+    );
+
+    // Two votes submitted back-to-back to simulate simultaneous quorum.
+    h.milestone
+        .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
+    h.milestone
+        .approve_milestone(&h.approvers.get(1).unwrap(), &pid);
+
+    let record = h.milestone.get_milestone(&pid);
+    assert_eq!(record.votes, 2);
+    assert_eq!(record.status, MilestoneStatus::Approved);
+
+    // A third overlapping approval must not inflate the tally.
+    let res = h.milestone.try_approve_milestone(&h.approvers.get(2).unwrap(), &pid);
+    assert_eq!(res, Err(Ok(MilestoneError::InvalidStatus)));
+
+    let unchanged = h.milestone.get_milestone(&pid);
+    assert_eq!(unchanged.votes, 2);
+    assert_eq!(unchanged.status, MilestoneStatus::Approved);
+}
+
+#[test]
+fn test_interleaved_approve_sequences_from_different_signers() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let h = setup(&env, 3, 2, 5_000, 10_000);
+
+    let pid = proposal_id(&env);
+    h.milestone.propose_milestone(
+        &h.contractor,
+        &pid,
+        &loan_id(&env),
+        &500i128,
+        &evidence(&env),
+        &cidv0(&env),
+    );
+
+    // Signer 2 votes first, then signer 0 — order should not matter.
+    h.milestone
+        .approve_milestone(&h.approvers.get(2).unwrap(), &pid);
+    let mid = h.milestone.get_milestone(&pid);
+    assert_eq!(mid.votes, 1);
+    assert_eq!(mid.status, MilestoneStatus::Proposed);
+
+    h.milestone
+        .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
+    let record = h.milestone.get_milestone(&pid);
+    assert_eq!(record.votes, 2);
+    assert_eq!(record.status, MilestoneStatus::Approved);
+
+    // Signer 1's late vote is rejected — no double-count.
+    let res = h.milestone.try_approve_milestone(&h.approvers.get(1).unwrap(), &pid);
+    assert_eq!(res, Err(Ok(MilestoneError::InvalidStatus)));
+}
+
+#[test]
+fn test_interleaved_approve_then_dispute_blocks_release() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let h = setup(&env, 2, 2, 5_000, 10_000);
+
+    let pid = proposal_id(&env);
+    h.milestone.propose_milestone(
+        &h.contractor,
+        &pid,
+        &loan_id(&env),
+        &1_000i128,
+        &evidence(&env),
+        &cidv0(&env),
+    );
+
+    h.milestone
+        .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
+    h.milestone
+        .approve_milestone(&h.approvers.get(1).unwrap(), &pid);
+
+    // Governance "reject" path: dispute after quorum blocks disbursement.
+    h.milestone
+        .dispute_milestone(&h.approvers.get(0).unwrap(), &pid);
+
+    let record = h.milestone.get_milestone(&pid);
+    assert_eq!(record.status, MilestoneStatus::Refunded);
+
+    env.ledger().set_sequence_number(500);
+    let res = h.milestone.try_release_milestone(&pid);
+    assert_eq!(res, Err(Ok(MilestoneError::InvalidStatus)));
+    assert_eq!(h.pool.total_disbursed(), 0);
+}
+
+#[test]
+fn test_double_release_after_concurrent_quorum_is_idempotent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let amount = 2_000i128;
+    let h = setup(&env, 3, 2, 5_000, 10_000);
+
+    let pid = proposal_id(&env);
+    h.milestone.propose_milestone(
+        &h.contractor,
+        &pid,
+        &loan_id(&env),
+        &amount,
+        &evidence(&env),
+        &cidv0(&env),
+    );
+
+    h.milestone
+        .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
+    h.milestone
+        .approve_milestone(&h.approvers.get(1).unwrap(), &pid);
+
+    env.ledger().set_sequence_number(300);
+    h.milestone.release_milestone(&pid);
+
+    let res = h.milestone.try_release_milestone(&pid);
+    assert_eq!(res, Err(Ok(MilestoneError::InvalidStatus)));
+    assert_eq!(h.pool.total_disbursed(), amount);
+}
+
 #[test]
 fn test_release_milestone_succeeds_when_flag_is_clear() {
     let env = Env::default();
