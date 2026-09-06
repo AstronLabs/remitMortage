@@ -10,6 +10,7 @@ import {
   createDbPoolMetricsExtension,
   initDbPoolMetrics,
 } from "./dbPoolMetrics.js";
+import { configuredSecretId, secrets } from "./secretsManager.js";
 
 export type VerificationStatus = "PENDING" | "ELIGIBLE" | "INELIGIBLE";
 
@@ -26,39 +27,20 @@ export type VerificationStatus = "PENDING" | "ELIGIBLE" | "INELIGIBLE";
 const dbUrl = buildDatabaseUrl();
 const { url: replicaUrl, lagThresholdSeconds } = resolveReadReplicaSettings();
 
-function createPrismaClient(url: string | undefined) {
-  if (url) {
-    process.env.DATABASE_URL = url;
-  }
-
-  let client: any;
+function createPrismaClient(url: string | undefined): any {
+  let baseClient: any;
   try {
-    client = new PrismaClient();
-  } catch (err) {
-    // Prisma v7 requires a driver adapter; when running in unit tests we
-    // prefer a harmless in-process mock so imports don't throw during test
-    // discovery. Create a proxy that supplies common model methods which can
-    // be spied on or replaced by tests.
-    const modelCache: Record<string, any> = {};
-    const makeModel = () => {
-      return new Proxy(
-        {},
-        {
-          get(_t, prop: string) {
-            if (!modelCache[prop]) {
-              modelCache[prop] = async () => null;
-            }
-            return modelCache[prop];
-          },
-          set(_t, prop: string, value) {
-            modelCache[prop] = value;
-            return true;
-          },
-        }
-      );
-    };
-
-    client = new Proxy(
+    baseClient = new PrismaClient(
+      url ? { datasources: { db: { url } } } : undefined
+    );
+  } catch {
+  // Prisma v7 requires a driver adapter; when running in unit tests we
+  // prefer a harmless in-process mock so imports don't throw during test
+  // discovery. Create a proxy that supplies common model methods which can
+  // be spied on or replaced by tests.
+  const modelCache: Record<string, any> = {};
+  const makeModel = () => {
+    return new Proxy(
       {},
       {
         get(_t, prop: string) {
@@ -75,19 +57,34 @@ function createPrismaClient(url: string | undefined) {
     );
   }
 
+    baseClient = new Proxy(
+      {},
+      {
+        get(_t, prop: string) {
+          if (!(prop in modelCache)) modelCache[prop] = makeModel();
+          return modelCache[prop];
+        },
+        set(_t, prop: string, value) {
+          modelCache[prop] = value;
+          return true;
+        },
+      }
+    );
+  }
+
   // Route every operation through the pool-saturation instrumentation. The
   // extension is applied defensively: `$extends` is unavailable on some mocked
   // clients used in tests, and losing metrics is never a reason to take the
   // service down.
   initDbPoolMetrics();
-  if (typeof client.$extends !== "function") {
-    return client;
-  }
+  if (typeof baseClient.$extends !== "function") return baseClient;
 
   try {
-    return client.$extends(createDbPoolMetricsExtension());
+    const rows = (await (readReplicaPrisma as any).$queryRaw`SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - pg_last_xact_replay_timestamp()))::int, 0) AS lag_seconds`) as Array<{ lag_seconds: number | string | null }>;
+    const lag = Number(rows?.[0]?.lag_seconds ?? 0);
+    return Number.isFinite(lag) ? lag : null;
   } catch {
-    return client;
+    return null;
   }
 }
 
