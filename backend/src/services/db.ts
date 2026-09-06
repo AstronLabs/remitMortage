@@ -34,10 +34,10 @@ function createPrismaClient(url: string | undefined): any {
       url ? { datasources: { db: { url } } } : undefined
     );
   } catch {
-    // Prisma v7 requires a driver adapter; when running in unit tests we
-    // prefer a harmless in-process mock so imports don't throw during test
-    // discovery. Create a proxy that supplies common model methods which can
-    // be spied on or replaced by tests.
+  // Prisma v7 requires a driver adapter; when running in unit tests we
+  // prefer a harmless in-process mock so imports don't throw during test
+  // discovery. Create a proxy that supplies common model methods which can
+  // be spied on or replaced by tests.
   const modelCache: Record<string, any> = {};
   const makeModel = () => {
     return new Proxy(
@@ -72,8 +72,13 @@ function createPrismaClient(url: string | undefined): any {
     );
   }
 
+  // Route every operation through the pool-saturation instrumentation. The
+  // extension is applied defensively: `$extends` is unavailable on some mocked
+  // clients used in tests, and losing metrics is never a reason to take the
+  // service down.
   initDbPoolMetrics();
   if (typeof baseClient.$extends !== "function") return baseClient;
+
   try {
     return baseClient.$extends(createDbPoolMetricsExtension());
   } catch {
@@ -81,42 +86,13 @@ function createPrismaClient(url: string | undefined): any {
   }
 }
 
-let activeDbUrl = dbUrl;
-export let prisma = createPrismaClient(dbUrl);
+export const prisma = createPrismaClient(dbUrl);
 export const readReplicaPrisma =
   replicaUrl && buildDatabaseUrl({ ...process.env, DATABASE_URL: replicaUrl })
     ? createPrismaClient(buildDatabaseUrl({ ...process.env, DATABASE_URL: replicaUrl }))
     : prisma;
 
 export const READ_REPLICA_LAG_THRESHOLD_SECONDS = lagThresholdSeconds;
-
-/**
- * Refresh the primary database pool after a Secrets Manager rotation.
- * The replacement is health-checked before the exported client is swapped;
- * the old pool then drains for the configured grace period.
- */
-export async function refreshDatabaseCredentials(): Promise<void> {
-  const secretId = configuredSecretId("DATABASE_SECRET_ID");
-  if (!secretId) return;
-
-  const secret = await secrets.getJson(secretId, true);
-  const rawUrl = secret.databaseUrl ?? secret.url ?? secret.value;
-  if (!rawUrl) throw new Error(`Secret ${secretId} does not contain databaseUrl`);
-
-  const nextUrl = buildDatabaseUrl({ ...process.env, DATABASE_URL: rawUrl });
-  if (!nextUrl || nextUrl === activeDbUrl) return;
-
-  const nextClient = createPrismaClient(nextUrl);
-  await nextClient.$queryRaw`SELECT 1`;
-  const previousClient = prisma;
-  prisma = nextClient;
-  activeDbUrl = nextUrl;
-
-  const drainMs = Number(process.env.DB_ROTATION_DRAIN_MS || 30_000);
-  setTimeout(() => {
-    void previousClient.$disconnect().catch(() => undefined);
-  }, Number.isFinite(drainMs) && drainMs >= 0 ? drainMs : 30_000).unref();
-}
 
 export async function getReadReplicaLagSeconds(): Promise<number | null> {
   if (!replicaUrl || readReplicaPrisma === prisma) {

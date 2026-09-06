@@ -34,5 +34,13 @@ export default defineConfig({
     url: "http://localhost:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,
+    env: {
+      ...process.env,
+      NEXT_PUBLIC_ADMIN_ADDRESS:
+        process.env.NEXT_PUBLIC_ADMIN_ADDRESS ??
+        "GAXI4LZGQ7F3CKOBU7S6MFYKZRCNFRQVXJXKOMZ7GM7MIFST5W54AAAA",
+      NEXT_PUBLIC_HORIZON_URL:
+        process.env.NEXT_PUBLIC_HORIZON_URL ?? "https://horizon-testnet.stellar.org",
+    },
   },
 });
