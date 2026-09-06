@@ -44,8 +44,8 @@ function createPrismaClient(url: string | undefined): any {
       {},
       {
         get(_t, prop: string) {
-          if (!modelCache[prop]) {
-            modelCache[prop] = async () => null;
+          if (!(prop in modelCache)) {
+            modelCache[prop] = makeModel();
           }
           return modelCache[prop];
         },
@@ -55,7 +55,7 @@ function createPrismaClient(url: string | undefined): any {
         },
       }
     );
-  };
+  }
 
     baseClient = new Proxy(
       {},
@@ -80,9 +80,11 @@ function createPrismaClient(url: string | undefined): any {
   if (typeof baseClient.$extends !== "function") return baseClient;
 
   try {
-    return baseClient.$extends(createDbPoolMetricsExtension());
+    const rows = (await (readReplicaPrisma as any).$queryRaw`SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - pg_last_xact_replay_timestamp()))::int, 0) AS lag_seconds`) as Array<{ lag_seconds: number | string | null }>;
+    const lag = Number(rows?.[0]?.lag_seconds ?? 0);
+    return Number.isFinite(lag) ? lag : null;
   } catch {
-    return baseClient;
+    return null;
   }
 }
 
