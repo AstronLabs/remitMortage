@@ -2,6 +2,7 @@ import { RemittanceAnalysis } from "./stellar.js";
 
 export interface CreditScoreResult {
   score: number;
+  modelVersion: string;
   breakdown: {
     consistency: number;
     frequency: number;
@@ -9,19 +10,90 @@ export interface CreditScoreResult {
     volume: number;
   };
   tier: string;
+  shadowScore?: {
+    modelVersion: string;
+    score: number;
+    tier: string;
+    breakdown: {
+      consistency: number;
+      frequency: number;
+      duration: number;
+      volume: number;
+    };
+  };
 }
 
-const WEIGHTS = {
+export interface ScoringModelConfig {
+  activeVersion: string;
+  shadowVersion?: string;
+  shadowModeEnabled: boolean;
+}
+
+export interface ShadowEvaluation {
+  id: string;
+  timestamp: string;
+  activeVersion: string;
+  activeScore: number;
+  shadowVersion: string;
+  shadowScore: number;
+  delta: number;
+}
+
+let currentModelConfig: ScoringModelConfig = {
+  activeVersion: "v1.0.0",
+  shadowVersion: "v1.1.0-shadow",
+  shadowModeEnabled: true,
+};
+
+const shadowEvaluationsLog: ShadowEvaluation[] = [];
+
+export function getModelConfig(): ScoringModelConfig {
+  return { ...currentModelConfig };
+}
+
+export function updateModelConfig(newConfig: Partial<ScoringModelConfig>): ScoringModelConfig {
+  currentModelConfig = { ...currentModelConfig, ...newConfig };
+  return getModelConfig();
+}
+
+export function getShadowEvaluations(): ShadowEvaluation[] {
+  return [...shadowEvaluationsLog];
+}
+
+export function getShadowMetrics() {
+  const count = shadowEvaluationsLog.length;
+  if (count === 0) {
+    return { sampleCount: 0, avgActiveScore: 0, avgShadowScore: 0, avgDelta: 0 };
+  }
+  const sumActive = shadowEvaluationsLog.reduce((s, e) => s + e.activeScore, 0);
+  const sumShadow = shadowEvaluationsLog.reduce((s, e) => s + e.shadowScore, 0);
+  const sumDelta = shadowEvaluationsLog.reduce((s, e) => s + e.delta, 0);
+  return {
+    sampleCount: count,
+    avgActiveScore: Math.round(sumActive / count),
+    avgShadowScore: Math.round(sumShadow / count),
+    avgDelta: Math.round((sumDelta / count) * 100) / 100,
+  };
+}
+
+const WEIGHTS_V1 = {
   CONSISTENCY: 40,
   FREQUENCY: 25,
   DURATION: 20,
   VOLUME: 15,
 };
 
-export function calculateCreditScore(analysis: RemittanceAnalysis): CreditScoreResult {
+// Candidate shadow model (v1.1.0-shadow) with reweighted metrics favoring history & volume
+const WEIGHTS_SHADOW = {
+  CONSISTENCY: 35,
+  FREQUENCY: 20,
+  DURATION: 25,
+  VOLUME: 20,
+};
+
+function scoreWithWeights(analysis: RemittanceAnalysis, weights: typeof WEIGHTS_V1) {
   const totalAmount = parseFloat(analysis.totalAmountUSDC);
 
-  // Edge cases: single payment or zero volume
   if (analysis.totalPayments <= 1 || totalAmount === 0) {
     return {
       score: 0,
@@ -30,51 +102,40 @@ export function calculateCreditScore(analysis: RemittanceAnalysis): CreditScoreR
     };
   }
 
-  // Consistency (Max 40)
-  // Uses Coefficient of Variation (CV = stdDev / mean)
-  // Lower CV = better consistency. If CV >= 1, consistency is 0.
   const avgAmount = parseFloat(analysis.averageAmountUSDC);
   const cv = avgAmount > 0 ? analysis.standardDeviation / avgAmount : 1;
-  const consistencyScore = Math.max(0, Math.round(WEIGHTS.CONSISTENCY * (1 - cv)));
+  const consistencyScore = Math.max(0, Math.round(weights.CONSISTENCY * (1 - cv)));
 
-  // Frequency (Max 25)
-  // Ideal frequency is ~30 days (1 payment per month) or more often.
-  // Average days between payments = (spanMonths * 30) / (totalPayments - 1)
   const avgDaysBetween = (analysis.spanMonths * 30) / (analysis.totalPayments - 1);
   let frequencyScore = 0;
   if (avgDaysBetween <= 35) {
-    frequencyScore = WEIGHTS.FREQUENCY;
+    frequencyScore = weights.FREQUENCY;
   } else if (avgDaysBetween <= 60) {
-    frequencyScore = 15;
+    frequencyScore = Math.round(weights.FREQUENCY * 0.6);
   } else if (avgDaysBetween <= 90) {
-    frequencyScore = 5;
+    frequencyScore = Math.round(weights.FREQUENCY * 0.2);
   }
 
-  // Duration (Max 20)
-  // Reward longer history
   let durationScore = 0;
   if (analysis.spanMonths >= 12) {
-    durationScore = WEIGHTS.DURATION;
+    durationScore = weights.DURATION;
   } else if (analysis.spanMonths >= 6) {
-    durationScore = 10;
+    durationScore = Math.round(weights.DURATION * 0.5);
   } else if (analysis.spanMonths >= 3) {
-    durationScore = 5;
+    durationScore = Math.round(weights.DURATION * 0.25);
   }
 
-  // Volume (Max 15)
-  // Reward higher cumulative volume
   let volumeScore = 0;
   if (totalAmount >= 5000) {
-    volumeScore = WEIGHTS.VOLUME;
+    volumeScore = weights.VOLUME;
   } else if (totalAmount >= 2000) {
-    volumeScore = 10;
+    volumeScore = Math.round(weights.VOLUME * 0.66);
   } else if (totalAmount >= 500) {
-    volumeScore = 5;
+    volumeScore = Math.round(weights.VOLUME * 0.33);
   }
 
   const score = consistencyScore + frequencyScore + durationScore + volumeScore;
 
-  // Tier Classification
   let tier = "Insufficient";
   if (score >= 80) {
     tier = "Excellent";
@@ -93,5 +154,38 @@ export function calculateCreditScore(analysis: RemittanceAnalysis): CreditScoreR
       volume: volumeScore,
     },
     tier,
+  };
+}
+
+export function calculateCreditScore(analysis: RemittanceAnalysis): CreditScoreResult {
+  const activeResult = scoreWithWeights(analysis, WEIGHTS_V1);
+  let shadowResult: CreditScoreResult["shadowScore"] | undefined;
+
+  if (currentModelConfig.shadowModeEnabled && currentModelConfig.shadowVersion) {
+    const shadowCalc = scoreWithWeights(analysis, WEIGHTS_SHADOW);
+    shadowResult = {
+      modelVersion: currentModelConfig.shadowVersion,
+      score: shadowCalc.score,
+      tier: shadowCalc.tier,
+      breakdown: shadowCalc.breakdown,
+    };
+
+    shadowEvaluationsLog.push({
+      id: Math.random().toString(36).substring(2, 11),
+      timestamp: new Date().toISOString(),
+      activeVersion: currentModelConfig.activeVersion,
+      activeScore: activeResult.score,
+      shadowVersion: currentModelConfig.shadowVersion,
+      shadowScore: shadowCalc.score,
+      delta: shadowCalc.score - activeResult.score,
+    });
+  }
+
+  return {
+    score: activeResult.score,
+    modelVersion: currentModelConfig.activeVersion,
+    breakdown: activeResult.breakdown,
+    tier: activeResult.tier,
+    shadowScore: shadowResult,
   };
 }

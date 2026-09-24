@@ -6,6 +6,12 @@ import logger from "../utils/logger.js";
 import { requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";
 import { bulkReviewApplications, type BulkReviewDecision } from "../services/loanStore.js";
 import { promoteWaitlistBatch } from "../services/inviteCode.js";
+import {
+  getModelConfig,
+  updateModelConfig,
+  getShadowMetrics,
+  getShadowEvaluations,
+} from "../services/scoring.js";
 
 export const adminRouter = Router();
 
@@ -241,5 +247,63 @@ adminRouter.post("/waitlist/promote", requireAdmin, async (req: AuthenticatedReq
   } catch (err) {
     logger.error("[AdminRouter] waitlist promote failed", { err });
     return res.status(500).json({ error: "waitlist_promote_failed" });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/scoring/models:
+ *   get:
+ *     summary: Retrieve active risk scoring model configuration and shadow mode evaluation metrics
+ *     tags:
+ *       - Admin
+ *     security:
+ *       - bearerAuth: []
+ */
+adminRouter.get("/scoring/models", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const config = getModelConfig();
+    const metrics = getShadowMetrics();
+    const shadowEvaluations = getShadowEvaluations();
+    return res.json({
+      config,
+      metrics,
+      recentShadowEvaluations: shadowEvaluations.slice(-20),
+    });
+  } catch (error) {
+    logger.error("Failed to fetch scoring model configuration", { error });
+    return res.status(500).json({ error: "failed_to_fetch_scoring_models" });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/scoring/models:
+ *   post:
+ *     summary: Update active or shadow model version and toggle shadow mode
+ *     tags:
+ *       - Admin
+ *     security:
+ *       - bearerAuth: []
+ */
+adminRouter.post("/scoring/models", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const body = req.body ?? {};
+  const { activeVersion, shadowVersion, shadowModeEnabled } = body;
+
+  if (activeVersion !== undefined && (typeof activeVersion !== "string" || !activeVersion.trim())) {
+    return res.status(400).json({ error: "invalid_request", message: "activeVersion must be a non-empty string" });
+  }
+
+  try {
+    const updated = updateModelConfig({
+      ...(activeVersion ? { activeVersion: activeVersion.trim() } : {}),
+      ...(shadowVersion !== undefined ? { shadowVersion: typeof shadowVersion === "string" ? shadowVersion.trim() : undefined } : {}),
+      ...(shadowModeEnabled !== undefined ? { shadowModeEnabled: Boolean(shadowModeEnabled) } : {}),
+    });
+    logger.info("Scoring model configuration updated by admin", { config: updated });
+    return res.json(updated);
+  } catch (error) {
+    logger.error("Failed to update scoring model configuration", { error });
+    return res.status(500).json({ error: "failed_to_update_scoring_models" });
   }
 });
