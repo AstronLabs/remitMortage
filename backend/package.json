@@ -10,6 +10,7 @@
     "docs:export": "tsx src/docs/export-openapi.ts",
     "test": "jest",
     "test:coverage": "jest --coverage",
+    "test:security": "jest src/__tests__/sessionFixationAndReplay.test.ts",
     "test:integration": "jest --testPathPattern='prismaSchemaDrift' --no-coverage",
     "test:drift": "jest src/__tests__/prismaSchemaDrift.test.ts --no-coverage",
     "drift:check": "bash ./scripts/detect-prisma-drift.sh",
