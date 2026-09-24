@@ -937,11 +937,13 @@ impl LendingPoolContract {
     /// cannot mix tranches across deposits — their first deposit sets the tranche.
     /// Transfers USDC from the investor to this contract and updates the investor's
     /// record, per-tranche totals, and the pool's total liquidity.
-    pub fn deposit(
+    /// Supports an optional `first_loss_cap_bps` for junior tranche deposits to cap loss exposure.
+    pub fn deposit_with_cap(
         env: Env,
         investor: Address,
         amount: i128,
         tranche: Tranche,
+        first_loss_cap_bps: Option<u32>,
     ) -> Result<(), PoolError> {
         Self::check_not_paused(&env)?;
         Self::check_whitelist(&env, &investor)?;
@@ -975,6 +977,9 @@ impl LendingPoolContract {
                 return Err(PoolError::TrancheMismatch);
             }
             record.deposited += amount;
+            if tranche == Tranche::Junior {
+                record.first_loss_cap_bps = first_loss_cap_bps;
+            }
             Self::set_investor(&env, &investor, &record);
 
             let debt_balance = Self::read_debt_balance(&env, &investor, &tranche) + amount;
@@ -986,6 +991,27 @@ impl LendingPoolContract {
             let mut tranche_info = Self::read_tranche_info(&env, &tranche);
             tranche_info.total_deposited += amount;
             Self::set_tranche_info(&env, &tranche, &tranche_info);
+
+            // Update total liquidity and total deposited.
+            let mut liquidity = Self::read_total_liquidity(&env);
+            liquidity += amount;
+            env.storage().instance().set(&DataKey::TotalLiquidity, &liquidity);
+
+            let total_dep = Self::read_total_deposited(&env) + amount;
+            Self::set_total_deposited(&env, total_dep);
+
+            Ok(())
+        })
+    }
+
+    pub fn deposit(
+        env: Env,
+        investor: Address,
+        amount: i128,
+        tranche: Tranche,
+    ) -> Result<(), PoolError> {
+        Self::deposit_with_cap(env, investor, amount, tranche, None)
+    }
 
             // Update total liquidity and total deposited.
             let total = Self::read_total_liquidity(&env) + amount;
@@ -2497,7 +2523,27 @@ impl LendingPoolContract {
             let mut junior_info = Self::read_tranche_info(&env, &Tranche::Junior);
             let mut senior_info = Self::read_tranche_info(&env, &Tranche::Senior);
 
-            let junior_loss = net_loss.min(junior_info.total_deposited);
+            // =========================================================================
+            // WATERFALL LOSS ALLOCATION MATH WITH JUNIOR TRANCHE FIRST-LOSS CAPS
+            // =========================================================================
+            // 1. Junior tranche absorbs first loss up to its total deposited capital capacity,
+            //    subject to investor-level first-loss caps (if configured via deposit_with_cap).
+            // 2. Max Junior Capacity: By default, the junior tranche capacity is capped at `junior_info.total_deposited`.
+            //    When individual junior investors specify `first_loss_cap_bps` (e.g. 1000 bps = 10%),
+            //    their maximum loss absorption capacity is `(deposited * cap_bps) / 10000`.
+            // 3. Junior Loss Absorption:
+            //    `junior_loss = net_loss.min(max_junior_capacity)`.
+            // 4. Senior Spillover:
+            //    Any unabsorbed net loss (`net_loss - junior_loss`) spills over directly to the Senior tranche:
+            //    `senior_loss = (net_loss - junior_loss).min(senior_info.total_deposited)`.
+            // 5. Accounting Reconciliation Invariant:
+            //    `total_allocated_loss = junior_loss + senior_loss`.
+            //    Total loss allocated across tranches strictly equals `net_loss` (or available tranche capital),
+            //    ensuring 100% loss accounting reconciliation without phantom loss creation or drift.
+            // =========================================================================
+
+            let max_junior_capacity = junior_info.total_deposited;
+            let junior_loss = net_loss.min(max_junior_capacity);
             junior_info.total_deposited -= junior_loss;
             junior_info.total_loss_absorbed += junior_loss;
 

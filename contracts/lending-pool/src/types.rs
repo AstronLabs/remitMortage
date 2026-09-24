@@ -104,6 +104,9 @@ pub struct InvestorRecord {
     pub accrued_yield: i128,
     /// Total losses absorbed by this investor (only non-zero for junior tranche).
     pub absorbed_loss: i128,
+    /// Optional first-loss cap in basis points for junior deposits (e.g. 1000 = 10% max loss exposure).
+    /// None or 10000 means 100% (full exposure).
+    pub first_loss_cap_bps: Option<u32>,
 }
 
 /// Per-tranche aggregate metrics stored in instance storage.
