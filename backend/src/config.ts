@@ -229,16 +229,6 @@ export function loadConfig(): Config {
       process.env.SLACK_WEBHOOK_URL ||
       process.env.ALERT_WEBHOOK_URL ||
       null,
-    complianceAlertEmail:
-      process.env.COMPLIANCE_ALERT_EMAIL ||
-      process.env.OPS_FALLBACK_ALERT_EMAIL ||
-      process.env.ALERT_DEFAULT_RECIPIENT ||
-      "compliance@remitmortgage.com",
-    complianceSlackWebhookUrl:
-      process.env.COMPLIANCE_SLACK_WEBHOOK_URL ||
-      process.env.OPS_SLACK_WEBHOOK_URL ||
-      process.env.SLACK_WEBHOOK_URL ||
-      null,
     sessionTokenRetentionDays: parseInt(
       process.env.SESSION_TOKEN_RETENTION_DAYS ||
         process.env.RETENTION_DAYS ||
