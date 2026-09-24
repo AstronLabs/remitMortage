@@ -1,0 +1,69 @@
+name: Build, Sign, and Attest Container Images
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+env:
+  REGISTRY: public.ecr.aws/remitmortgage
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: backend
+            context: ./backend
+          - name: frontend
+            context: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - name: Login to ECR Public
+        run: |
+          aws ecr-public get-login-password --region us-east-1 |
+            docker login --username AWS --password-stdin public.ecr.aws
+      - uses: sigstore/cosign-installer@v3
+      - name: Build and push image
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ matrix.name }}:${{ github.sha }}
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ matrix.name }}:${{ github.sha }}
+          output-file: ${{ matrix.name }}-sbom.spdx.json
+          format: spdx-json
+      - name: Sign image and attach SBOM attestation
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ matrix.name }}@${{ steps.image.outputs.digest }}
+        run: |
+          cosign sign --yes "$IMAGE"
+          cosign attest --yes --predicate "${{ matrix.name }}-sbom.spdx.json" --type spdxjson "$IMAGE"
+          cosign verify "$IMAGE" \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/container-signing.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            > "${{ matrix.name }}-signature-verification.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}-signed-release-artifacts
+          path: |
+            ${{ matrix.name }}-sbom.spdx.json
+            ${{ matrix.name }}-signature-verification.json

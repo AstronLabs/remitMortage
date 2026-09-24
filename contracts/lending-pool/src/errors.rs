@@ -99,15 +99,20 @@ pub enum PoolError {
     /// `max_active_loans_per_borrower`.
     BorrowerLoanCapExceeded = 46,
     /// Refinancing request was submitted before the cooldown window elapsed.
-    RefinanceCooldownActive = 46,
-    /// Loan assumption is not authorized by borrower or new borrower.
-    AssumptionNotAuthorized = 47,
-    /// No pending loan assumption request found for this loan.
-    AssumptionNotFound = 48,
-    /// A loan assumption request already exists for this loan.
-    AssumptionAlreadyRequested = 49,
+    RefinanceCooldownActive = 47,
     /// Withdrawal amount exceeds the pool's configured per-transaction limit.
     WithdrawalExceedsMaxSingleLimit = 50,
-    /// Address is not whitelisted when permissioned mode is enabled.
-    AddressNotWhitelisted = 51,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum LoanAssumptionError {
+    ContractPaused = 1,
+    LoanNotFound = 2,
+    LoanNotActive = 3,
+    AssumptionNotAuthorized = 4,
+    ApplicantNotVerified = 5,
+    AssumptionNotFound = 6,
+    AssumptionAlreadyRequested = 7,
 }
