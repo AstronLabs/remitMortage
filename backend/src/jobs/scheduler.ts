@@ -9,6 +9,7 @@ import { runAdminPortfolioDigestJob } from "./adminPortfolioDigest.js";
 import { runSessionTokenPurgeJob } from "./sessionTokenPurge.js";
 import { runOrphanedRecordCleanupJob } from "./orphanedRecordCleanup.js";
 import { startAnalyticsRefreshScheduler, stopAnalyticsRefreshScheduler } from "./analyticsRefresh.js";
+import { startMtlsRotationScheduler, stopMtlsRotationScheduler } from "./mtlsRotationVerifier.js";
 
 let schedulerTask: ReturnType<typeof cron.schedule> | null = null;
 let kycExpiryTask: ReturnType<typeof cron.schedule> | null = null;
