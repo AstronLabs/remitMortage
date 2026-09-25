@@ -93,6 +93,10 @@ export interface Config {
   opsFallbackAlertEmail: string;
   /** Incoming Slack webhook URL for ops SLA alerts. */
   opsSlackWebhookUrl: string | null;
+  /** Recipient email for compliance and referential integrity audit alerts. */
+  complianceAlertEmail: string;
+  /** Incoming Slack webhook URL for compliance and referential integrity audit alerts. */
+  complianceSlackWebhookUrl: string | null;
   /** Number of days expired session/refresh tokens are retained before being purged. */
   sessionTokenRetentionDays: number;
   /** Compliance-reviewed retention window for soft-deleted borrower profiles. */
@@ -107,6 +111,8 @@ export interface Config {
   inviteCodeRequired: boolean;
   /** When true, new applications are auto-assigned to an active reviewer (issue #621). */
   assignmentQueueEnabled: boolean;
+  /** Duration (ms) above which a database operation is captured as a slow query (issue #583). */
+  slowQueryThresholdMs: number;
 }
 
 /** Parses APPLICATION_SLA_HOURS (a JSON map of status -> SLA hours). */
@@ -255,5 +261,6 @@ export function loadConfig(): Config {
     inviteCodeRequired: process.env.INVITE_CODE_REQUIRED === "true",
     // Default on: the assignment queue is additive and best-effort.
     assignmentQueueEnabled: process.env.ASSIGNMENT_QUEUE_ENABLED !== "false",
+    slowQueryThresholdMs: parseInt(process.env.SLOW_QUERY_THRESHOLD_MS || "200", 10),
   };
 }
