@@ -1,0 +1,71 @@
+name: Terraform Version Pinning
+
+# Enforces that every provider source and every registry module source in the
+# repository carries an exact version pin (e.g. version = "= 5.31.0").
+# Floating constraints (~>, >=, >, or missing entirely) fail the check with a
+# clear, actionable message pointing to the offending file and source.
+#
+# See docs/TERRAFORM_VERSION_PINNING.md for the full policy and bump workflow.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.tf'
+      - 'scripts/check-terraform-pinning.mjs'
+      - '.github/workflows/terraform-pinning.yml'
+  pull_request:
+    branches: [main, development]
+    paths:
+      - '**/*.tf'
+      - 'scripts/check-terraform-pinning.mjs'
+      - '.github/workflows/terraform-pinning.yml'
+
+jobs:
+  terraform-version-pinning:
+    name: Terraform Version Pinning Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Run the pinning check. On failure the script exits 1 and prints each
+      # offending file, type (provider/module), current constraint, and the
+      # exact change needed to fix it.
+      - name: Check Terraform Version Pins
+        run: node scripts/check-terraform-pinning.mjs
+
+      # On failure, also run the suggestion script so the PR shows both the
+      # violation list AND the registry-queried exact versions to use.
+      - name: Suggest Exact Version Pins (on failure)
+        if: failure()
+        run: |
+          echo ""
+          echo "══════════════════════════════════════════════════════════════"
+          echo " Auto-fix suggestions (querying Terraform Registry)..."
+          echo "══════════════════════════════════════════════════════════════"
+          bash scripts/suggest-terraform-pins.sh || true
+
+      - name: Pinning Check Summary (on failure)
+        if: failure()
+        run: |
+          echo ""
+          echo "════════════════════════════════════════════════════════════"
+          echo " POLICY: All Terraform provider and registry module sources"
+          echo " must use an exact version pin."
+          echo ""
+          echo " BAD  (floating):  version = \"~> 5.0\""
+          echo " BAD  (range):     version = \">= 5.0, < 6.0\""
+          echo " BAD  (missing):   (no version attribute)"
+          echo ""
+          echo " GOOD (exact):     version = \"= 5.31.0\""
+          echo ""
+          echo " See docs/TERRAFORM_VERSION_PINNING.md for the bump workflow."
+          echo "════════════════════════════════════════════════════════════"
+          exit 1
