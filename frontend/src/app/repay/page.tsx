@@ -4,7 +4,7 @@
 
 export const dynamic = "force-dynamic";
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import loadDynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -15,6 +15,7 @@ import {
   shortenAddress,
   STELLARCHAIN_TX_BASE,
 } from "../../lib/transaction-status";
+import { computePayoffCountdown, isFinalPayment } from "../../lib/payoffCountdown";
 import { track } from "../../lib/analytics";
 
 const Navbar = loadDynamic(() => import("../../components/Navbar"), { ssr: false });
@@ -175,6 +176,10 @@ function RepayInner() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
+  // Celebration: shown once, only on the true final payment
+  const [showCelebration, setShowCelebration] = useState(false);
+  const prevIsRepaidRef = useRef(false);
+
   // ── Check tx feedback on mount ────────────────────────────────────────────
 
   useEffect(() => {
@@ -313,6 +318,54 @@ function RepayInner() {
   const progressPct = totalOwed > 0 ? Math.min(100, Math.round((repaid / totalOwed) * 100)) : 0;
   const isRepaid = loan?.status === "Repaid" || (totalOwed > 0 && repaid >= totalOwed);
 
+  const { paymentsRemaining, estimatedPayoffDate } = schedule
+    ? computePayoffCountdown(schedule.paymentsMade, schedule.durationMonths)
+    : { paymentsRemaining: null, estimatedPayoffDate: null };
+
+  // Trigger the celebration screen exactly once when repaid status first appears
+  useEffect(() => {
+    if (isRepaid && !prevIsRepaidRef.current) {
+      const key = "loan_payoff_celebrated";
+      try {
+        if (!sessionStorage.getItem(key)) {
+          setShowCelebration(true);
+          sessionStorage.setItem(key, "1");
+        }
+      } catch {
+        setShowCelebration(true);
+      }
+    }
+    prevIsRepaidRef.current = isRepaid;
+  }, [isRepaid]);
+
+  function downloadCertificate() {
+    const lines = [
+      "LOAN PAYOFF CERTIFICATE",
+      "=======================",
+      "",
+      `Borrower:      ${publicKey ? shortenAddress(publicKey) : "N/A"}`,
+      `Principal:     ${formatUSDC(principal)} USDC`,
+      `Interest Rate: ${bpsToPercent(loan?.interestRateBps ?? 0)}`,
+      `Total Paid:    ${formatUSDC(totalOwed)} USDC`,
+      `Payments:      ${schedule?.durationMonths ?? 0} of ${schedule?.durationMonths ?? 0} completed`,
+      `Payoff Date:   ${new Date().toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })}`,
+      "",
+      "This certificate confirms full repayment of the above mortgage loan.",
+      "Issued by: RemitMortgage Protocol",
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "loan-payoff-certificate.txt";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // ── Handle repay ──────────────────────────────────────────────────────────
 
   async function handleRepay(e: React.FormEvent) {
@@ -446,15 +499,55 @@ function RepayInner() {
           </div>
         )}
 
-        {/* ── Completion Banner ── */}
-        {isRepaid && !loading && !error && (
-          <div className="mb-8 p-8 rounded-xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 text-center animate-fade-in-up">
+        {/* ── Celebration Screen (shown once on final payment) ── */}
+        {showCelebration && isRepaid && !loading && !error && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="mb-8 p-8 rounded-xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/10 via-emerald-500/5 to-transparent text-center animate-fade-in-up"
+          >
             <div className="text-5xl mb-4">{"\u{1F389}"}</div>
-            <h2 className="text-2xl font-bold gradient-text mb-2">Loan Fully Repaid</h2>
-            <p className="text-[var(--text-secondary)] max-w-md mx-auto">
-              Congratulations! You have successfully repaid your entire loan. Your financial freedom
-              journey continues.
+            <h2 className="text-3xl font-extrabold gradient-text mb-2">
+              Mortgage Fully Repaid!
+            </h2>
+            <p className="text-[var(--text-secondary)] max-w-md mx-auto mb-5">
+              Congratulations — you&apos;ve successfully paid off your mortgage. This is a major
+              financial milestone worth celebrating.
             </p>
+
+            <div className="grid grid-cols-2 gap-3 max-w-xs mx-auto text-left mb-6">
+              <div className="bg-black/20 rounded-lg p-3">
+                <p className="text-[10px] text-slate-500 uppercase font-bold mb-0.5">
+                  Total Paid
+                </p>
+                <p className="text-sm font-bold text-emerald-400 font-mono">
+                  {formatUSDC(totalOwed)} USDC
+                </p>
+              </div>
+              <div className="bg-black/20 rounded-lg p-3">
+                <p className="text-[10px] text-slate-500 uppercase font-bold mb-0.5">
+                  Payments
+                </p>
+                <p className="text-sm font-bold text-white font-mono">
+                  {schedule?.durationMonths ?? 0} completed
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button
+                onClick={downloadCertificate}
+                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm transition-colors"
+              >
+                Download Payoff Certificate
+              </button>
+              <button
+                onClick={() => setShowCelebration(false)}
+                className="inline-flex items-center justify-center px-5 py-2.5 rounded-xl border border-slate-700 text-slate-300 hover:text-white font-semibold text-sm transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 
@@ -543,6 +636,23 @@ function RepayInner() {
                       <p className="text-xs text-[var(--text-muted)] mt-0.5">
                         {schedule.paymentsMade} of {schedule.durationMonths} payments made
                       </p>
+                      {!isRepaid && paymentsRemaining !== null && paymentsRemaining > 0 && (
+                        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span className="text-sm font-semibold text-cyan-400">
+                            {paymentsRemaining} payment
+                            {paymentsRemaining !== 1 ? "s" : ""} remaining
+                          </span>
+                          {estimatedPayoffDate && (
+                            <span className="text-xs text-[var(--text-muted)]">
+                              &middot; Estimated payoff:{" "}
+                              {estimatedPayoffDate.toLocaleDateString("en-US", {
+                                year: "numeric",
+                                month: "long",
+                              })}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                     <div className="text-right text-xs text-[var(--text-muted)]">
                       <span className="inline-flex items-center gap-1">
