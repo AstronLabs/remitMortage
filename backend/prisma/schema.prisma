@@ -167,6 +167,9 @@ model Applicant {
   verificationStatus VerificationStatus @default(PENDING)
   creditScore        Int?
   taxId              String?
+  /// Keyed HMAC of the normalized tax ID, used for duplicate detection. The
+  /// plaintext value is never stored; `taxId` holds the encrypted copy.
+  taxIdHash          String?
   monthlyIncome      String?
   displayCurrency    String             @default("USD")
   createdAt          DateTime           @default(now())
@@ -179,6 +182,7 @@ model Applicant {
   deletedAt          DateTime?
 
   @@index([deletedAt])
+  @@index([taxIdHash])
 }
 
 model VerificationResult {
@@ -280,6 +284,10 @@ model LoanApplication {
   reason                 String?
   autoRejectedAt         DateTime?
   autoRejectionLogs      LoanAutoRejectionLog[]
+
+  // Set when the application needs a reviewer before it can proceed, e.g.
+  // DUPLICATE_TAX_ID when the tax ID matches another applicant.
+  manualReviewReason     String?
 
   // Index backing getApplicationsByBorrower(): filter by applicant then sort by createdAt
   @@index([applicantId, createdAt])

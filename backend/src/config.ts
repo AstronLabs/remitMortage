@@ -123,6 +123,8 @@ export interface Config {
   kycFailoverCooldownMs: number;
   /** Alert again when failover is still active after this long (ms). */
   kycFailoverAlertAfterMs: number;
+  /** HMAC key for applicant tax ID hashes used in duplicate detection. */
+  taxIdHashSecret: string;
 }
 
 /** Parses APPLICATION_SLA_HOURS (a JSON map of status -> SLA hours). */
@@ -276,5 +278,6 @@ export function loadConfig(): Config {
     kycProviderTimeoutMs: parseInt(process.env.KYC_PROVIDER_TIMEOUT_MS || "10000", 10),
     kycFailoverCooldownMs: parseInt(process.env.KYC_FAILOVER_COOLDOWN_MS || "60000", 10),
     kycFailoverAlertAfterMs: parseInt(process.env.KYC_FAILOVER_ALERT_AFTER_MS || "900000", 10),
+    taxIdHashSecret: process.env.TAX_ID_HASH_SECRET || "default_tax_id_hash_secret",
   };
 }

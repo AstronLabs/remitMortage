@@ -40,6 +40,8 @@ export interface LoanApplication {
   guarantorAddress?: string;
   /** Present only when a guarantor was attached to this loan. */
   guarantorStatus?: GuarantorStatus;
+  /** Why the application is held for a reviewer, e.g. DUPLICATE_TAX_ID. */
+  manualReviewReason?: string;
 }
 
 /** Options for attaching a guarantor at application creation time. */
@@ -62,6 +64,7 @@ function mapLoanApplication(record: any): LoanApplication {
     amount: String(record.principal),
     status: record.status,
     reason: record.reason ?? undefined,
+    manualReviewReason: record.manualReviewReason ?? undefined,
     createdAt: record.createdAt.toISOString(),
     // updatedAt is not on the schema model; fall back to createdAt
     updatedAt: (record.updatedAt ?? record.createdAt).toISOString(),
