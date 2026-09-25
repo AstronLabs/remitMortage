@@ -8,6 +8,7 @@ import { useWallet, OptionalWalletProvider } from "../../context/WalletContext";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 import ROIProjectionWidget from "../../components/ROIProjectionWidget";
+import { AutoReinvestModal } from "../../components/AutoReinvestModal";
 import { useGovernanceProposals, type GovernanceProposal } from "../../hooks/useGovernanceProposals";
 import { GovernanceVotingModal } from "../../components/governance/GovernanceVotingModal";
 import { SubmitProposalModal } from "../../components/governance/SubmitProposalModal";
@@ -126,6 +127,9 @@ function InvestPageInner() {
   const [withdrawing, setWithdrawing] = useState(false);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
 
+  const [autoReinvest, setAutoReinvest] = useState(false);
+  const [showAutoReinvestModal, setShowAutoReinvestModal] = useState(false);
+
   const { proposals, loading: loadingProposals, error: proposalsError, submitVote, createProposal } = useGovernanceProposals();
   const [selectedProposal, setSelectedProposal] = useState<GovernanceProposal | null>(null);
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState(false);
@@ -173,6 +177,14 @@ function InvestPageInner() {
     loadMetrics();
   }, [loadMetrics]);
 
+  useEffect(() => {
+    try {
+      setAutoReinvest(localStorage.getItem("investor_auto_reinvest") === "true");
+    } catch {
+      // localStorage may be unavailable in certain environments
+    }
+  }, []);
+
   async function handleDeposit(e: React.FormEvent) {
     e.preventDefault();
     setDepositError(null);
@@ -215,6 +227,21 @@ function InvestPageInner() {
     } finally {
       setDepositing(false);
     }
+  }
+
+  function handleAutoReinvestToggle() {
+    if (!autoReinvest) {
+      setShowAutoReinvestModal(true);
+    } else {
+      setAutoReinvest(false);
+      try { localStorage.setItem("investor_auto_reinvest", "false"); } catch {}
+    }
+  }
+
+  function confirmAutoReinvest() {
+    setAutoReinvest(true);
+    try { localStorage.setItem("investor_auto_reinvest", "true"); } catch {}
+    setShowAutoReinvestModal(false);
   }
 
   async function handleWithdraw() {
@@ -485,13 +512,33 @@ function InvestPageInner() {
                           ${formatUSDC(position.deposited)}
                         </p>
                       </div>
-                      <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4">
-                        <p className="text-[10px] text-slate-500 font-bold uppercase">
-                          Earned Yield
-                        </p>
-                        <p className="text-xl font-extrabold text-emerald-400 font-mono mt-1">
+                      <div
+                        className={`bg-slate-950/60 border rounded-xl p-4 transition-colors ${
+                          autoReinvest ? "border-cyan-500/30" : "border-slate-800"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-[10px] text-slate-500 font-bold uppercase">
+                            Earned Yield
+                          </p>
+                          {autoReinvest && (
+                            <span className="text-[9px] font-bold uppercase tracking-wider text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-1.5 py-0.5 rounded-full">
+                              Auto-Reinvesting
+                            </span>
+                          )}
+                        </div>
+                        <p
+                          className={`text-xl font-extrabold font-mono mt-1 ${
+                            autoReinvest ? "text-cyan-400" : "text-emerald-400"
+                          }`}
+                        >
                           ${formatUSDC(position.accruedYield)}
                         </p>
+                        {autoReinvest && (
+                          <p className="text-[10px] text-cyan-500/70 mt-0.5">
+                            rolling into principal
+                          </p>
+                        )}
                       </div>
                     </div>
 
@@ -503,6 +550,31 @@ function InvestPageInner() {
                         </span>
                       </div>
                     )}
+
+                    <div className="flex items-center justify-between py-2 border-t border-slate-800/60">
+                      <div>
+                        <span className="text-xs text-slate-300 font-medium">Auto-Reinvest Yield</span>
+                        <p className="text-[10px] text-slate-500">
+                          {autoReinvest
+                            ? "Yield compounds into principal"
+                            : "Yield held as claimable cash"}
+                        </p>
+                      </div>
+                      <button
+                        onClick={handleAutoReinvestToggle}
+                        aria-pressed={autoReinvest}
+                        aria-label="Toggle auto-reinvest yield"
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500/50 ${
+                          autoReinvest ? "bg-cyan-500" : "bg-slate-700"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+                            autoReinvest ? "translate-x-4" : "translate-x-0.5"
+                          }`}
+                        />
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <p className="text-xs text-slate-500">Loading position…</p>
@@ -594,6 +666,12 @@ function InvestPageInner() {
           isOpen={isSubmitModalOpen}
           onClose={() => setIsSubmitModalOpen(false)}
           onSubmit={createProposal}
+        />
+
+        <AutoReinvestModal
+          isOpen={showAutoReinvestModal}
+          onConfirm={confirmAutoReinvest}
+          onCancel={() => setShowAutoReinvestModal(false)}
         />
 
 
