@@ -391,10 +391,20 @@ function RepayInner() {
         <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight text-white mb-2">
           Loan <span className="gradient-text">Repayment Portal</span>
         </h1>
-        <p className="text-slate-400 text-sm md:text-base mb-8">
+        <p className="text-slate-400 text-sm md:text-base mb-4">
           Manage your loan payments, view repayment schedule, and track on-chain transaction
           history.
         </p>
+
+        <div className="no-print mb-8">
+          <Link
+            href="/statements/annual-interest"
+            className="inline-flex items-center gap-2 text-sm font-semibold text-cyan-400 hover:text-cyan-300 transition-colors"
+          >
+            View your annual mortgage interest statement
+            <span aria-hidden="true">{"\u2192"}</span>
+          </Link>
+        </div>
 
         {/* ── Tx Success Banner ── */}
         {txSuccess && (
