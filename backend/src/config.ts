@@ -109,6 +109,8 @@ export interface Config {
   draftStaleExpiryGraceDays: number;
   /** When true, registration requires a valid unused invite code (soft-launch gating). */
   inviteCodeRequired: boolean;
+  /** Duration (ms) above which a database operation is captured as a slow query (issue #583). */
+  slowQueryThresholdMs: number;
 }
 
 /** Parses APPLICATION_SLA_HOURS (a JSON map of status -> SLA hours). */
@@ -255,5 +257,6 @@ export function loadConfig(): Config {
       10
     ),
     inviteCodeRequired: process.env.INVITE_CODE_REQUIRED === "true",
+    slowQueryThresholdMs: parseInt(process.env.SLOW_QUERY_THRESHOLD_MS || "200", 10),
   };
 }

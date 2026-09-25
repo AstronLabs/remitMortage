@@ -699,3 +699,25 @@ model WaitlistEntry {
   @@index([status])
   @@index([createdAt])
 }
+
+/// One captured database operation whose duration exceeded the configurable
+/// slow-query threshold. Rows are rolled up by `fingerprint` into the weekly
+/// digest (issue #583).
+model SlowQueryLog {
+  id          String   @id @default(uuid())
+  /// Normalized query pattern (literals stripped) used for grouping.
+  query       String
+  /// Stable hash of the normalized pattern; groups equivalent statements.
+  fingerprint String
+  /// Prisma model the operation ran against, when applicable.
+  model       String?
+  /// Prisma operation name (e.g. findMany, create), when applicable.
+  operation   String?
+  /// Wall-clock duration of the operation in milliseconds.
+  durationMs  Int
+  occurredAt  DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([fingerprint])
+  @@index([fingerprint, occurredAt])
+}
