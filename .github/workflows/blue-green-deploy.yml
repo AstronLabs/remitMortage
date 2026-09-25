@@ -92,6 +92,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: determine-slots
     steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Verify signed image before deployment
+        env:
+          IMAGE: public.ecr.aws/remitmortgage/backend:${{ github.event.inputs.image_tag }}
+        run: |
+          cosign verify "$IMAGE" \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/container-signing.yml@refs/heads/main" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:

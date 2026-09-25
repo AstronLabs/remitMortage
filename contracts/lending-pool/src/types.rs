@@ -245,6 +245,18 @@ pub struct BatchDisburseItem {
     pub amount: i128,
 }
 
+/// Self-contained representation of a loan moved between compatible pools.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoanPortabilitySnapshot {
+    pub source_pool: Address,
+    pub loan_id: BytesN<32>,
+    pub loan: LoanRecord,
+    pub schedule: RepaymentSchedule,
+    pub schedule_present: bool,
+    pub exported_at_ledger: u32,
+}
+
 /// Storage keys for the lending pool contract.
 #[contracttype]
 #[derive(Clone)]

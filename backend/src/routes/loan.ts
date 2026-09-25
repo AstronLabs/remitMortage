@@ -139,7 +139,7 @@ loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"
 // GET /api/loan/borrower/:address
 // ---------------------------------------------------------------------------
 loanRouter.get("/borrower/:address", async (req, res) => {
-  const { address } = req.params ?? {};
+  const address = String(req.params?.address ?? "");
   try {
     StrKey.decodeEd25519PublicKey(address);
   } catch {
@@ -162,7 +162,7 @@ loanRouter.get("/pending", async (req, res) => {
 // ---------------------------------------------------------------------------
 // POST /api/loan/:id/approve
 loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const app = await getApplication(id);
   if (!app) return res.status(404).json({ error: "not_found" });
 
@@ -230,7 +230,7 @@ loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
 // POST /api/loan/:id/reject
 // ---------------------------------------------------------------------------
 loanRouter.post("/:id/reject", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const { reason } = req.body ?? {};
   const app = await getApplication(id);
   if (!app) return res.status(404).json({ error: "not_found" });
@@ -252,7 +252,7 @@ loanRouter.post("/:id/reject", async (req, res) => {
 // POST /api/loan/:id/resume
 // Resumes a Draft application flagged as stale, resetting its inactivity clock.
 loanRouter.post("/:id/resume", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const resumed = await resumeDraftApplication(id);
   if (!resumed) return res.status(404).json({ error: "not_found_or_not_draft" });
   return res.json(resumed);
@@ -261,7 +261,7 @@ loanRouter.post("/:id/resume", async (req, res) => {
 // POST /api/loan/:id/discard
 // Lets an applicant explicitly discard a Draft application before it would otherwise expire.
 loanRouter.post("/:id/discard", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const discarded = await discardDraftApplication(id);
   if (!discarded) return res.status(404).json({ error: "not_found_or_not_draft" });
   return res.json(discarded);
@@ -272,7 +272,7 @@ loanRouter.post("/:id/discard", async (req, res) => {
 // from the audit trail as it stood at that instant. Without `asOf`, the
 // current record is returned unchanged.
 loanRouter.get("/:id", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const asOfRaw = req.query.asOf;
 
   if (asOfRaw !== undefined) {
@@ -312,7 +312,7 @@ loanRouter.get("/:id", async (req, res) => {
 // POST /api/loan/:id/trigger-payment-due
 // ---------------------------------------------------------------------------
 loanRouter.post("/:id/trigger-payment-due", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const { email, webhookUrl, amount, dueDate } = req.body ?? {};
 
   const app = await getApplication(id);
@@ -389,7 +389,7 @@ loanRouter.post("/check-duplicate", async (req, res) => {
 // Logs manual reviewer decision (APPROVED or REJECTED) and updates loan application status.
 loanRouter.post("/:id/review", async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params?.id ?? "");
     const { reviewerId, decision, reason } = req.body ?? {};
 
     if (!reviewerId || !decision || (decision !== "APPROVED" && decision !== "REJECTED")) {
@@ -439,7 +439,7 @@ function extractMentions(content: string): string[] {
  * Also serves as the poll endpoint for real-time display.
  */
 loanRouter.get("/:id/comments", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const app = await getApplication(id);
   if (!app) return res.status(404).json({ error: "not_found" });
 
@@ -472,7 +472,7 @@ loanRouter.get("/:id/comments", async (req, res) => {
  * and persists to audit trail.
  */
 loanRouter.post("/:id/comments", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const { authorAddress, author, content, parentId } = req.body ?? {};
   const authorAddr = authorAddress || author;
 
@@ -558,4 +558,3 @@ loanRouter.post("/:id/comments", async (req, res) => {
     return res.status(500).json({ error: "failed_to_create_comment" });
   }
 });
-
