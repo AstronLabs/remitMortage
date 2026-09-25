@@ -38,6 +38,17 @@
   --color-amber: #f59e0b;
   --color-cyan: #06b6d4;
 
+  /* ── Color-Blind-Friendly Status Tokens ────────────────────────────────── */
+  /* Default palette (uses the standard colors above) */
+  --status-success: var(--color-green);
+  --status-warning: var(--color-amber);
+  --status-error: var(--color-red);
+  --status-info: var(--color-cyan);
+  --status-pending: var(--color-amber);
+  --status-overdue: var(--color-red);
+  --status-healthy: var(--color-green);
+  --status-neutral: var(--color-text-2);
+
   /* Border Radii */
   --r-sm: 8px;
   --r-md: 12px;
@@ -358,6 +369,45 @@
 }
 
 /* ══════════════════════════════════════════════════════════════════════
+   COLOR-BLIND-FRIENDLY PALETTE SYSTEM
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Color-blind-friendly palette overrides (validated against common deficiency simulations) */
+[data-palette="colorblind"] {
+  /* High-contrast, distinguishable colors for all status meanings */
+  --status-success: #0066cc;     /* Strong blue (replaces green) */
+  --status-warning: #ff8800;     /* Vivid orange (replaces yellow/amber) */
+  --status-error: #cc0000;       /* Deep red (enhanced contrast) */
+  --status-info: #6600cc;        /* Purple (replaces cyan) */
+  --status-pending: #ff8800;     /* Orange (same as warning for consistency) */
+  --status-overdue: #cc0000;     /* Deep red (same as error) */
+  --status-healthy: #0066cc;     /* Blue (same as success) */
+  --status-neutral: var(--color-text-2); /* Unchanged */
+
+  /* Update primary accents to be more distinguishable */
+  --color-blue: #0066cc;
+  --color-lime: #0066cc;         /* Use blue instead of green */
+  --color-amber: #ff8800;        /* Enhanced orange */
+  --color-red: #cc0000;          /* Enhanced red */
+  --color-cyan: #6600cc;         /* Use purple instead of cyan */
+  
+  /* Update gradient colors for better contrast */
+  --accent-gradient: linear-gradient(135deg, #0066cc, #6600cc, #ff8800);
+  --accent-gradient-warm: linear-gradient(135deg, #ff8800, #cc0000, #6600cc);
+}
+
+/* Combined light + colorblind palette */
+[data-theme="light"][data-palette="colorblind"] {
+  --status-success: #004499;     /* Darker blue for light theme */
+  --status-warning: #cc6600;     /* Darker orange for light theme */
+  --status-error: #990000;       /* Darker red for light theme */
+  --status-info: #4d0099;        /* Darker purple for light theme */
+  --status-pending: #cc6600;     
+  --status-overdue: #990000;     
+  --status-healthy: #004499;     
+}
+
+/* ══════════════════════════════════════════════════════════════════════
    BASE STYLES
    ══════════════════════════════════════════════════════════════════════ */
 *,
@@ -379,6 +429,89 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   STATUS COLORS WITH SHAPE/ICON INDICATORS (ACCESSIBILITY)
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Status color utilities that use semantic tokens */
+.status-success { color: var(--status-success); }
+.status-warning { color: var(--status-warning); }
+.status-error { color: var(--status-error); }
+.status-info { color: var(--status-info); }
+.status-pending { color: var(--status-pending); }
+.status-overdue { color: var(--status-overdue); }
+.status-healthy { color: var(--status-healthy); }
+.status-neutral { color: var(--status-neutral); }
+
+.bg-status-success { background-color: var(--status-success); }
+.bg-status-warning { background-color: var(--status-warning); }
+.bg-status-error { background-color: var(--status-error); }
+.bg-status-info { background-color: var(--status-info); }
+.bg-status-pending { background-color: var(--status-pending); }
+.bg-status-overdue { background-color: var(--status-overdue); }
+.bg-status-healthy { background-color: var(--status-healthy); }
+
+/* Status indicators with shapes for accessibility */
+.status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.status-indicator::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+}
+
+/* Success: Blue circle (colorblind) / Green circle (default) */
+.status-indicator.success::before {
+  background-color: var(--status-success);
+  border-radius: 50%;
+}
+
+/* Warning/Pending: Orange triangle */
+.status-indicator.warning::before,
+.status-indicator.pending::before {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 7px solid var(--status-warning);
+  background: transparent;
+}
+
+/* Error/Overdue: Red square with rounded corners */
+.status-indicator.error::before,
+.status-indicator.overdue::before {
+  background-color: var(--status-error);
+  border-radius: 2px;
+}
+
+/* Info: Purple diamond */
+.status-indicator.info::before {
+  width: 8px;
+  height: 8px;
+  background-color: var(--status-info);
+  transform: rotate(45deg);
+}
+
+/* Healthy: Same as success but with checkmark context */
+.status-indicator.healthy::before {
+  background-color: var(--status-healthy);
+  border-radius: 50%;
+}
+
+/* Neutral: Gray circle */
+.status-indicator.neutral::before {
+  background-color: var(--status-neutral);
+  border-radius: 50%;
 }
 
 /* RemitMortgage product homepage */
