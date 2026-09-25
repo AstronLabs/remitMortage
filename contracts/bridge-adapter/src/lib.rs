@@ -3,16 +3,21 @@
 
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, Vec};
 
 mod errors;
 mod types;
+
+/// Generic, interface-level compliance suite. Available to this crate's tests
+/// and, via the `compliance-tests` feature, to other adapter crates.
+#[cfg(any(test, feature = "compliance-tests"))]
+pub mod compliance;
 
 #[cfg(test)]
 mod test;
 
 pub use crate::errors::BridgeError;
-pub use crate::types::{BridgeConfig, BridgeOperation, BridgeState, AssetInfo};
+pub use crate::types::{AssetInfo, BridgeConfig, BridgeOperation, BridgeState};
 
 /// Cross-chain bridge adapter interface for future EVM collateral support.
 ///
@@ -160,7 +165,12 @@ impl StellarBridgeAdapter {
         max_lock_amount: i128,
         supported_chains: Vec<Symbol>,
     ) {
-        if env.storage().instance().get(&DataKey::Admin).is_some() {
+        if env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::Admin)
+            .is_some()
+        {
             panic!("already initialized");
         }
 
@@ -208,7 +218,7 @@ impl StellarBridgeAdapter {
         let mut config = Self::get_config(env);
         let index = config.supported_chains.iter().position(|c| c == chain);
         if let Some(idx) = index {
-            config.supported_chains.remove(idx);
+            config.supported_chains.remove(idx as u32);
         }
         env.storage().instance().set(&DataKey::Config, &config);
     }
@@ -237,13 +247,7 @@ impl StellarBridgeAdapter {
         destination_chain: Symbol,
         recipient: Address,
     ) -> Result<Symbol, BridgeError> {
-        <Self as BridgeAdapter>::lock(
-            &env,
-            &from,
-            amount,
-            &destination_chain,
-            &recipient,
-        )
+        <Self as BridgeAdapter>::lock(&env, &from, amount, &destination_chain, &recipient)
     }
 
     /// Mint wrapped assets through the adapter interface.
@@ -265,18 +269,54 @@ impl StellarBridgeAdapter {
         destination_chain: Symbol,
         recipient: Address,
     ) -> Result<Symbol, BridgeError> {
-        <Self as BridgeAdapter>::burn(
-            &env,
-            &from,
-            amount,
-            &destination_chain,
-            &recipient,
-        )
+        <Self as BridgeAdapter>::burn(&env, &from, amount, &destination_chain, &recipient)
     }
 
     /// Return aggregate operation counters and the current configuration.
     pub fn get_state(env: Env) -> BridgeState {
         <Self as BridgeAdapter>::get_state(&env)
+    }
+
+    /// Verify an operation's bridge-operator signature. Stub semantics: an
+    /// operation counts as signed once it exists on-chain.
+    pub fn verify_signature(env: Env, operation_id: Symbol, signature: Symbol) -> bool {
+        <Self as BridgeAdapter>::verify_signature(&env, &operation_id, &signature)
+    }
+
+    /// Allocates the next unique operation id, encoded as a decimal `Symbol`
+    /// (`"1"`, `"2"`, ...). Built without allocation so it works in `no_std`.
+    fn next_operation_id(env: &Env) -> Symbol {
+        let next = env
+            .storage()
+            .instance()
+            .get::<_, u64>(&DataKey::NextOperationId)
+            .unwrap_or(0)
+            + 1;
+        env.storage()
+            .instance()
+            .set(&DataKey::NextOperationId, &next);
+        Self::symbol_from_u64(env, next)
+    }
+
+    fn add_counter(env: &Env, key: &DataKey, amount: i128) {
+        let current = env.storage().instance().get::<_, i128>(key).unwrap_or(0);
+        env.storage().instance().set(key, &(current + amount));
+    }
+
+    /// Encodes a `u64` as a decimal `Symbol` without allocating.
+    fn symbol_from_u64(env: &Env, mut value: u64) -> Symbol {
+        if value == 0 {
+            return symbol_short!("op0");
+        }
+        let mut buf = [0u8; 20];
+        let mut index = buf.len();
+        while value > 0 {
+            index -= 1;
+            buf[index] = b'0' + (value % 10) as u8;
+            value /= 10;
+        }
+        let text = core::str::from_utf8(&buf[index..]).unwrap_or("op");
+        Symbol::new(env, text)
     }
 
     /// Internal helper to verify admin permissions.
@@ -298,7 +338,7 @@ impl BridgeAdapter for StellarBridgeAdapter {
         recipient: &Address,
     ) -> Result<Symbol, BridgeError> {
         let config = Self::get_config(env);
-        
+
         if config.paused {
             return Err(BridgeError::BridgePaused);
         }
@@ -319,9 +359,9 @@ impl BridgeAdapter for StellarBridgeAdapter {
             from: from.clone(),
             to: recipient.clone(),
             amount,
-            source_chain: Symbol::short(b"stellar"),
+            source_chain: symbol_short!("stellar"),
             destination_chain: destination_chain.clone(),
-            status: Symbol::short(b"locked"),
+            status: symbol_short!("locked"),
             timestamp: env.ledger().timestamp(),
         };
 
@@ -341,7 +381,7 @@ impl BridgeAdapter for StellarBridgeAdapter {
         source_chain: &Symbol,
     ) -> Result<(), BridgeError> {
         let config = Self::get_config(env);
-        
+
         if config.paused {
             return Err(BridgeError::BridgePaused);
         }
@@ -352,7 +392,7 @@ impl BridgeAdapter for StellarBridgeAdapter {
             .get::<_, BridgeOperation>(&DataKey::Operation(operation_id.clone()))
             .ok_or(BridgeError::OperationNotFound)?;
 
-        if operation.status == Symbol::short(b"completed") {
+        if operation.status == symbol_short!("completed") {
             return Err(BridgeError::AlreadyProcessed);
         }
 
@@ -369,10 +409,11 @@ impl BridgeAdapter for StellarBridgeAdapter {
         }
 
         let mut updated_operation = operation;
-        updated_operation.status = Symbol::short(b"completed");
-        env.storage()
-            .persistent()
-            .set(&DataKey::Operation(operation_id.clone()), &updated_operation);
+        updated_operation.status = symbol_short!("completed");
+        env.storage().persistent().set(
+            &DataKey::Operation(operation_id.clone()),
+            &updated_operation,
+        );
         Self::add_counter(env, &DataKey::TotalMinted, amount);
 
         Ok(())
@@ -386,7 +427,7 @@ impl BridgeAdapter for StellarBridgeAdapter {
         recipient: &Address,
     ) -> Result<Symbol, BridgeError> {
         let config = Self::get_config(env);
-        
+
         if config.paused {
             return Err(BridgeError::BridgePaused);
         }
@@ -407,9 +448,9 @@ impl BridgeAdapter for StellarBridgeAdapter {
             from: from.clone(),
             to: recipient.clone(),
             amount,
-            source_chain: Symbol::short(b"stellar"),
+            source_chain: symbol_short!("stellar"),
             destination_chain: destination_chain.clone(),
-            status: Symbol::short(b"burned"),
+            status: symbol_short!("burned"),
             timestamp: env.ledger().timestamp(),
         };
 
@@ -421,39 +462,35 @@ impl BridgeAdapter for StellarBridgeAdapter {
         Ok(operation_id)
     }
 
-    fn verify_signature(env: &Env, operation_id: &Symbol, signature: &Symbol) -> bool {
-        let operation_exists = env
-            .storage()
+    fn verify_signature(env: &Env, operation_id: &Symbol, _signature: &Symbol) -> bool {
+        // Stub: an operation is "signed" once it exists on-chain. A real
+        // adapter verifies the operator signature against its authorized key.
+        env.storage()
             .persistent()
-            .get::<_, BridgeOperation>(&DataKey::Operation(operation_id.clone()));
-
-        operation_exists.is_some() && !signature.to_string().is_empty()
+            .get::<_, BridgeOperation>(&DataKey::Operation(operation_id.clone()))
+            .is_some()
     }
 
     fn get_state(env: &Env) -> BridgeState {
         let config = Self::get_config(env);
         BridgeState {
             config: config.clone(),
-            total_locked: env.storage().instance().get(&DataKey::TotalLocked).unwrap_or(0),
-            total_minted: env.storage().instance().get(&DataKey::TotalMinted).unwrap_or(0),
-            total_burned: env.storage().instance().get(&DataKey::TotalBurned).unwrap_or(0),
+            total_locked: env
+                .storage()
+                .instance()
+                .get(&DataKey::TotalLocked)
+                .unwrap_or(0),
+            total_minted: env
+                .storage()
+                .instance()
+                .get(&DataKey::TotalMinted)
+                .unwrap_or(0),
+            total_burned: env
+                .storage()
+                .instance()
+                .get(&DataKey::TotalBurned)
+                .unwrap_or(0),
         }
-    }
-
-    fn next_operation_id(env: &Env) -> Symbol {
-        let next = env
-            .storage()
-            .instance()
-            .get::<_, u64>(&DataKey::NextOperationId)
-            .unwrap_or(0)
-            + 1;
-        env.storage().instance().set(&DataKey::NextOperationId, &next);
-        next.into()
-    }
-
-    fn add_counter(env: &Env, key: &DataKey, amount: i128) {
-        let current = env.storage().instance().get::<_, i128>(key).unwrap_or(0);
-        env.storage().instance().set(key, &(current + amount));
     }
 }
 

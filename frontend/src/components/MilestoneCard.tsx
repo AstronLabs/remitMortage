@@ -5,6 +5,7 @@
 import React, { useCallback, useState } from "react";
 import { useToast } from "@/context/ToastContext";
 import EvidenceUpload from "./EvidenceUpload";
+import MilestoneSubmissionForm, { MilestoneSubmission } from "./MilestoneSubmissionForm";
 import MilestoneTracker, { Stage } from "./MilestoneTracker";
 import MilestoneSigningProgressPanel from "./MilestoneSigningProgressPanel";
 import { createMilestoneProposal } from "@/lib/milestoneSigning";
@@ -20,6 +21,7 @@ interface MilestoneProps {
 export default function MilestoneCard({ id, name, initialStage, shareId }: MilestoneProps) {
   const [stage, setStage] = useState<Stage>(initialStage);
   const [cid, setCid] = useState<string | null>(null);
+  const [submission, setSubmission] = useState<MilestoneSubmission | null>(null);
   const [proposalId, setProposalId] = useState<string | null>(null);
   const [isRequesting, setIsRequesting] = useState(false);
   const { toast } = useToast();
@@ -27,7 +29,9 @@ export default function MilestoneCard({ id, name, initialStage, shareId }: Miles
   const handleShare = useCallback(async () => {
     const url = `${window.location.origin}/share/${encodeURIComponent(shareId!)}`;
     if (navigator.share) {
-      try { await navigator.share({ title: `${name} — RemitMortgage`, url }); } catch {}
+      try {
+        await navigator.share({ title: `${name} — RemitMortgage`, url });
+      } catch {}
     } else {
       await navigator.clipboard.writeText(url);
       toast({
@@ -99,7 +103,15 @@ export default function MilestoneCard({ id, name, initialStage, shareId }: Miles
               className="text-[11px] font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2.5 py-1 rounded-full transition-colors flex items-center gap-1.5"
               aria-label={`Share ${name}`}
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="w-3 h-3"
+              >
                 <circle cx="18" cy="5" r="3" />
                 <circle cx="6" cy="12" r="3" />
                 <circle cx="18" cy="19" r="3" />
@@ -131,12 +143,13 @@ export default function MilestoneCard({ id, name, initialStage, shareId }: Miles
 
       {stage === "Pending" && (
         <>
+          <MilestoneSubmissionForm milestoneId={id} onSubmit={(data) => setSubmission(data)} />
           <EvidenceUpload milestoneId={id} onUploadSuccess={handleUploadSuccess} />
           <button
             onClick={() => void handleRequestDisbursement()}
-            disabled={!cid || isRequesting}
+            disabled={!cid || !submission?.description || isRequesting}
             className={`mt-4 w-full py-3 rounded-full font-bold transition-all flex items-center justify-center gap-2 ${
-              cid && !isRequesting
+              cid && submission?.description && !isRequesting
                 ? "bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-primary-light)] shadow-lg hover:shadow-[var(--shadow-glow)]"
                 : "bg-[var(--bg-primary)] text-[var(--text-muted)] border border-[var(--border-color)] cursor-not-allowed"
             }`}

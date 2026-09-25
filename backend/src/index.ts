@@ -65,6 +65,7 @@ import { startScheduler } from "./jobs/scheduler.js";
 import { startBackupScheduler, startBackupCleanupScheduler } from "./jobs/backupScheduler.js";
 import { startWebhookKeyRotationScheduler } from "./jobs/webhookKeyRotation.js";
 import { startSecretsRotationScheduler } from "./jobs/secretsRotation.js";
+import { startJwtKeyRotationScheduler } from "./jobs/jwtKeyRotation.js";
 import { startRpcHealthMonitor } from "./services/rpcHealthMonitor.js";
 import { loadConfig } from "./config.js";
 import logger from "./utils/logger.js";
@@ -244,6 +245,7 @@ app.listen(PORT, () => {
   startBackupCleanupScheduler();
   startWebhookKeyRotationScheduler();
   startSecretsRotationScheduler();
+  startJwtKeyRotationScheduler();
   // Proactively monitor Soroban RPC node health and alert operators on
   // degradation, downtime or failover through the existing webhook mechanism.
   startRpcHealthMonitor();

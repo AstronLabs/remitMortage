@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { Router, Request, Response } from "express";
-import jwt from "jsonwebtoken";
+import { signSessionToken } from "../services/jwtKeyRing.js";
 import { isInviteRequired, validateInviteCode, consumeInviteCode } from "../services/inviteCode.js";
 import { upsertApplicant } from "../services/db.js";
 import logger from "../utils/logger.js";
@@ -90,9 +90,11 @@ authRouter.post("/register", async (req: Request, res: Response) => {
       }
     }
 
-    const token = jwt.sign(
+    // Signed with the current key of the rotation ring; the token carries that
+    // key's `kid` so verification can also accept the previous key during its
+    // grace period.
+    const token = signSessionToken(
       { walletAddress, email: email || null },
-      process.env.JWT_SECRET || "default_jwt_secret",
       { expiresIn: "24h" }
     );
 
