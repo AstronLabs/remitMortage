@@ -289,6 +289,12 @@ model LoanApplication {
   // DUPLICATE_TAX_ID when the tax ID matches another applicant.
   manualReviewReason     String?
 
+  // Current servicer of record. Null means the originating lender still
+  // services the loan. Changed only through LoanServicingTransfer.
+  servicer               String?
+  servicerContact        String?
+  servicingTransfers     LoanServicingTransfer[]
+
   // Index backing getApplicationsByBorrower(): filter by applicant then sort by createdAt
   @@index([applicantId, createdAt])
   // Index backing getPendingApplications(): WHERE status = 'Pending' — avoids full table scan
@@ -300,6 +306,34 @@ model LoanApplication {
   @@index([deletedAt])
   // Composite index backing the stale draft cleanup scan: WHERE status = 'Draft' AND lastActivityAt < cutoff
   @@index([status, lastActivityAt])
+}
+
+enum ServicingTransferStatus {
+  SCHEDULED
+  COMPLETED
+}
+
+/// Append-only history of servicing rights transfers for a loan. Rows are
+/// never overwritten, so every prior servicer stays queryable.
+model LoanServicingTransfer {
+  id                  String                  @id @default(uuid())
+  loanApplicationId   String
+  loanApplication     LoanApplication         @relation(fields: [loanApplicationId], references: [id], onDelete: Cascade)
+  fromServicer        String?
+  fromServicerContact String?
+  toServicer          String
+  toServicerContact   String
+  effectiveDate       DateTime
+  reason              String
+  status              ServicingTransferStatus @default(SCHEDULED)
+  initiatedBy         String
+  notifiedAt          DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime                @default(now())
+
+  @@index([loanApplicationId, createdAt])
+  // Backs the job that applies due transfers: WHERE status = 'SCHEDULED' AND effectiveDate <= now()
+  @@index([status, effectiveDate])
 }
 
 enum AutoRejectionRuleType {
