@@ -37,6 +37,7 @@ import { workspaceRouter } from "./routes/workspace.js";
 import { userRouter } from "./routes/user.js";
 import { metricsRouter } from "./routes/metrics.js";
 import { referralRouter } from "./routes/referral.js";
+import { tenantRouter } from "./routes/tenant.js";
 import { getTrackedConnectionLimit } from "./services/dbPoolMetrics.js";
 import { webhooksRouter } from "./routes/webhooks.js";
 import { incidentWebhookRouter } from "./routes/incidentWebhooks.js";
@@ -49,6 +50,7 @@ import { errorHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { logMasker } from "./middleware/logMasker.js";
 import { correlationId } from "./middleware/correlationId.js";
+import { tenantContext } from "./services/tenant.js";
 import { httpMetricsMiddleware } from "./middleware/metricsMiddleware.js";
 import { tracingMiddleware } from "./middleware/tracingMiddleware.js";
 import { authMiddleware } from "./middleware/auth.js";
@@ -69,6 +71,12 @@ import { startSecretsRotationScheduler } from "./jobs/secretsRotation.js";
 import { startJwtKeyRotationScheduler } from "./jobs/jwtKeyRotation.js";
 import { startRpcHealthMonitor } from "./services/rpcHealthMonitor.js";
 import { loadConfig } from "./config.js";
+import { getOcrProvider, setOcrProvider } from "./services/ocrService.js";
+import {
+  FailoverKycProvider,
+  HttpKycProvider,
+  sendKycFailoverAlert,
+} from "./services/kycProviderFailover.js";
 import logger from "./utils/logger.js";
 import { feeEstimator } from "./services/feeEstimator.js";
 import { initializeRedis } from "./services/redis.js";
@@ -82,6 +90,28 @@ import { startAnalyticsWorker, stopAnalyticsWorker } from "./workers/analyticsWo
 const app = express();
 const config = loadConfig();
 const PORT = config.port;
+
+// Serve KYC document verification from a backup provider when the primary
+// keeps failing. Disabled unless a backup provider URL is configured.
+if (config.kycBackupProviderUrl) {
+  setOcrProvider(
+    new FailoverKycProvider(
+      getOcrProvider(),
+      new HttpKycProvider({
+        url: config.kycBackupProviderUrl,
+        apiKey: config.kycBackupProviderApiKey,
+        timeoutMs: config.kycProviderTimeoutMs,
+      }),
+      {
+        failureThreshold: config.kycFailoverThreshold,
+        timeoutMs: config.kycProviderTimeoutMs,
+        cooldownMs: config.kycFailoverCooldownMs,
+        persistAlertAfterMs: config.kycFailoverAlertAfterMs,
+        onAlert: sendKycFailoverAlert,
+      }
+    )
+  );
+}
 
 void initializeRedis();
 
@@ -134,6 +164,7 @@ void (async () => {
 // Correlation ID must be first so every downstream middleware, handler and
 // log line for this request resolves the same trace ID.
 app.use(correlationId);
+app.use(tenantContext);
 // HTTP metrics must be first so the timer starts at the earliest possible point.
 app.use(httpMetricsMiddleware);
 app.use(tracingMiddleware);
@@ -211,6 +242,7 @@ app.use("/api/audit-logs", auditRouter);
 app.use("/api/kyc", kycRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/referral", referralRouter);
+app.use("/api/tenant", tenantRouter);
 app.use("/api/admin", authMiddleware, adminRouter);
 app.use("/api/admin", adminAuthRouter);
 app.use("/api/admin/api-keys", apiKeysRouter);

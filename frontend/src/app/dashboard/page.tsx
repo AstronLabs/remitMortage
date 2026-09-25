@@ -194,7 +194,7 @@ export default function DashboardPage() {
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
                   Escrow Deposited
                 </span>
-                <div className="text-2xl font-extrabold text-cyan-400 mt-1 font-mono">
+                <div className="text-2xl font-extrabold status-info mt-1 font-mono">
                   ${Number(status?.escrow.deposited).toLocaleString()} USDC
                 </div>
               </div>
@@ -210,7 +210,7 @@ export default function DashboardPage() {
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
                   Escrow Progress
                 </span>
-                <div className="text-2xl font-extrabold text-emerald-400 mt-1 font-mono">
+                <div className="text-2xl font-extrabold status-healthy mt-1 font-mono">
                   {status?.escrow.progress}%
                 </div>
               </div>
@@ -218,7 +218,7 @@ export default function DashboardPage() {
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
                   Loan Principal
                 </span>
-                <div className="text-2xl font-extrabold text-indigo-400 mt-1 font-mono">
+                <div className="text-2xl font-extrabold status-pending mt-1 font-mono">
                   ${Number(status?.loan.principal).toLocaleString()} USDC
                 </div>
               </div>

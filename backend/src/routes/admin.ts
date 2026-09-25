@@ -11,15 +11,20 @@ import { bulkReviewApplications, type BulkReviewDecision } from "../services/loa
 import { mergeApplicants, MergeValidationError } from "../services/applicantMerge.js";
 import { promoteWaitlistBatch } from "../services/inviteCode.js";
 import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
+import { getTaxIdMatchesForApplication } from "../services/taxIdDedup.js";
+import {
+  initiateServicingTransfer,
+  getServicingHistory,
+  ServicingTransferError,
+} from "../services/loanServicing.js";
 import { listAutoRejectionRules, createAutoRejectionRule, updateAutoRejectionRule } from "../services/autoRejectionRuleStore.js";
 import {
-  AssignmentError,
-  createReviewer,
-  listReviewers,
-  reassignApplicationReviewer,
-  updateReviewer,
-  type ReviewerStatus,
-} from "../services/assignmentQueue.js";
+  getWebhookLatencyReport,
+  DEFAULT_LATENCY_SLA_MS,
+  DEFAULT_LATENCY_WINDOW_MINUTES,
+  MAX_LATENCY_WINDOW_MINUTES,
+} from "../services/webhookLatency.js";
+import { loadConfig } from "../config.js";
 
 export const adminRouter = Router();
 
@@ -148,114 +153,57 @@ adminRouter.post("/loans/bulk-review", requireAdmin, async (req: AuthenticatedRe
   }
 });
 
-// ── Application assignment queue (issue #621) ─────────────────────────────
-//
-// New applications are auto-assigned round-robin to active reviewers. These
-// endpoints let admins override a specific assignment and manage the pool of
-// review staff (including marking someone inactive / on leave).
-
-/**
- * @openapi
- * /api/admin/applications/{id}/reassign:
- *   post:
- *     summary: Manually reassign a loan application to a reviewer
- *     tags: [Admin]
- *     security: [bearerAuth: []]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string }
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [reviewerId]
- *             properties:
- *               reviewerId: { type: string }
- *     responses:
- *       200: { description: Reassigned }
- *       404: { description: Application or reviewer not found }
- *       409: { description: Reviewer is inactive/on leave }
- */
-adminRouter.post("/applications/:id/reassign", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
-  const { reviewerId } = req.body ?? {};
-  if (!reviewerId || typeof reviewerId !== "string") {
-    return res.status(400).json({ error: "invalid_request", message: "reviewerId is required" });
-  }
-
+// Reviewer context for applications held with DUPLICATE_TAX_ID: the other
+// applicants sharing the tax ID and their applications. The tax ID itself is
+// never returned.
+adminRouter.get("/loans/:id/tax-id-matches", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const result = await reassignApplicationReviewer(String(req.params.id), reviewerId, {
-      actorAddress: req.user?.walletAddress ?? "admin",
-      ipAddress: req.ip ?? null,
-    });
+    const result = await getTaxIdMatchesForApplication(String(req.params.id));
+    if (!result) {
+      return res.status(404).json({ error: "not_found", message: "Loan application not found" });
+    }
     return res.json(result);
   } catch (error) {
-    if (error instanceof AssignmentError) {
-      return res.status(error.status).json({ error: error.code, message: error.message });
-    }
-    logger.error("Application reassign error", { error });
-    return res.status(500).json({ error: "reassign_failed" });
+    logger.error("Tax ID match lookup error", { error });
+    return res.status(500).json({ error: "failed_to_load_tax_id_matches" });
   }
 });
 
-adminRouter.get("/reviewers", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+// ── Loan servicing transfer ──────────────────────────────────────────────
+
+adminRouter.post("/loans/:id/servicing-transfer", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const body = req.body ?? {};
   try {
-    return res.json(await listReviewers());
-  } catch (error) {
-    logger.error("List reviewers error", { error });
-    return res.status(500).json({ error: "failed_to_list_reviewers" });
-  }
-});
-
-adminRouter.post("/reviewers", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
-  const { email, name, status } = req.body ?? {};
-  if (!email || typeof email !== "string") {
-    return res.status(400).json({ error: "invalid_request", message: "email is required" });
-  }
-  if (status !== undefined && !["ACTIVE", "INACTIVE", "ON_LEAVE"].includes(status)) {
-    return res.status(400).json({ error: "invalid_status", message: "status must be ACTIVE, INACTIVE or ON_LEAVE" });
-  }
-
-  try {
-    const reviewer = await createReviewer({ email, name, status: status as ReviewerStatus | undefined });
-    return res.status(201).json(reviewer);
-  } catch (error: any) {
-    if (error?.code === "P2002") {
-      return res.status(409).json({ error: "reviewer_exists", message: "A reviewer with that email already exists" });
-    }
-    logger.error("Create reviewer error", { error });
-    return res.status(500).json({ error: "failed_to_create_reviewer" });
-  }
-});
-
-adminRouter.patch("/reviewers/:id", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
-  const { email, name, status } = req.body ?? {};
-  if (status !== undefined && !["ACTIVE", "INACTIVE", "ON_LEAVE"].includes(status)) {
-    return res.status(400).json({ error: "invalid_status", message: "status must be ACTIVE, INACTIVE or ON_LEAVE" });
-  }
-  if (email !== undefined && typeof email !== "string") {
-    return res.status(400).json({ error: "invalid_email", message: "email must be a string" });
-  }
-
-  try {
-    const reviewer = await updateReviewer(String(req.params.id), {
-      ...(name !== undefined ? { name } : {}),
-      ...(email !== undefined ? { email } : {}),
-      ...(status !== undefined ? { status: status as ReviewerStatus } : {}),
+    const transfer = await initiateServicingTransfer({
+      loanId: String(req.params.id),
+      toServicer: body.toServicer,
+      toServicerContact: body.toServicerContact,
+      effectiveDate: body.effectiveDate,
+      reason: body.reason,
+      investorAddresses: body.investorAddresses,
+      initiatedBy: req.user?.walletAddress ?? "admin-api-key",
+      ipAddress: req.ip,
     });
-    return res.json(reviewer);
-  } catch (error: any) {
-    if (error?.code === "P2025") {
-      return res.status(404).json({ error: "reviewer_not_found" });
+    return res.status(201).json(transfer);
+  } catch (error) {
+    if (error instanceof ServicingTransferError) {
+      return res.status(error.httpStatus).json({ error: error.code, message: error.message });
     }
-    if (error?.code === "P2002") {
-      return res.status(409).json({ error: "reviewer_exists", message: "A reviewer with that email already exists" });
+    logger.error("Loan servicing transfer error", { error });
+    return res.status(500).json({ error: "servicing_transfer_failed" });
+  }
+});
+
+adminRouter.get("/loans/:id/servicing-history", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const history = await getServicingHistory(String(req.params.id));
+    if (!history) {
+      return res.status(404).json({ error: "not_found", message: "Loan application not found" });
     }
-    logger.error("Update reviewer error", { error });
-    return res.status(500).json({ error: "failed_to_update_reviewer" });
+    return res.json(history);
+  } catch (error) {
+    logger.error("Loan servicing history error", { error });
+    return res.status(500).json({ error: "failed_to_load_servicing_history" });
   }
 });
 
@@ -310,6 +258,60 @@ adminRouter.patch("/auto-rejection-rules/:id", requireAdmin, async (req: Authent
   } catch (error) {
     logger.error("Update auto-rejection rule error", { error });
     return res.status(404).json({ error: "rule_not_found" });
+  }
+});
+
+function positiveIntParam(raw: unknown, fallback: number): number | null {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/**
+ * @openapi
+ * /api/admin/webhooks/latency:
+ *   get:
+ *     summary: Webhook delivery latency percentiles per endpoint
+ *     description: >-
+ *       Returns p50/p95/p99 dispatch-to-delivery latency for each subscriber
+ *       endpoint over a rolling window, with retry and DLQ counts. Endpoints
+ *       whose p95 exceeds the SLA threshold, or that only dead-lettered in the
+ *       window, are flagged with slaBreached.
+ *     tags:
+ *       - Admin
+ *     parameters:
+ *       - in: query
+ *         name: windowMinutes
+ *         schema: { type: integer, minimum: 1, maximum: 10080 }
+ *       - in: query
+ *         name: slaMs
+ *         schema: { type: integer, minimum: 1 }
+ *     responses:
+ *       200:
+ *         description: Latency report.
+ *       400:
+ *         description: Invalid windowMinutes or slaMs.
+ */
+adminRouter.get("/webhooks/latency", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const config = loadConfig();
+  const windowMinutes = positiveIntParam(
+    req.query.windowMinutes,
+    config.webhookLatencyWindowMinutes || DEFAULT_LATENCY_WINDOW_MINUTES
+  );
+  const slaMs = positiveIntParam(req.query.slaMs, config.webhookLatencySlaMs || DEFAULT_LATENCY_SLA_MS);
+
+  if (windowMinutes === null || windowMinutes > MAX_LATENCY_WINDOW_MINUTES) {
+    return res.status(400).json({ error: "invalid_window_minutes" });
+  }
+  if (slaMs === null) {
+    return res.status(400).json({ error: "invalid_sla_ms" });
+  }
+
+  try {
+    return res.json(await getWebhookLatencyReport({ windowMinutes, slaMs }));
+  } catch (error) {
+    logger.error("Webhook latency report error", { error });
+    return res.status(500).json({ error: "webhook_latency_report_failed" });
   }
 });
 

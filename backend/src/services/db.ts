@@ -5,6 +5,7 @@ import { PrismaClient, Prisma } from "@prisma/client";
 import { createHash } from "crypto";
 
 import { encrypt, decrypt } from "../utils/crypto.js";
+import { hashTaxId } from "../utils/taxIdHash.js";
 import {
   buildDatabaseUrl,
   resolveReadReplicaSettings,
@@ -413,7 +414,10 @@ export async function upsertApplicant(
     monthlyIncome?: string;
   }
 ) {
-  const encrypted = encryptFields(data);
+  const encrypted: Record<string, any> = encryptFields(data);
+  if (data.taxId) {
+    encrypted.taxIdHash = hashTaxId(data.taxId);
+  }
   return prisma.applicant.upsert({
     where: { stellarAddress },
     update: { ...encrypted, deletedAt: null, updatedAt: new Date() },
@@ -693,6 +697,7 @@ export async function processUserDataDeletion(stellarAddress: string, reason?: s
       where: { id: applicant.id },
       data: {
         taxId: null,
+        taxIdHash: null,
         monthlyIncome: null,
         creditScore: null,
         verificationStatus: "INELIGIBLE",

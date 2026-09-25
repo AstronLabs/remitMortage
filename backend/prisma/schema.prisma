@@ -167,6 +167,9 @@ model Applicant {
   verificationStatus VerificationStatus @default(PENDING)
   creditScore        Int?
   taxId              String?
+  /// Keyed HMAC of the normalized tax ID, used for duplicate detection. The
+  /// plaintext value is never stored; `taxId` holds the encrypted copy.
+  taxIdHash          String?
   monthlyIncome      String?
   displayCurrency    String             @default("USD")
   createdAt          DateTime           @default(now())
@@ -179,6 +182,7 @@ model Applicant {
   deletedAt          DateTime?
 
   @@index([deletedAt])
+  @@index([taxIdHash])
 }
 
 model VerificationResult {
@@ -286,6 +290,16 @@ model LoanApplication {
   autoRejectedAt         DateTime?
   autoRejectionLogs      LoanAutoRejectionLog[]
 
+  // Set when the application needs a reviewer before it can proceed, e.g.
+  // DUPLICATE_TAX_ID when the tax ID matches another applicant.
+  manualReviewReason     String?
+
+  // Current servicer of record. Null means the originating lender still
+  // services the loan. Changed only through LoanServicingTransfer.
+  servicer               String?
+  servicerContact        String?
+  servicingTransfers     LoanServicingTransfer[]
+
   // Index backing getApplicationsByBorrower(): filter by applicant then sort by createdAt
   @@index([applicantId, createdAt])
   // Index backing getPendingApplications(): WHERE status = 'Pending' — avoids full table scan
@@ -299,6 +313,34 @@ model LoanApplication {
   @@index([status, lastActivityAt])
   // Index backing reviewer workload queries (applications assigned to a reviewer)
   @@index([assignedReviewerId])
+}
+
+enum ServicingTransferStatus {
+  SCHEDULED
+  COMPLETED
+}
+
+/// Append-only history of servicing rights transfers for a loan. Rows are
+/// never overwritten, so every prior servicer stays queryable.
+model LoanServicingTransfer {
+  id                  String                  @id @default(uuid())
+  loanApplicationId   String
+  loanApplication     LoanApplication         @relation(fields: [loanApplicationId], references: [id], onDelete: Cascade)
+  fromServicer        String?
+  fromServicerContact String?
+  toServicer          String
+  toServicerContact   String
+  effectiveDate       DateTime
+  reason              String
+  status              ServicingTransferStatus @default(SCHEDULED)
+  initiatedBy         String
+  notifiedAt          DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime                @default(now())
+
+  @@index([loanApplicationId, createdAt])
+  // Backs the job that applies due transfers: WHERE status = 'SCHEDULED' AND effectiveDate <= now()
+  @@index([status, effectiveDate])
 }
 
 enum AutoRejectionRuleType {
@@ -617,11 +659,18 @@ model WebhookDelivery {
   attempt        Int                 @default(0)
   /// When the next retry should be attempted (null once terminal).
   nextRetryAt    DateTime?
+  /// When the event was originally dispatched (shared by every attempt of one dispatch).
+  dispatchedAt   DateTime?
+  /// When this attempt finished (response received or request failed).
+  completedAt    DateTime?
+  /// Attempt outcome: "success", "retry" (will be retried) or "dlq" (moved to the DLQ).
+  outcome        String?
   createdAt      DateTime            @default(now())
 
   @@index([subscriptionId])
   @@index([success])
   @@index([nextRetryAt])
+  @@index([completedAt])
 }
 
 model ApiKey {
