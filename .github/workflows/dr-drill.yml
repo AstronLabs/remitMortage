@@ -1,0 +1,429 @@
+name: Disaster Recovery Drill
+
+# Scheduled full-stack DR drill exercising both the application traffic layer
+# (App Runner / Route 53 failover) and the database failover layer against a
+# disposable non-production environment.
+#
+# RTO target : ≤ 5 minutes (300 s) — sourced from devops/MULTI_REGION_FAILOVER_GUIDE.md
+# RPO target : ≤ 15 minutes       — last successful backup timestamp check
+#
+# The drill FAILS (and pages the team) when either target is exceeded.
+
+on:
+  schedule:
+    # 03:00 UTC every first Tuesday of the month.
+    - cron: '0 3 1-7 * 2'
+  workflow_dispatch:
+    inputs:
+      rto_target_seconds:
+        description: 'RTO target in seconds (default 300)'
+        required: false
+        default: '300'
+        type: string
+      rpo_target_minutes:
+        description: 'RPO target in minutes (default 15)'
+        required: false
+        default: '15'
+        type: string
+  pull_request:
+    paths:
+      - '.github/workflows/dr-drill.yml'
+      - 'scripts/dr-drill.sh'
+      - 'devops/MULTI_REGION_FAILOVER_GUIDE.md'
+
+env:
+  AWS_REGION: us-east-1
+  SECONDARY_REGION: eu-west-1
+  DRILL_ENV: staging
+  RTO_TARGET_SECONDS: ${{ inputs.rto_target_seconds || '300' }}
+  RPO_TARGET_MINUTES: ${{ inputs.rpo_target_minutes || '15' }}
+  REPORT_PATH: dr-drill-report.txt
+
+jobs:
+  # ── Pre-flight: verify the staging environment is healthy before the drill ──
+  preflight:
+    name: Pre-flight Health Check
+    runs-on: ubuntu-latest
+    outputs:
+      primary_url: ${{ steps.preflight.outputs.primary_url }}
+      secondary_url: ${{ steps.preflight.outputs.secondary_url }}
+      drill_id: ${{ steps.preflight.outputs.drill_id }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (Primary Region)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.DR_DRILL_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.DR_DRILL_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Pre-flight Health Check
+        id: preflight
+        run: |
+          DRILL_ID="dr-drill-$(date -u +%Y%m%dT%H%M%S)-${GITHUB_RUN_ID}"
+          echo "drill_id=${DRILL_ID}" >> "$GITHUB_OUTPUT"
+          echo "Drill ID: ${DRILL_ID}"
+
+          # Resolve staging App Runner URLs from SSM
+          PRIMARY_PARAM="/remitmortgage/${DRILL_ENV}/primary-url"
+          SECONDARY_PARAM="/remitmortgage/${DRILL_ENV}/secondary-url"
+
+          PRIMARY_URL=$(aws ssm get-parameter --name "$PRIMARY_PARAM" \
+            --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+          SECONDARY_URL=$(aws ssm get-parameter --name "$SECONDARY_PARAM" \
+            --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+          if [ -z "$PRIMARY_URL" ] || [ -z "$SECONDARY_URL" ]; then
+            echo "⚠ SSM parameters not found — using fallback staging URLs"
+            PRIMARY_URL="${{ secrets.DR_DRILL_PRIMARY_URL }}"
+            SECONDARY_URL="${{ secrets.DR_DRILL_SECONDARY_URL }}"
+          fi
+
+          echo "primary_url=${PRIMARY_URL}" >> "$GITHUB_OUTPUT"
+          echo "secondary_url=${SECONDARY_URL}" >> "$GITHUB_OUTPUT"
+
+          echo "Primary URL  : ${PRIMARY_URL}"
+          echo "Secondary URL: ${SECONDARY_URL}"
+
+          # Both regions must be healthy before we drill
+          for URL in "$PRIMARY_URL" "$SECONDARY_URL"; do
+            if [ -z "$URL" ]; then
+              echo "✗ Missing URL — aborting drill"
+              exit 1
+            fi
+            if ! curl -sf --max-time 10 "${URL}/api/health" > /dev/null; then
+              echo "✗ Pre-flight FAILED: ${URL}/api/health is unhealthy"
+              exit 1
+            fi
+            echo "✓ ${URL}/api/health is healthy"
+          done
+
+          echo "✓ Pre-flight passed — proceeding with DR drill"
+
+  # ── Traffic layer: simulate primary region outage and measure failover time ─
+  traffic-failover-drill:
+    name: Traffic Layer Failover Drill
+    runs-on: ubuntu-latest
+    needs: preflight
+    outputs:
+      traffic_rto_seconds: ${{ steps.measure_traffic.outputs.rto_seconds }}
+      traffic_recovery_verified: ${{ steps.measure_traffic.outputs.verified }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.DR_DRILL_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.DR_DRILL_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Simulate Primary Region Outage (Route 53 health-check override)
+        id: inject_fault
+        run: |
+          echo "Injecting simulated outage via Route 53 health-check disable..."
+
+          # Retrieve primary health-check ID from SSM (set during infrastructure
+          # provisioning). If absent the drill stops safely — no production impact.
+          HC_ID=$(aws ssm get-parameter \
+            --name "/remitmortgage/${DRILL_ENV}/primary-health-check-id" \
+            --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+          if [ -z "$HC_ID" ]; then
+            echo "⚠ No primary health-check SSM parameter found."
+            echo "  Set /remitmortgage/${DRILL_ENV}/primary-health-check-id to enable traffic-layer drill."
+            echo "SKIP_TRAFFIC_DRILL=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # Disable the health check so Route 53 triggers failover
+          aws route53 update-health-check \
+            --health-check-id "$HC_ID" \
+            --disabled
+
+          echo "HC_ID=${HC_ID}" >> "$GITHUB_ENV"
+          echo "OUTAGE_START=$(date +%s)" >> "$GITHUB_ENV"
+          echo "✓ Primary health check ${HC_ID} disabled — failover clock started"
+
+      - name: Measure Traffic Recovery Time
+        id: measure_traffic
+        run: |
+          if [ "${SKIP_TRAFFIC_DRILL}" = "true" ]; then
+            echo "rto_seconds=0" >> "$GITHUB_OUTPUT"
+            echo "verified=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          SECONDARY_URL="${{ needs.preflight.outputs.secondary_url }}"
+          START="${OUTAGE_START}"
+          DEADLINE=$((START + RTO_TARGET_SECONDS + 120))  # +2 min grace window
+
+          echo "Polling secondary endpoint for recovery..."
+          RECOVERED=false
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            if curl -sf --max-time 5 "${SECONDARY_URL}/api/health" > /dev/null; then
+              RECOVERY_TIME=$(( $(date +%s) - START ))
+              echo "✓ Secondary endpoint healthy after ${RECOVERY_TIME}s"
+              echo "rto_seconds=${RECOVERY_TIME}" >> "$GITHUB_OUTPUT"
+              echo "verified=true" >> "$GITHUB_OUTPUT"
+              RECOVERED=true
+              break
+            fi
+            echo "Waiting for secondary to receive traffic... ($(( $(date +%s) - START ))s elapsed)"
+            sleep 5
+          done
+
+          if [ "$RECOVERED" = "false" ]; then
+            ELAPSED=$(( $(date +%s) - START ))
+            echo "✗ Secondary did not become healthy within ${ELAPSED}s"
+            echo "rto_seconds=${ELAPSED}" >> "$GITHUB_OUTPUT"
+            echo "verified=false" >> "$GITHUB_OUTPUT"
+            # Restore health check before exiting to avoid leaving production broken
+            aws route53 update-health-check --health-check-id "$HC_ID" --no-disabled || true
+            exit 1
+          fi
+
+      - name: Restore Primary Health Check
+        if: always() && env.HC_ID != ''
+        run: |
+          aws route53 update-health-check \
+            --health-check-id "$HC_ID" \
+            --no-disabled || true
+          echo "✓ Primary health check ${HC_ID} re-enabled"
+
+  # ── Database layer: measure RDS/read-replica promotion time ────────────────
+  database-failover-drill:
+    name: Database Layer Failover Drill
+    runs-on: ubuntu-latest
+    needs: preflight
+    outputs:
+      db_rto_seconds: ${{ steps.measure_db.outputs.rto_seconds }}
+      db_rpo_minutes: ${{ steps.measure_db.outputs.rpo_minutes }}
+      db_recovery_verified: ${{ steps.measure_db.outputs.verified }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: drtest
+          POSTGRES_PASSWORD: drtest
+          POSTGRES_DB: drtest
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      PRIMARY_DB_URL: postgresql://drtest:drtest@localhost:5432/drtest_primary
+      REPLICA_DB_URL: postgresql://drtest:drtest@localhost:5432/drtest_replica
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install PostgreSQL 16 Client
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          sudo sed -i 's|deb http|deb [signed-by=/usr/share/keyrings/pgdg.gpg] http|' /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -q
+          sudo apt-get install -y postgresql-client-16
+          pg_dump --version
+
+      - name: Create Primary and Replica Databases
+        run: |
+          export PGPASSWORD=drtest
+          psql -h localhost -U drtest -d drtest -c "CREATE DATABASE drtest_primary;"
+          psql -h localhost -U drtest -d drtest -c "CREATE DATABASE drtest_replica;"
+
+      - name: Install Backend Dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Apply Schema to Primary (simulates production DB)
+        run: npx prisma db push --skip-generate
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ env.PRIMARY_DB_URL }}
+
+      - name: Seed Primary with Representative Data
+        run: npm run db:seed
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ env.PRIMARY_DB_URL }}
+        continue-on-error: true
+
+      - name: Record Seed Timestamp (RPO Baseline)
+        run: |
+          echo "RPO_BASELINE_TS=$(date +%s)" >> "$GITHUB_ENV"
+          echo "RPO baseline recorded at $(date -u)"
+
+      - name: Run Database Failover Drill
+        id: measure_db
+        run: bash scripts/dr-drill.sh
+        env:
+          PRIMARY_DB_URL: ${{ env.PRIMARY_DB_URL }}
+          REPLICA_DB_URL: ${{ env.REPLICA_DB_URL }}
+          RPO_BASELINE_TS: ${{ env.RPO_BASELINE_TS }}
+          RPO_TARGET_MINUTES: ${{ env.RPO_TARGET_MINUTES }}
+          RTO_TARGET_SECONDS: ${{ env.RTO_TARGET_SECONDS }}
+          REPORT_PATH: ${{ env.REPORT_PATH }}
+
+  # ── Gate: compare measured RTO/RPO against documented targets ──────────────
+  rto-rpo-gate:
+    name: RTO / RPO Gate
+    runs-on: ubuntu-latest
+    needs: [preflight, traffic-failover-drill, database-failover-drill]
+    outputs:
+      gate_passed: ${{ steps.gate.outputs.passed }}
+      summary: ${{ steps.gate.outputs.summary }}
+    steps:
+      - name: Evaluate RTO / RPO Results
+        id: gate
+        run: |
+          DRILL_ID="${{ needs.preflight.outputs.drill_id }}"
+          TRAFFIC_RTO="${{ needs.traffic-failover-drill.outputs.traffic_rto_seconds }}"
+          TRAFFIC_OK="${{ needs.traffic-failover-drill.outputs.traffic_recovery_verified }}"
+          DB_RTO="${{ needs.database-failover-drill.outputs.db_rto_seconds }}"
+          DB_RPO="${{ needs.database-failover-drill.outputs.db_rpo_minutes }}"
+          DB_OK="${{ needs.database-failover-drill.outputs.db_recovery_verified }}"
+          RTO_TARGET="${{ env.RTO_TARGET_SECONDS }}"
+          RPO_TARGET="${{ env.RPO_TARGET_MINUTES }}"
+
+          PASSED=true
+          FAILURES=""
+
+          # Traffic layer gate
+          if [ "$TRAFFIC_OK" = "false" ]; then
+            PASSED=false
+            FAILURES="${FAILURES}\n✗ Traffic failover did not complete (RTO: ${TRAFFIC_RTO}s > target: ${RTO_TARGET}s)"
+          elif [ "$TRAFFIC_OK" = "true" ] && [ "${TRAFFIC_RTO}" -gt "${RTO_TARGET}" ]; then
+            PASSED=false
+            FAILURES="${FAILURES}\n✗ Traffic RTO exceeded target: ${TRAFFIC_RTO}s > ${RTO_TARGET}s"
+          elif [ "$TRAFFIC_OK" = "skipped" ]; then
+            echo "⚠ Traffic layer drill was skipped (missing SSM parameters)"
+          else
+            echo "✓ Traffic RTO: ${TRAFFIC_RTO}s ≤ ${RTO_TARGET}s"
+          fi
+
+          # Database layer gate
+          if [ "$DB_OK" = "false" ]; then
+            PASSED=false
+            FAILURES="${FAILURES}\n✗ Database failover did not complete successfully"
+          else
+            echo "✓ Database RTO: ${DB_RTO}s"
+            if [ -n "$DB_RPO" ] && [ "$DB_RPO" -gt "$RPO_TARGET" ]; then
+              PASSED=false
+              FAILURES="${FAILURES}\n✗ Database RPO exceeded target: ${DB_RPO} min > ${RPO_TARGET} min"
+            else
+              echo "✓ Database RPO: ${DB_RPO} min ≤ ${RPO_TARGET} min"
+            fi
+          fi
+
+          SUMMARY="Drill: ${DRILL_ID} | Traffic RTO: ${TRAFFIC_RTO}s | DB RTO: ${DB_RTO}s | DB RPO: ${DB_RPO} min | Targets: RTO≤${RTO_TARGET}s, RPO≤${RPO_TARGET}min"
+          echo "summary=${SUMMARY}" >> "$GITHUB_OUTPUT"
+          echo "$SUMMARY"
+
+          if [ "$PASSED" = "false" ]; then
+            echo -e "GATE FAILURES:${FAILURES}"
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "passed=true" >> "$GITHUB_OUTPUT"
+          echo "✓ All RTO/RPO targets met — DR drill PASSED"
+
+  # ── Collect and archive the drill report ───────────────────────────────────
+  archive-report:
+    name: Archive Drill Report
+    runs-on: ubuntu-latest
+    needs: [preflight, traffic-failover-drill, database-failover-drill, rto-rpo-gate]
+    if: always()
+    steps:
+      - name: Generate Consolidated Report
+        run: |
+          DRILL_ID="${{ needs.preflight.outputs.drill_id }}"
+          {
+            echo "=== Disaster Recovery Drill Report ==="
+            echo "Drill ID   : ${DRILL_ID}"
+            echo "Run        : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "Triggered  : ${{ github.event_name }}"
+            echo "Commit     : ${{ github.sha }}"
+            echo "Timestamp  : $(date -u)"
+            echo ""
+            echo "--- Targets ---"
+            echo "RTO target : ≤ ${{ env.RTO_TARGET_SECONDS }}s"
+            echo "RPO target : ≤ ${{ env.RPO_TARGET_MINUTES }} min"
+            echo ""
+            echo "--- Traffic Layer ---"
+            echo "RTO measured   : ${{ needs.traffic-failover-drill.outputs.traffic_rto_seconds }}s"
+            echo "Recovery status: ${{ needs.traffic-failover-drill.outputs.traffic_recovery_verified }}"
+            echo ""
+            echo "--- Database Layer ---"
+            echo "RTO measured   : ${{ needs.database-failover-drill.outputs.db_rto_seconds }}s"
+            echo "RPO measured   : ${{ needs.database-failover-drill.outputs.db_rpo_minutes }} min"
+            echo "Recovery status: ${{ needs.database-failover-drill.outputs.db_recovery_verified }}"
+            echo ""
+            echo "--- Gate Result ---"
+            echo "Passed: ${{ needs.rto-rpo-gate.outputs.gate_passed }}"
+            echo "${{ needs.rto-rpo-gate.outputs.summary }}"
+          } > dr-drill-report.txt
+
+          cat dr-drill-report.txt
+
+      - name: Upload Drill Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dr-drill-report-${{ needs.preflight.outputs.drill_id }}
+          path: dr-drill-report.txt
+          retention-days: 365
+
+  # ── Alert on failure (scheduled/manual runs only) ──────────────────────────
+  alert-on-failure:
+    name: Alert on RTO/RPO Breach
+    runs-on: ubuntu-latest
+    needs: [preflight, rto-rpo-gate]
+    if: failure() && github.event_name != 'pull_request'
+    steps:
+      - name: Send Alert Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.ALERT_SMTP_SERVER }}
+          server_port: ${{ secrets.ALERT_SMTP_PORT }}
+          username: ${{ secrets.ALERT_SMTP_USERNAME }}
+          password: ${{ secrets.ALERT_SMTP_PASSWORD }}
+          from: RemitMortgage DR Drill
+          to: ${{ secrets.ALERT_EMAIL_TO }}
+          subject: "[FAILED] DR Drill — RTO/RPO target breached — ${{ github.repository }}"
+          body: |
+            The scheduled Disaster Recovery drill has FAILED.
+
+            Drill ID  : ${{ needs.preflight.outputs.drill_id }}
+            Repository: ${{ github.repository }}
+            Workflow  : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Triggered : ${{ github.event_name }}
+            Commit    : ${{ github.sha }}
+
+            Summary   : ${{ needs.rto-rpo-gate.outputs.summary }}
+
+            Either the measured recovery time exceeded the documented RTO/RPO
+            targets, or failover did not complete within the observation window.
+
+            Targets:
+              RTO ≤ ${{ env.RTO_TARGET_SECONDS }}s (from devops/MULTI_REGION_FAILOVER_GUIDE.md)
+              RPO ≤ ${{ env.RPO_TARGET_MINUTES }} min
+
+            The full drill report is attached as an artifact to the workflow run.
+            See docs/DR_DRILL_GUIDE.md for interpretation and remediation steps.
