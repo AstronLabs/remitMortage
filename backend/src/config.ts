@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 /** Environment configuration with validation. */
 
 export type StellarNetwork = "testnet" | "mainnet" | "futurenet" | "standalone";
@@ -90,6 +93,10 @@ export interface Config {
   opsFallbackAlertEmail: string;
   /** Incoming Slack webhook URL for ops SLA alerts. */
   opsSlackWebhookUrl: string | null;
+  /** Recipient email for compliance and referential integrity audit alerts. */
+  complianceAlertEmail: string;
+  /** Incoming Slack webhook URL for compliance and referential integrity audit alerts. */
+  complianceSlackWebhookUrl: string | null;
   /** Number of days expired session/refresh tokens are retained before being purged. */
   sessionTokenRetentionDays: number;
   /** Compliance-reviewed retention window for soft-deleted borrower profiles. */

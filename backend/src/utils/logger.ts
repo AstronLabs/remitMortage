@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import winston from "winston";
 import rTracer from "cls-rtracer";
 import { trace } from "@opentelemetry/api";

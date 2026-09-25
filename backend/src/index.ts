@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import "dotenv/config";
 // Must load before any other module — OpenTelemetry auto-instrumentation
 // patches libraries (express, http, pg, etc.) at require-time.
@@ -33,6 +36,7 @@ import { adminAuthRouter } from "./routes/adminAuth.js";
 import { workspaceRouter } from "./routes/workspace.js";
 import { userRouter } from "./routes/user.js";
 import { metricsRouter } from "./routes/metrics.js";
+import { referralRouter } from "./routes/referral.js";
 import { getTrackedConnectionLimit } from "./services/dbPoolMetrics.js";
 import { webhooksRouter } from "./routes/webhooks.js";
 import { incidentWebhookRouter } from "./routes/incidentWebhooks.js";
@@ -62,6 +66,7 @@ import { startScheduler } from "./jobs/scheduler.js";
 import { startBackupScheduler, startBackupCleanupScheduler } from "./jobs/backupScheduler.js";
 import { startWebhookKeyRotationScheduler } from "./jobs/webhookKeyRotation.js";
 import { startSecretsRotationScheduler } from "./jobs/secretsRotation.js";
+import { startJwtKeyRotationScheduler } from "./jobs/jwtKeyRotation.js";
 import { startRpcHealthMonitor } from "./services/rpcHealthMonitor.js";
 import { loadConfig } from "./config.js";
 import logger from "./utils/logger.js";
@@ -241,6 +246,7 @@ app.listen(PORT, () => {
   startBackupCleanupScheduler();
   startWebhookKeyRotationScheduler();
   startSecretsRotationScheduler();
+  startJwtKeyRotationScheduler();
   // Proactively monitor Soroban RPC node health and alert operators on
   // degradation, downtime or failover through the existing webhook mechanism.
   startRpcHealthMonitor();

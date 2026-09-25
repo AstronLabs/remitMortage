@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 //! Unit tests for Escrow Auto-Rollover at maturity (#495).
 
 #![cfg(test)]

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 const en = {
   "email.deposit_receipt.subject": "Deposit Receipt - RemitMortgage",
   "email.deposit_receipt.title": "Deposit Confirmed",

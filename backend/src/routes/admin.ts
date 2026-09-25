@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Router, Request, Response } from "express";
 import { prisma } from "../services/db.js";
 import { sendWebhook } from "../services/webhook.js";
@@ -5,15 +8,54 @@ import { runEscrowReconciliation } from "../jobs/escrowReconciliation.js";
 import logger from "../utils/logger.js";
 import { requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";
 import { bulkReviewApplications, type BulkReviewDecision } from "../services/loanStore.js";
+import { mergeApplicants, MergeValidationError } from "../services/applicantMerge.js";
 import { promoteWaitlistBatch } from "../services/inviteCode.js";
-import {
-  getModelConfig,
-  updateModelConfig,
-  getShadowMetrics,
-  getShadowEvaluations,
-} from "../services/scoring.js";
+import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
+import { listAutoRejectionRules, createAutoRejectionRule, updateAutoRejectionRule } from "../services/autoRejectionRuleStore.js";
 
 export const adminRouter = Router();
+
+adminRouter.get("/compliance/suspicious-activity", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const status = typeof req.query.status === "string" ? req.query.status : "OPEN";
+  try {
+    const alerts = await prisma.suspiciousActivityAlert.findMany({
+      where: { status: status as any },
+      include: { borrower: { select: { stellarAddress: true } } },
+      orderBy: { detectedAt: "desc" },
+      take: 200,
+    });
+    return res.json({ alerts });
+  } catch (error) {
+    logger.error("List suspicious activity alerts error", { error });
+    return res.status(500).json({ error: "failed_to_list_suspicious_activity" });
+  }
+});
+
+adminRouter.post("/compliance/suspicious-activity/scan", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    return res.json(await runSuspiciousActivityScan());
+  } catch (error) {
+    logger.error("Suspicious activity scan error", { error });
+    return res.status(500).json({ error: "suspicious_activity_scan_failed" });
+  }
+});
+
+adminRouter.patch("/compliance/suspicious-activity/:id", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { status, reviewNotes } = req.body ?? {};
+  if (!["OPEN", "CLEARED", "CONFIRMED"].includes(status)) {
+    return res.status(400).json({ error: "invalid_status" });
+  }
+  try {
+    const alert = await prisma.suspiciousActivityAlert.update({
+      where: { id: req.params.id },
+      data: { status, reviewNotes: reviewNotes ? String(reviewNotes) : null, reviewedAt: new Date(), reviewedBy: req.user?.walletAddress ?? "admin" },
+    });
+    return res.json(alert);
+  } catch (error) {
+    logger.error("Update suspicious activity alert error", { error });
+    return res.status(404).json({ error: "alert_not_found" });
+  }
+});
 
 /**
  * @openapi
@@ -25,6 +67,35 @@ export const adminRouter = Router();
  *     security:
  *       - bearerAuth: []
  */
+/**
+ * @openapi
+ * /api/admin/applicants/merge:
+ *   post:
+ *     summary: Merge a duplicate applicant into a primary applicant
+ *     description: Re-points loan applications, verification results, KYC documents and credentials to the primary. Soft-deletes the duplicate.
+ *     tags: [Admin]
+ *     security: [bearerAuth: []]
+ */
+adminRouter.post("/applicants/merge", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { primaryApplicantId, duplicateApplicantId, reason } = req.body ?? {};
+  try {
+    const result = await mergeApplicants(primaryApplicantId, duplicateApplicantId, {
+      actorAddress: req.user?.walletAddress ?? null,
+      ipAddress: req.ip ?? null,
+      reason: typeof reason === "string" ? reason : undefined,
+    });
+    return res.status(200).json(result);
+  } catch (err: any) {
+    if (err instanceof MergeValidationError || (typeof err?.status === "number" && typeof err?.code === "string")) {
+      const status = typeof err.status === "number" ? err.status : 400;
+      const code = typeof err.code === "string" ? err.code : "invalid_request";
+      return res.status(status).json({ error: code, message: err.message });
+    }
+    logger.error("Applicant merge error", { error: err });
+    return res.status(500).json({ error: "merge_failed", message: err?.message ?? "merge failed" });
+  }
+});
+
 adminRouter.post("/loans/bulk-review", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   const body = req.body ?? {};
   const rawItems = Array.isArray(body.reviews)
@@ -110,7 +181,7 @@ adminRouter.patch("/auto-rejection-rules/:id", requireAdmin, async (req: Authent
   const { name, config, active, priority } = req.body ?? {};
 
   try {
-    const rule = await updateAutoRejectionRule(id, {
+    const rule = await updateAutoRejectionRule(String(id), {
       ...(name !== undefined ? { name: String(name) } : {}),
       ...(config !== undefined ? { config } : {}),
       ...(active !== undefined ? { active: Boolean(active) } : {}),

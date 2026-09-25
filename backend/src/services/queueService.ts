@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Queue, QueueOptions, Job, JobsOptions } from "bullmq";
 import { getClusterClient, isClusterMode, getClusterStatus } from "./redisCluster.js";
 import logger from "../utils/logger.js";

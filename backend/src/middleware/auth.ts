@@ -1,5 +1,8 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Request, Response, NextFunction } from "express";
-import jwt from "jsonwebtoken";
+import { verifySessionToken } from "../services/jwtKeyRing.js";
 import { loadConfig } from "../config.js";
 
 export interface AuthenticatedRequest extends Request {
@@ -26,7 +29,7 @@ export function authMiddleware(req: AuthenticatedRequest, res: Response, next: N
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "default_jwt_secret") as {
+    const decoded = verifySessionToken(token) as {
       walletAddress: string;
       network: string;
     };
@@ -62,7 +65,7 @@ export function requireAdmin(req: AuthenticatedRequest, res: Response, next: Nex
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "default_jwt_secret") as {
+    const decoded = verifySessionToken(token) as {
       walletAddress: string;
       network: string;
     };

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 #![no_std]
 
 mod errors;
@@ -15,7 +18,7 @@ mod test_loan_assumption;
 pub use crate::errors::{LoanAssumptionError, PoolError};
 pub use crate::types::{
     BatchDisburseItem, DataKey, HalvingInfo, InvestorRecord, LoanAssumptionRequest,
-    LoanCollateralRecord, LoanRecord, LoanStatus, PendingUpgradeRecord, PoolConfig, PoolHealth,
+    LoanCollateralRecord, LoanPortabilitySnapshot, LoanRecord, LoanStatus, PendingUpgradeRecord, PoolConfig, PoolHealth,
     RepaymentSchedule, RestructureProposal, Tranche, TrancheInfo,
 };
 use soroban_sdk::xdr::ToXdr;
@@ -3006,6 +3009,74 @@ impl LendingPoolContract {
         Self::read_loan(&env, &loan_id)
     }
 
+    fn portability_proof(env: &Env, snapshot: &LoanPortabilitySnapshot) -> BytesN<32> {
+        env.crypto().sha256(&snapshot.clone().to_xdr(env)).into()
+    }
+
+    /// Export a loan's complete on-chain state for migration to another pool.
+    /// Both the source administrator and borrower authorize the snapshot, so
+    /// an operator cannot manufacture or export somebody else's loan state.
+    pub fn export_loan_for_portability(
+        env: Env,
+        loan_id: BytesN<32>,
+    ) -> Result<(LoanPortabilitySnapshot, BytesN<32>), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        let loan = Self::read_loan(&env, &loan_id)?;
+        loan.borrower.require_auth();
+        let schedule = env.storage().persistent().get(&DataKey::LoanSchedule(loan_id.clone()));
+        let schedule_present = schedule.is_some();
+        let schedule = schedule.unwrap_or(RepaymentSchedule {
+            monthly_amount: 0,
+            duration_months: 0,
+            next_due_ledger: 0,
+            payments_made: 0,
+            payments_missed: 0,
+        });
+        let snapshot = LoanPortabilitySnapshot {
+            source_pool: env.current_contract_address(),
+            loan_id,
+            loan,
+            schedule,
+            schedule_present,
+            exported_at_ledger: env.ledger().sequence(),
+        };
+        let proof = Self::portability_proof(&env, &snapshot);
+        Ok((snapshot, proof))
+    }
+
+    /// Import a previously exported loan. The destination administrator and
+    /// borrower both authorize the operation; the digest prevents any field
+    /// in the snapshot from being changed between export and import.
+    pub fn import_ported_loan(
+        env: Env,
+        snapshot: LoanPortabilitySnapshot,
+        proof: BytesN<32>,
+    ) -> Result<(), PoolError> {
+        Self::check_not_paused(&env)?;
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        snapshot.loan.borrower.require_auth();
+        if Self::portability_proof(&env, &snapshot) != proof {
+            return Err(PoolError::Unauthorized);
+        }
+        if env.storage().persistent().has(&DataKey::Loan(snapshot.loan_id.clone())) {
+            return Err(PoolError::LoanAlreadyExists);
+        }
+        Self::set_loan(&env, &snapshot.loan_id, &snapshot.loan);
+        if snapshot.schedule_present {
+            env.storage().persistent().set(&DataKey::LoanSchedule(snapshot.loan_id.clone()), &snapshot.schedule);
+        }
+        let active = Self::read_borrower_active_loans(&env, &snapshot.loan.borrower);
+        if matches!(snapshot.loan.status, LoanStatus::Requested | LoanStatus::Approved) {
+            Self::set_borrower_active_loans(&env, &snapshot.loan.borrower, active + 1);
+        }
+        let count = Self::read_loan_count(&env);
+        env.storage().instance().set(&DataKey::LoanCount, &(count + 1));
+        env.events().publish((Symbol::new(&env, "loan_ported"),), (snapshot.loan_id, snapshot.source_pool));
+        Ok(())
+    }
+
     /// Returns the borrower for a loan, if the loan exists.
     pub fn get_loan_borrower(env: Env, loan_id: BytesN<32>) -> Option<Address> {
         Self::read_loan(&env, &loan_id)
@@ -3884,7 +3955,7 @@ impl LendingPoolContract {
         if whitelisted {
             Ok(())
         } else {
-            Err(PoolError::AddressNotWhitelisted)
+            Err(PoolError::Unauthorized)
         }
     }
 

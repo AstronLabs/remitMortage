@@ -1,4 +1,6 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 import { useEffect, useRef } from "react";
 import { rpc, scValToNative } from "@stellar/stellar-sdk";

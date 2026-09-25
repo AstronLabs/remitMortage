@@ -1,4 +1,6 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 import type { TxUiPhase } from "../../lib/transaction-status";
 import { phaseToStepIndex, TX_PROGRESS_STEPS } from "../../lib/transaction-status";

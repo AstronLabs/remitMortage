@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Router } from "express";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
@@ -331,6 +334,7 @@ verificationRouter.post("/verify-ownership", verificationOwnershipRateLimiter, v
     { expiresIn: "24h" }
   );
 
+  res.clearCookie("session");
   res.cookie("token", token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
@@ -390,6 +394,7 @@ verificationRouter.post("/step-up", (req, res) => {
     { expiresIn: "24h" }
   );
 
+  res.clearCookie("session");
   res.cookie("token", token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",

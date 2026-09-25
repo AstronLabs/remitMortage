@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import en from "./locales/en.js";
 import es from "./locales/es.js";
 import fr from "./locales/fr.js";

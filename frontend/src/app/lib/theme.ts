@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 const STORAGE_KEY = "remitmortgage-theme";
 
 export type Theme = "light" | "dark";

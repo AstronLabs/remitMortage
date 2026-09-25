@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 use soroban_sdk::{contracttype, Address, BytesN, Symbol};
 
 /// Pending upgrade proposal (used when upgrade_delay_ledgers > 0).
@@ -243,6 +246,18 @@ pub struct BatchDisburseItem {
     pub loan_id: BytesN<32>,
     pub recipient: Address,
     pub amount: i128,
+}
+
+/// Self-contained representation of a loan moved between compatible pools.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoanPortabilitySnapshot {
+    pub source_pool: Address,
+    pub loan_id: BytesN<32>,
+    pub loan: LoanRecord,
+    pub schedule: RepaymentSchedule,
+    pub schedule_present: bool,
+    pub exported_at_ledger: u32,
 }
 
 /// Storage keys for the lending pool contract.

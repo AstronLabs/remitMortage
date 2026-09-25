@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { getRequestConfig } from "next-intl/server";
 import { cookies } from "next/headers";
 import { isLocale, locales } from "./locales";

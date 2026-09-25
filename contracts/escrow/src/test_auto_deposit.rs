@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 //! Unit tests for borrower-authorized recurring escrow auto-deposits (#635).
 
 #![cfg(test)]

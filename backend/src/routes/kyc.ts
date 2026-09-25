@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
 import logger from "../utils/logger.js";

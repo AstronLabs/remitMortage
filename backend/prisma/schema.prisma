@@ -294,6 +294,40 @@ model LoanApplication {
   @@index([status, lastActivityAt])
 }
 
+enum AutoRejectionRuleType {
+  MIN_CREDIT_SCORE
+  MAX_DEBT_TO_INCOME
+  REQUIRES_VERIFICATION
+}
+
+model LoanAutoRejectionRule {
+  id        String              @id @default(uuid())
+  name      String
+  ruleType  AutoRejectionRuleType
+  config    Json
+  active    Boolean             @default(true)
+  priority  Int                 @default(0)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  logs      LoanAutoRejectionLog[]
+
+  @@index([active, priority])
+}
+
+model LoanAutoRejectionLog {
+  id            String                @id @default(uuid())
+  applicationId String
+  application   LoanApplication       @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  ruleId        String
+  rule          LoanAutoRejectionRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  reason        String
+  createdAt     DateTime              @default(now())
+
+  @@index([applicationId])
+  @@index([ruleId])
+  @@index([createdAt])
+}
+
 model LoanComment {
   id                String   @id @default(uuid())
   loanApplicationId String
@@ -346,6 +380,7 @@ model Borrower {
   withdrawals     EscrowWithdrawal[]
   disbursements   LoanDisbursement[]
   repayments      LoanRepayment[]
+  suspiciousActivityAlerts SuspiciousActivityAlert[]
 
   @@index([deletedAt])
 }
@@ -376,6 +411,35 @@ model EscrowWithdrawal {
 
   @@index([borrowerId])
   @@index([ledger])
+}
+
+/// A reviewable AML alert generated from the rolling escrow transaction window.
+/// Evidence is deliberately stored as structured JSON so an admin can audit
+/// the exact transactions and thresholds that produced the alert.
+model SuspiciousActivityAlert {
+  id               String   @id @default(uuid())
+  borrowerId       String
+  borrower         Borrower @relation(fields: [borrowerId], references: [id])
+  ruleCode         String
+  ruleName         String
+  status           SuspiciousActivityStatus @default(OPEN)
+  windowStart      DateTime
+  windowEnd        DateTime
+  evidence         Json
+  detectedAt       DateTime @default(now())
+  reviewedAt       DateTime?
+  reviewedBy       String?
+  reviewNotes      String?
+
+  @@unique([borrowerId, ruleCode, windowStart])
+  @@index([status, detectedAt])
+  @@index([borrowerId, detectedAt])
+}
+
+enum SuspiciousActivityStatus {
+  OPEN
+  CLEARED
+  CONFIRMED
 }
 
 model LoanDisbursement {

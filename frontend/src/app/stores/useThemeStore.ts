@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { create } from "zustand";
 import type { Theme } from "../lib/theme";
 import { resolveTheme, applyTheme, persistTheme } from "../lib/theme";

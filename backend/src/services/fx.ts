@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { getCacheValue, setCacheValue } from "./redis.js";
 import logger from "../utils/logger.js";
 

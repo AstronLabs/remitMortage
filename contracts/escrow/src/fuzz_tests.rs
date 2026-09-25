@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 //! Invariant-based property tests for Escrow deposit/withdraw math.
 //!
 //! Each `proptest!` block drives hundreds of randomised inputs through a core

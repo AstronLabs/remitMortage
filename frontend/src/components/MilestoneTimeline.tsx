@@ -1,6 +1,10 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 import React, { useState } from "react";
+import type { EvidenceRevision } from "../lib/milestoneRevisionsStore";
+import EvidenceDiffViewer from "./governance/EvidenceDiffViewer";
 
 /* ── Types ─────────────────────────────────────────────────────────── */
 
@@ -25,6 +29,7 @@ export interface MilestoneNode {
   completedDate?: string;
   description?: string;
   evidence?: EvidenceItem[];
+  revisions?: EvidenceRevision[];
   voters?: VoterRecord[];
 }
 
@@ -213,7 +218,26 @@ function shortAddr(addr: string): string {
 
 function TimelineNode({ milestone, isLast }: { milestone: MilestoneNode; isLast: boolean }) {
   const [expanded, setExpanded] = useState(false);
+  const [diffOpen, setDiffOpen] = useState(false);
   const style = STATE_STYLES[milestone.state];
+
+  const revisions: EvidenceRevision[] | null = (() => {
+    if (milestone.revisions && milestone.revisions.length > 0) return milestone.revisions;
+    if (milestone.evidence && milestone.evidence.length > 1) {
+      return milestone.evidence.map((ev, idx) => ({
+        id: `${milestone.id}-ev-${idx}`,
+        cid: ev.url.replace("ipfs://", ""),
+        url: ev.url,
+        label: ev.label,
+        sha256: undefined,
+        description: idx === 0 ? milestone.description : `${milestone.description ?? ""} (rev ${idx + 1})`,
+        costEstimate: undefined,
+        uploadedAt: new Date(Date.now() - (milestone.evidence!.length - idx) * 86400000).toISOString(),
+        version: idx + 1,
+      }));
+    }
+    return null;
+  })();
 
   return (
     <li className="relative flex gap-4 md:gap-6">
@@ -284,9 +308,19 @@ function TimelineNode({ milestone, isLast }: { milestone: MilestoneNode; isLast:
             {/* Evidence URLs */}
             {milestone.evidence && milestone.evidence.length > 0 && (
               <div className="mb-4">
-                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
-                  Evidence
-                </h4>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+                    Evidence
+                  </h4>
+                  {revisions && revisions.length > 1 && (
+                    <button
+                      onClick={() => setDiffOpen(true)}
+                      className="inline-flex items-center gap-1 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-cyan-400 hover:bg-cyan-500/20"
+                    >
+                      View History Diff ({revisions.length})
+                    </button>
+                  )}
+                </div>
                 <ul className="space-y-1.5">
                   {milestone.evidence.map((ev, i) => (
                     <li key={i}>
@@ -314,6 +348,32 @@ function TimelineNode({ milestone, isLast }: { milestone: MilestoneNode; isLast:
                     </li>
                   ))}
                 </ul>
+                {revisions && revisions.length > 1 && diffOpen && (
+                  <EvidenceDiffViewer milestoneId={milestone.id} revisions={revisions} onClose={() => setDiffOpen(false)} />
+                )}
+              </div>
+            )}
+            {milestone.revisions && milestone.revisions.length > 0 && !milestone.evidence?.length && (
+              <div className="mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+                    Evidence Revisions
+                  </h4>
+                  <button
+                    onClick={() => setDiffOpen(true)}
+                    className="inline-flex items-center gap-1 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-cyan-400 hover:bg-cyan-500/20"
+                  >
+                    Diff Viewer ({milestone.revisions!.length})
+                  </button>
+                </div>
+                <ul className="space-y-1">
+                  {milestone.revisions.map((r) => (
+                    <li key={r.id} className="text-xs text-slate-300">
+                      v{r.version} — {r.label} <span className="text-slate-500">({new Date(r.uploadedAt).toLocaleDateString()})</span>
+                    </li>
+                  ))}
+                </ul>
+                {diffOpen && <EvidenceDiffViewer milestoneId={milestone.id} revisions={milestone.revisions!} onClose={() => setDiffOpen(false)} />}
               </div>
             )}
 

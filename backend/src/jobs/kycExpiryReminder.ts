@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { prisma } from "../services/db.js";
 import { getBrandedHtml, sendEmail } from "../services/email.js";
 import logger from "../utils/logger.js";

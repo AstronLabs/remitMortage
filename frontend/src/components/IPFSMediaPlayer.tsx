@@ -1,4 +1,6 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 import React, { useState, useEffect, useRef } from "react";
 import { Loader2, AlertCircle } from "lucide-react";

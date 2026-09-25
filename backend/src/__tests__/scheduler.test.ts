@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { runRepaymentAudit } from "../jobs/repaymentAudit.js";
 import { prisma } from "../services/db.js";
 import { queueNotification } from "../services/notification.js";

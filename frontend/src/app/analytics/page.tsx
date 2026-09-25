@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 /* eslint-disable react-hooks/set-state-in-effect */
 "use client";
 

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 /// Yield Token Wrapping Module
 ///
 /// Provides functionality to wrap deposits in native yield-bearing assets

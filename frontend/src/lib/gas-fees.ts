@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { BASE_FEE } from "@stellar/stellar-sdk";
 import type { SimulationEstimate } from "./soroban-client";
 

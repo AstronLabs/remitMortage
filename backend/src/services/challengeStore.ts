@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { randomUUID } from "crypto";
 
 /** In-memory store for pending wallet-ownership challenges. */

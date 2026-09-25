@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 #![cfg(test)]
 extern crate std;
 
@@ -878,8 +881,8 @@ fn test_effective_weight_normal() {
     let (_admin, signers, client) = setup_admin(&env);
 
     let weight = client.effective_weight(&signers.get_unchecked(0), &signers.get_unchecked(1));
-    // All signers have weight 1 in setup_admin
-    assert_eq!(weight, 1u32);
+    // Base weight is 100 (fixed lookup, 10000 bps)
+    assert_eq!(weight, 100u32);
 }
 
 #[test]
@@ -927,9 +930,9 @@ fn test_effective_weight_penalized() {
     assert_eq!(record2.consecutive_missed, 2u32);
     assert!(record2.penalized); // At threshold
 
-    // Effective weight should be reduced (1 * 50% = 0, but min is 1)
+    // Effective weight should be reduced (100 * 50% = 50)
     let weight = client.effective_weight(&signers.get_unchecked(0), &signers.get_unchecked(1));
-    assert_eq!(weight, 1u32); // Minimum weight is 1
+    assert_eq!(weight, 50u32);
 }
 
 #[test]
@@ -942,10 +945,12 @@ fn test_penalty_recovery_after_active_votes() {
     client.configure_slashing(&2u32, &50u32, &3u32);
 
     // Manually set a signer as penalized with consecutive_missed=3
+    let now = env.ledger().sequence();
     let record = SignerVoteRecord {
         consecutive_missed: 3,
         consecutive_active: 0,
         penalized: true,
+        last_vote_ledger: now,
     };
     env.as_contract(&client.address, || {
         env.storage().persistent().set(
@@ -960,7 +965,7 @@ fn test_penalty_recovery_after_active_votes() {
     // Verify penalized
     let weight_before =
         client.effective_weight(&signers.get_unchecked(0), &signers.get_unchecked(1));
-    assert_eq!(weight_before, 1u32); // Reduced from 1, min is 1
+    assert_eq!(weight_before, 50u32); // 50% penalty on base 100
 
     // Simulate 3 active votes to trigger recovery
     for _ in 0..3 {
@@ -978,6 +983,7 @@ fn test_penalty_recovery_after_active_votes() {
                 consecutive_missed: 0,
                 consecutive_active: current.consecutive_active + 1,
                 penalized: current.consecutive_active + 1 < 3,
+                last_vote_ledger: current.last_vote_ledger,
             };
             env.storage().persistent().set(
                 &DataKey::SignerVoteRecord(
@@ -992,5 +998,142 @@ fn test_penalty_recovery_after_active_votes() {
     // Verify recovery
     let weight_after =
         client.effective_weight(&signers.get_unchecked(0), &signers.get_unchecked(1));
-    assert_eq!(weight_after, 1u32); // Back to full weight
+    assert_eq!(weight_after, 100u32); // Back to full weight
+}
+
+fn extend_multisig_ttls(env: &Env) {
+    env.ledger().with_mut(|li| {
+        li.max_entry_ttl = 40_000_001;
+        li.min_persistent_entry_ttl = 40_000_000;
+    });
+}
+
+#[test]
+fn test_decay_inside_grace_no_decay() {
+    let env = Env::default();
+    env.mock_all_auths();
+    extend_multisig_ttls(&env);
+    let (_admin, signers, client) = setup_admin(&env);
+    let account = signers.get_unchecked(0).clone();
+    let signer = signers.get_unchecked(1).clone();
+
+    env.ledger().set_sequence_number(1);
+    client.cast_vote(&account, &signer);
+    // Default grace is 1000 ledgers
+    assert_eq!(client.effective_weight(&account, &signer), 100u32);
+    env.ledger().set_sequence_number(500);
+    assert_eq!(client.effective_weight(&account, &signer), 100u32);
+    env.ledger().set_sequence_number(1000);
+    assert_eq!(client.effective_weight(&account, &signer), 100u32);
+}
+
+#[test]
+fn test_decay_linear_progression() {
+    let env = Env::default();
+    env.mock_all_auths();
+    extend_multisig_ttls(&env);
+    let (_admin, signers, client) = setup_admin(&env);
+    let account = signers.get_unchecked(0).clone();
+    let signer = signers.get_unchecked(1).clone();
+
+    env.ledger().set_sequence_number(1);
+    // Record initial vote to anchor last_vote_ledger
+    client.cast_vote(&account, &signer);
+    let anchor = env.ledger().sequence();
+
+    // One period past grace: 10% loss -> 90
+    env.ledger().set_sequence_number(anchor + 1000 + 1000);
+    assert_eq!(client.effective_weight(&account, &signer), 90u32);
+
+    // Two periods: 20% -> 80
+    env.ledger().set_sequence_number(anchor + 1000 + 2000);
+    assert_eq!(client.effective_weight(&account, &signer), 80u32);
+
+    // Nine periods: 90% -> floor 10
+    env.ledger().set_sequence_number(anchor + 1000 + 9000);
+    assert_eq!(client.effective_weight(&account, &signer), 10u32);
+
+    // Further -> stays at floor
+    env.ledger().set_sequence_number(anchor + 1000 + 20000);
+    assert_eq!(client.effective_weight(&account, &signer), 10u32);
+}
+
+#[test]
+fn test_decay_restoration_on_vote() {
+    let env = Env::default();
+    env.mock_all_auths();
+    extend_multisig_ttls(&env);
+    let (_admin, signers, client) = setup_admin(&env);
+    let account = signers.get_unchecked(0).clone();
+    let signer = signers.get_unchecked(1).clone();
+
+    env.ledger().set_sequence_number(1);
+    client.cast_vote(&account, &signer);
+    let anchor = env.ledger().sequence();
+    env.ledger().set_sequence_number(anchor + 1000 + 3000);
+    assert_eq!(client.effective_weight(&account, &signer), 70u32);
+
+    // Casting a vote restores full weight and resets clock
+    client.cast_vote(&account, &signer);
+    assert_eq!(client.effective_weight(&account, &signer), 100u32);
+
+    // Grace restarts from new anchor
+    let new_anchor = env.ledger().sequence();
+    env.ledger().set_sequence_number(new_anchor + 500);
+    assert_eq!(client.effective_weight(&account, &signer), 100u32);
+    env.ledger().set_sequence_number(new_anchor + 1000 + 1000);
+    assert_eq!(client.effective_weight(&account, &signer), 90u32);
+}
+
+#[test]
+fn test_decay_interaction_with_slashing() {
+    let env = Env::default();
+    env.mock_all_auths();
+    extend_multisig_ttls(&env);
+    let (_admin, signers, client) = setup_admin(&env);
+    let account = signers.get_unchecked(0).clone();
+    let signer = signers.get_unchecked(1).clone();
+
+    client.configure_slashing(&2u32, &50u32, &3u32);
+    // Trigger penalty
+    let pid = proposal_id(&env, 0xCC);
+    client.submit_action(&pid, &0u32);
+    env.ledger().set_sequence_number(1001);
+    let expired: Vec<BytesN<32>> = vec![&env, pid];
+    client.mark_missed_votes(&account, &expired);
+    let pid2 = proposal_id(&env, 0xDD);
+    client.submit_action(&pid2, &0u32);
+    env.ledger().set_sequence_number(2002);
+    let expired2: Vec<BytesN<32>> = vec![&env, pid2];
+    client.mark_missed_votes(&account, &expired2);
+
+    // Penalized weight is 50, decay anchor is still initial (now 0 -> now)
+    // Need to anchor decay by casting a vote first, then penalize, then decay
+    // Reset and do decay+penalty interaction
+    env.ledger().set_sequence_number(3000);
+    client.cast_vote(&account, &signer); // resets penalty? Actually need 3 active to recover, so still penalized
+    // Manually set penalized again for interaction test
+    env.as_contract(&client.address, || {
+        env.storage().persistent().set(
+            &DataKey::SignerVoteRecord(account.clone(), signer.clone()),
+            &SignerVoteRecord { consecutive_missed: 2, consecutive_active: 0, penalized: true, last_vote_ledger: 3000 },
+        );
+    });
+    assert_eq!(client.effective_weight(&account, &signer), 50u32);
+
+    // Decay on top of penalty: 1 period past grace -> 10% of 50 = 5 -> 45, floor 10% of base (10) still above
+    env.ledger().set_sequence_number(3000 + 1000 + 1000);
+    // decay_bps = 1000, base after slash is 50, decay reduces 50*1000/10000=5 -> 45
+    assert_eq!(client.effective_weight(&account, &signer), 45u32);
+
+    // Voting restores both
+    client.cast_vote(&account, &signer);
+    // Need 3 votes to clear penalized, but decay clock resets immediately
+    // After one vote, still penalized but decay reset to 0
+    // Weight = 50 (still penalized, no decay)
+    assert_eq!(client.effective_weight(&account, &signer), 50u32);
+    client.cast_vote(&account, &signer);
+    client.cast_vote(&account, &signer);
+    // After 3, penalized cleared -> 100
+    assert_eq!(client.effective_weight(&account, &signer), 100u32);
 }

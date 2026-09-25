@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import jwt from "jsonwebtoken";
 import { loadConfig } from "../config.js";
 

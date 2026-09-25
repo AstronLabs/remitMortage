@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { type Locale, t } from "../i18n/index.js";
 import { getBrandedHtml } from "../services/email.js";
 

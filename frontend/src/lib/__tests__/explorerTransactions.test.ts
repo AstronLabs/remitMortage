@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 const mockCall = jest.fn();
 const mockTransaction = jest.fn(() => ({ call: mockCall }));
 const mockTransactions = jest.fn(() => ({ transaction: mockTransaction }));

@@ -1,4 +1,6 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 import React, { createContext, useContext, useMemo } from "react";
 import { useWallet } from "./WalletContext";

@@ -1,4 +1,6 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 import React from "react";
 import { ShieldAlert, Clock, LogOut, CheckCircle2 } from "lucide-react";

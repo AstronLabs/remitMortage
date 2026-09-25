@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 //! Tranche First-Loss and Default Stress Tests
 //!
 //! This module exercises the dual-tranche (Senior/Junior) lending pool under

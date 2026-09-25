@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import PDFDocument from "pdfkit";
 import crypto from "crypto";
 import { RemittanceAnalysis } from "./stellar.js";

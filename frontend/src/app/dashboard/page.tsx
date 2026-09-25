@@ -1,4 +1,6 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +61,41 @@ const SAMPLE_MILESTONES: MilestoneNode[] = [
     evidence: [
       { label: "Inspection Report (PDF)", url: "ipfs://QmX1...foundation" },
       { label: "Soil Analysis", url: "https://example.com/soil-report" },
+    ],
+    revisions: [
+      {
+        id: "m1-r1",
+        cid: "QmX1...foundation",
+        url: "ipfs://QmX1...foundation",
+        label: "Inspection Report (PDF) v1",
+        description: "Initial foundation inspection — soil report pending.",
+        costEstimate: 12000,
+        sha256: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        uploadedAt: "2026-03-10T10:00:00.000Z",
+        version: 1,
+      },
+      {
+        id: "m1-r2",
+        cid: "QmX1...foundation-v2",
+        url: "ipfs://QmX1...foundation-v2",
+        label: "Inspection Report (PDF) v2",
+        description: "Foundation inspection updated — soil report verified, added drainage notes.",
+        costEstimate: 13500,
+        sha256: "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+        uploadedAt: "2026-03-12T14:30:00.000Z",
+        version: 2,
+      },
+      {
+        id: "m1-r3",
+        cid: "QmX1...foundation-v3",
+        url: "ipfs://QmX1...foundation-v3",
+        label: "Inspection Report (PDF) v3",
+        description: "Foundation inspection updated — soil report verified, added drainage notes.",
+        costEstimate: 14200,
+        sha256: "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
+        uploadedAt: "2026-03-14T09:00:00.000Z",
+        version: 3,
+      },
     ],
     voters: [
       { address: "GABC...1234", vote: "yes", weight: 40 },

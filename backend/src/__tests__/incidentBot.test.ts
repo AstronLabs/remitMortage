@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { incidentBot, RUNBOOK_REGISTRY } from "../services/incidentBot.js";
 import express from "express";
 import request from "supertest";

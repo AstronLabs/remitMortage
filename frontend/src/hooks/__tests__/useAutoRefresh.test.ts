@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { renderHook, act } from "@testing-library/react";
 import { useAutoRefresh } from "../useAutoRefresh";
 

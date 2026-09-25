@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 //! Borrower-authorized recurring escrow deposits (#635).
 //!
 //! A borrower configures a schedule (amount + interval) and approves a token

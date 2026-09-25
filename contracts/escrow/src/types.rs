@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 use soroban_sdk::{contracttype, Address, BytesN, Symbol, Vec};
 
 /// Admin-controlled signer set used for death/incapacity attestations.

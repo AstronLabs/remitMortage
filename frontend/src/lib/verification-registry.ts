@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 // Client-side verification-registry lookup backed by Stellar Horizon.
 //
 // A verified account carries a data entry (`remit_verified_until`) whose value
