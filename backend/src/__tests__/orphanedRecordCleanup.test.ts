@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { runOrphanedRecordCleanupJob } from "../jobs/orphanedRecordCleanup.js";
 import { prisma } from "../services/db.js";
 

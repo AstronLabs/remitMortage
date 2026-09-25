@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { NextRequest, NextResponse } from "next/server";
 
 const backendUrl = process.env.BACKEND_API_URL || "http://localhost:4000";

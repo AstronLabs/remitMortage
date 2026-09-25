@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Request, Response, NextFunction } from "express";
 
 const SENSITIVE_PATTERNS: RegExp[] = [

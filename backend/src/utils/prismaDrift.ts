@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";

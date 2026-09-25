@@ -1,4 +1,6 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 import { ToastContainer } from "./Toast";
 import NotificationDrawer from "./NotificationDrawer";

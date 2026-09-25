@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import crypto from "crypto";
 import bs58 from "bs58";
 import nacl from "tweetnacl";

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Router, Request, Response } from "express";
 import { prisma } from "../services/db.js";
 import { sendWebhook } from "../services/webhook.js";
@@ -5,6 +8,7 @@ import { runEscrowReconciliation } from "../jobs/escrowReconciliation.js";
 import logger from "../utils/logger.js";
 import { requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";
 import { bulkReviewApplications, type BulkReviewDecision } from "../services/loanStore.js";
+import { mergeApplicants, MergeValidationError } from "../services/applicantMerge.js";
 import { promoteWaitlistBatch } from "../services/inviteCode.js";
 import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
 import { listAutoRejectionRules, createAutoRejectionRule, updateAutoRejectionRule } from "../services/autoRejectionRuleStore.js";
@@ -63,6 +67,35 @@ adminRouter.patch("/compliance/suspicious-activity/:id", requireAdmin, async (re
  *     security:
  *       - bearerAuth: []
  */
+/**
+ * @openapi
+ * /api/admin/applicants/merge:
+ *   post:
+ *     summary: Merge a duplicate applicant into a primary applicant
+ *     description: Re-points loan applications, verification results, KYC documents and credentials to the primary. Soft-deletes the duplicate.
+ *     tags: [Admin]
+ *     security: [bearerAuth: []]
+ */
+adminRouter.post("/applicants/merge", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { primaryApplicantId, duplicateApplicantId, reason } = req.body ?? {};
+  try {
+    const result = await mergeApplicants(primaryApplicantId, duplicateApplicantId, {
+      actorAddress: req.user?.walletAddress ?? null,
+      ipAddress: req.ip ?? null,
+      reason: typeof reason === "string" ? reason : undefined,
+    });
+    return res.status(200).json(result);
+  } catch (err: any) {
+    if (err instanceof MergeValidationError || (typeof err?.status === "number" && typeof err?.code === "string")) {
+      const status = typeof err.status === "number" ? err.status : 400;
+      const code = typeof err.code === "string" ? err.code : "invalid_request";
+      return res.status(status).json({ error: code, message: err.message });
+    }
+    logger.error("Applicant merge error", { error: err });
+    return res.status(500).json({ error: "merge_failed", message: err?.message ?? "merge failed" });
+  }
+});
+
 adminRouter.post("/loans/bulk-review", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   const body = req.body ?? {};
   const rawItems = Array.isArray(body.reviews)

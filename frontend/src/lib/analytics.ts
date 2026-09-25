@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 export type AnalyticsProperties = Record<string, unknown>;
 
 const enabled = process.env.NEXT_PUBLIC_ANALYTICS_ENABLED !== "false";

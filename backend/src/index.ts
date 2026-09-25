@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import "dotenv/config";
 // Must load before any other module — OpenTelemetry auto-instrumentation
 // patches libraries (express, http, pg, etc.) at require-time.
@@ -40,6 +43,7 @@ import { incidentWebhookRouter } from "./routes/incidentWebhooks.js";
 import { apiKeysRouter } from "./routes/apiKeys.js";
 import { waitlistRouter } from "./routes/waitlist.js";
 import { loanImportRouter } from "./routes/loanImport.js";
+import { exportsRouter } from "./routes/exports.js";
 import { authRouter } from "./routes/auth.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
@@ -62,6 +66,7 @@ import { startScheduler } from "./jobs/scheduler.js";
 import { startBackupScheduler, startBackupCleanupScheduler } from "./jobs/backupScheduler.js";
 import { startWebhookKeyRotationScheduler } from "./jobs/webhookKeyRotation.js";
 import { startSecretsRotationScheduler } from "./jobs/secretsRotation.js";
+import { startJwtKeyRotationScheduler } from "./jobs/jwtKeyRotation.js";
 import { startRpcHealthMonitor } from "./services/rpcHealthMonitor.js";
 import { loadConfig } from "./config.js";
 import logger from "./utils/logger.js";
@@ -209,6 +214,7 @@ app.use("/api/referral", referralRouter);
 app.use("/api/admin", authMiddleware, adminRouter);
 app.use("/api/admin", adminAuthRouter);
 app.use("/api/admin/api-keys", apiKeysRouter);
+app.use("/api/exports", exportsRouter);
 app.use("/api/webhooks/pagerduty", incidentWebhookRouter);
 app.use("/api/webhooks", authMiddleware, webhooksRouter);
 app.use("/api/user", userRouter);
@@ -240,6 +246,7 @@ app.listen(PORT, () => {
   startBackupCleanupScheduler();
   startWebhookKeyRotationScheduler();
   startSecretsRotationScheduler();
+  startJwtKeyRotationScheduler();
   // Proactively monitor Soroban RPC node health and alert operators on
   // degradation, downtime or failover through the existing webhook mechanism.
   startRpcHealthMonitor();

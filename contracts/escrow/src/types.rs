@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 use soroban_sdk::{contracttype, Address, BytesN, Symbol, Vec};
 
 /// Admin-controlled signer set used for death/incapacity attestations.
@@ -80,6 +83,21 @@ pub struct BorrowerRecord {
     pub auto_rollover: bool,
 }
 
+/// Borrower-authorized recurring deposit schedule for one escrow goal.
+///
+/// Anyone (e.g. a keeper bot) may execute the draw once `next_execution_ledger`
+/// is reached; funds are pulled from the borrower's pre-approved allowance.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutoDepositSchedule {
+    /// Amount pulled per draw (USDC stroops).
+    pub amount: i128,
+    /// Ledgers between draws.
+    pub interval_ledgers: u32,
+    /// Earliest ledger at which the next draw may execute.
+    pub next_execution_ledger: u32,
+}
+
 /// Pending upgrade proposal data.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -132,4 +150,6 @@ pub enum DataKey {
     /// the address is allowed to interact with the contract when permissioned
     /// mode is enabled.
     Whitelist(Address),
+    /// Recurring auto-deposit schedule for a borrower's goal.
+    AutoDeposit(Address, Symbol),
 }

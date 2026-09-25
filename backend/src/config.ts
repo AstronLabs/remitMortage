@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 /** Environment configuration with validation. */
 
 export type StellarNetwork = "testnet" | "mainnet" | "futurenet" | "standalone";

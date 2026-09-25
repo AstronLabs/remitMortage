@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Request, Response, NextFunction } from "express";
 import { logHttpRequest } from "../utils/logger.js";
 import { CORRELATION_ID_HEADER, getCorrelationId } from "./correlationId.js";

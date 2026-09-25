@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 // Shared types and pure helpers for remittance eligibility verification.
 // Used by both the /verify page and the POST /api/verification/check route.
 

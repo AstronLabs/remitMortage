@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { NextResponse } from "next/server";
 import { Horizon } from "@stellar/stellar-sdk";
 import {

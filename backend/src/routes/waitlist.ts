@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Router, Request, Response } from "express";
 import { joinWaitlist, getWaitlistPosition } from "../services/inviteCode.js";
 import { prisma } from "../services/db.js";

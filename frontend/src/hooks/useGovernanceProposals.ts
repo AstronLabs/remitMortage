@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { useState, useCallback, useEffect } from "react";
 import { useWallet } from "../context/WalletContext";
 

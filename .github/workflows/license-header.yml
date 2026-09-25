@@ -1,0 +1,33 @@
+name: License Header
+
+# Enforces that every backend, frontend, and contracts source file carries the
+# required MIT license header. Fails with the exact file path so contributors
+# can fix it locally with `node scripts/check-license-header.mjs --fix`.
+# Generated and vendored paths are excluded via scripts/license-header-ignore.json
+# and the built-in defaults in scripts/check-license-header.mjs.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main, development ]
+
+concurrency:
+  group: license-header-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  license-header:
+    name: License Header (backend, frontend, contracts)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check license headers
+        run: node scripts/check-license-header.mjs

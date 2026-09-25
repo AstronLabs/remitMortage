@@ -1,4 +1,6 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 import type { TransactionType } from "../../lib/transaction-status";
 import { shortenAddress } from "../../lib/transaction-status";

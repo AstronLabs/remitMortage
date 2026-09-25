@@ -1,4 +1,6 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Horizon } from "@stellar/stellar-sdk";

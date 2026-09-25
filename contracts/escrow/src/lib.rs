@@ -1,5 +1,9 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 #![no_std]
 
+mod auto_deposit;
 mod errors;
 mod token_utils;
 mod types;
@@ -19,10 +23,15 @@ mod test_ttl_config;
 #[cfg(test)]
 mod test_auto_rollover;
 
+#[cfg(test)]
+mod test_auto_deposit;
+
 pub use crate::errors::EscrowError;
 use crate::token_utils::get_token_client;
 use crate::types::DataKey;
-pub use crate::types::{BorrowerRecord, EscrowConfig, PendingUpgradeRecord, PendingPenaltyProposal};
+pub use crate::types::{
+    AutoDepositSchedule, BorrowerRecord, EscrowConfig, PendingPenaltyProposal, PendingUpgradeRecord,
+};
 use soroban_sdk::{
     contract, contractimpl, symbol_short, Address, Env, IntoVal, Symbol,
 };

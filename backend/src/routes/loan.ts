@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Router } from "express";
 import { StrKey } from "@stellar/stellar-sdk";
 import logger from "../utils/logger.js";
@@ -21,15 +24,13 @@ import { queueNotification } from "../services/notification.js";
 import { hasExpiredKycDocuments } from "../jobs/kycExpiryReminder.js";
 import { prisma } from "../services/db.js";
 import { reconstructLoanApplicationAt } from "../services/loanHistory.js";
-import { applyAutoRejectionIfNeeded } from "../services/autoRejectionRuleStore.js";
-
-export const loanRouter = Router();
-
 import {
   checkDuplicateApplicants,
   logReviewerDecision,
   ApplicantFields,
 } from "../utils/fuzzyMatch.js";
+
+export const loanRouter = Router();
 
 // POST /api/loan/apply
 loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"), async (req, res) => {

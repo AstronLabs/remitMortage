@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Horizon, StrKey } from "@stellar/stellar-sdk";
 import { loadConfig, type StellarNetwork } from "../config.js";
 import {

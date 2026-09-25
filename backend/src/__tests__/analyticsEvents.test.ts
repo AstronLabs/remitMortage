@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 jest.mock("../services/db.js", () => ({
   prisma: {
     analyticsEvent: {

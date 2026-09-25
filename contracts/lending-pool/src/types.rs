@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 use soroban_sdk::{contracttype, Address, BytesN, Symbol};
 
 /// Pending upgrade proposal (used when upgrade_delay_ledgers > 0).

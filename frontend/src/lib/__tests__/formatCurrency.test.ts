@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { formatCurrency, formatNumber } from "../formatCurrency";
 import { locales, type Locale } from "@/i18n/locales";
 

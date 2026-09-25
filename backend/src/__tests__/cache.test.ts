@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Request, Response, NextFunction } from "express";
 import { cacheMiddleware } from "../middleware/cache.js";
 import { getCacheValue, setCacheValue } from "../services/redis.js";

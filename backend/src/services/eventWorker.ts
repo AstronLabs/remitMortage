@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { processNextEvent, type LedgerEventJob, getQueueDepth, getDlqDepth } from "./eventProducer.js";
 import { balanceRepository } from "./balanceStore.js";
 import { logAudit } from "./audit.js";

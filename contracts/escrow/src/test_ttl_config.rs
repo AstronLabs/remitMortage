@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 //! Unit tests for the dynamic TTL bump configuration.
 //!
 //! The escrow no longer hardcodes instance/persistent TTL parameters: they are

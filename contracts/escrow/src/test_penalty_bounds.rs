@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 //! Boundary tests for the early-exit penalty calculation in [`EscrowContract::withdraw`].
 //!
 //! The escrow contract deducts an early-exit penalty using tiered basis-point

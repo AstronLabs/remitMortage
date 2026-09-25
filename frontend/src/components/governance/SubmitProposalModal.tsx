@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import React, { useState } from "react";
 import { X, Send, AlertCircle } from "lucide-react";
 import { GovernanceProposal } from "../../hooks/useGovernanceProposals";

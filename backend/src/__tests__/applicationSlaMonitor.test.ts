@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { runApplicationSlaMonitorJob } from "../jobs/applicationSlaMonitor.js";
 import { prisma } from "../services/db.js";
 import { sendEmail } from "../services/email.js";

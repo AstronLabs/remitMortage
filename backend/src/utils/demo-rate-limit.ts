@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 /** Rate limiting for demo / sandbox mode.
  *  Prevents abuse of demo endpoints by capping requests per IP.
  *  Only active when DEMO_MODE=true. */

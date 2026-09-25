@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import React from "react";
 
 export type Stage = "Pending" | "Proposed" | "Approved" | "Disbursed";
