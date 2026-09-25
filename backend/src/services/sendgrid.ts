@@ -13,6 +13,7 @@ import axios from "axios";
 import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
 import { configuredSecretId, secrets } from "./secretsManager.js";
+import { DEFAULT_TENANT_ID, getCurrentTenant } from "./tenant.js";
 
 const SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send";
 
@@ -62,7 +63,8 @@ export async function sendGridSend(message: SendGridMessage): Promise<boolean> {
     return false;
   }
 
-  const sender = message.from ?? from;
+  const tenant = getCurrentTenant();
+  const sender = message.from ?? (tenant.id === DEFAULT_TENANT_ID ? from : tenant.senderEmail);
 
   try {
     const client = await loadOfficialClient(apiKey);

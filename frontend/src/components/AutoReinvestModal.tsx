@@ -2,7 +2,8 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React from "react";
+import React, { useRef } from "react";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 interface AutoReinvestModalProps {
   isOpen: boolean;
@@ -11,6 +12,9 @@ interface AutoReinvestModalProps {
 }
 
 export function AutoReinvestModal({ isOpen, onConfirm, onCancel }: AutoReinvestModalProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, isOpen, { onEscape: onCancel });
+
   if (!isOpen) return null;
 
   return (
@@ -21,6 +25,8 @@ export function AutoReinvestModal({ isOpen, onConfirm, onCancel }: AutoReinvestM
         aria-hidden="true"
       />
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="auto-reinvest-title"
