@@ -12,6 +12,14 @@ import { mergeApplicants, MergeValidationError } from "../services/applicantMerg
 import { promoteWaitlistBatch } from "../services/inviteCode.js";
 import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
 import { listAutoRejectionRules, createAutoRejectionRule, updateAutoRejectionRule } from "../services/autoRejectionRuleStore.js";
+import {
+  AssignmentError,
+  createReviewer,
+  listReviewers,
+  reassignApplicationReviewer,
+  updateReviewer,
+  type ReviewerStatus,
+} from "../services/assignmentQueue.js";
 
 export const adminRouter = Router();
 
@@ -137,6 +145,117 @@ adminRouter.post("/loans/bulk-review", requireAdmin, async (req: AuthenticatedRe
   } catch (error) {
     logger.error("Bulk loan review error", { error });
     return res.status(500).json({ error: "bulk_review_failed" });
+  }
+});
+
+// ── Application assignment queue (issue #621) ─────────────────────────────
+//
+// New applications are auto-assigned round-robin to active reviewers. These
+// endpoints let admins override a specific assignment and manage the pool of
+// review staff (including marking someone inactive / on leave).
+
+/**
+ * @openapi
+ * /api/admin/applications/{id}/reassign:
+ *   post:
+ *     summary: Manually reassign a loan application to a reviewer
+ *     tags: [Admin]
+ *     security: [bearerAuth: []]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reviewerId]
+ *             properties:
+ *               reviewerId: { type: string }
+ *     responses:
+ *       200: { description: Reassigned }
+ *       404: { description: Application or reviewer not found }
+ *       409: { description: Reviewer is inactive/on leave }
+ */
+adminRouter.post("/applications/:id/reassign", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { reviewerId } = req.body ?? {};
+  if (!reviewerId || typeof reviewerId !== "string") {
+    return res.status(400).json({ error: "invalid_request", message: "reviewerId is required" });
+  }
+
+  try {
+    const result = await reassignApplicationReviewer(String(req.params.id), reviewerId, {
+      actorAddress: req.user?.walletAddress ?? "admin",
+      ipAddress: req.ip ?? null,
+    });
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof AssignmentError) {
+      return res.status(error.status).json({ error: error.code, message: error.message });
+    }
+    logger.error("Application reassign error", { error });
+    return res.status(500).json({ error: "reassign_failed" });
+  }
+});
+
+adminRouter.get("/reviewers", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    return res.json(await listReviewers());
+  } catch (error) {
+    logger.error("List reviewers error", { error });
+    return res.status(500).json({ error: "failed_to_list_reviewers" });
+  }
+});
+
+adminRouter.post("/reviewers", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { email, name, status } = req.body ?? {};
+  if (!email || typeof email !== "string") {
+    return res.status(400).json({ error: "invalid_request", message: "email is required" });
+  }
+  if (status !== undefined && !["ACTIVE", "INACTIVE", "ON_LEAVE"].includes(status)) {
+    return res.status(400).json({ error: "invalid_status", message: "status must be ACTIVE, INACTIVE or ON_LEAVE" });
+  }
+
+  try {
+    const reviewer = await createReviewer({ email, name, status: status as ReviewerStatus | undefined });
+    return res.status(201).json(reviewer);
+  } catch (error: any) {
+    if (error?.code === "P2002") {
+      return res.status(409).json({ error: "reviewer_exists", message: "A reviewer with that email already exists" });
+    }
+    logger.error("Create reviewer error", { error });
+    return res.status(500).json({ error: "failed_to_create_reviewer" });
+  }
+});
+
+adminRouter.patch("/reviewers/:id", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { email, name, status } = req.body ?? {};
+  if (status !== undefined && !["ACTIVE", "INACTIVE", "ON_LEAVE"].includes(status)) {
+    return res.status(400).json({ error: "invalid_status", message: "status must be ACTIVE, INACTIVE or ON_LEAVE" });
+  }
+  if (email !== undefined && typeof email !== "string") {
+    return res.status(400).json({ error: "invalid_email", message: "email must be a string" });
+  }
+
+  try {
+    const reviewer = await updateReviewer(String(req.params.id), {
+      ...(name !== undefined ? { name } : {}),
+      ...(email !== undefined ? { email } : {}),
+      ...(status !== undefined ? { status: status as ReviewerStatus } : {}),
+    });
+    return res.json(reviewer);
+  } catch (error: any) {
+    if (error?.code === "P2025") {
+      return res.status(404).json({ error: "reviewer_not_found" });
+    }
+    if (error?.code === "P2002") {
+      return res.status(409).json({ error: "reviewer_exists", message: "A reviewer with that email already exists" });
+    }
+    logger.error("Update reviewer error", { error });
+    return res.status(500).json({ error: "failed_to_update_reviewer" });
   }
 });
 

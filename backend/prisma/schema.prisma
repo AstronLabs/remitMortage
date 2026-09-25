@@ -265,6 +265,11 @@ model LoanApplication {
 
   // SLA and reviewer tracking fields
   assignedReviewerEmail String?
+  // Assignment queue (issue #621): the review staff member this application was
+  // automatically (round-robin) or manually assigned to.
+  assignedReviewerId    String?   @map("assigned_reviewer_id")
+  assignedReviewer      Reviewer? @relation("AssignedReviewer", fields: [assignedReviewerId], references: [id])
+  assignedAt            DateTime?
   statusUpdatedAt       DateTime   @default(now())
   slaAlertSentAt        DateTime?
   deletedAt            DateTime?
@@ -292,6 +297,8 @@ model LoanApplication {
   @@index([deletedAt])
   // Composite index backing the stale draft cleanup scan: WHERE status = 'Draft' AND lastActivityAt < cutoff
   @@index([status, lastActivityAt])
+  // Index backing reviewer workload queries (applications assigned to a reviewer)
+  @@index([assignedReviewerId])
 }
 
 enum AutoRejectionRuleType {
@@ -698,4 +705,30 @@ model WaitlistEntry {
   @@index([email])
   @@index([status])
   @@index([createdAt])
+}
+
+/// Availability of review staff for the assignment queue (issue #621).
+/// Only `ACTIVE` reviewers take part in the round-robin rotation.
+enum ReviewerStatus {
+  ACTIVE
+  INACTIVE
+  ON_LEAVE
+}
+
+/// Review staff that new loan applications are distributed across by the
+/// round-robin assignment queue (issue #621).
+model Reviewer {
+  id             String         @id @default(uuid())
+  email          String         @unique
+  name           String?
+  status         ReviewerStatus @default(ACTIVE)
+  /// Stamped on every assignment so the queue can pick the least-recently
+  /// assigned active reviewer and keep the distribution even.
+  lastAssignedAt DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  assignedApplications LoanApplication[] @relation("AssignedReviewer")
+
+  @@index([status, lastAssignedAt])
 }
