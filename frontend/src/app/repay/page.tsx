@@ -733,9 +733,35 @@ function RepayInner() {
 
             {/* ── Transaction History ── */}
             <section aria-labelledby="history-heading" className="animate-fade-in-up-delay-3">
-              <h2 id="history-heading" className="text-lg font-semibold mb-4">
-                Repayment History
-              </h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 id="history-heading" className="text-lg font-semibold">
+                  Repayment History
+                </h2>
+                {!historyLoading && !historyError && records.length > 0 && (
+                  <button
+                    onClick={() => {
+                      import("../../lib/paymentHistoryPdf").then(({ generatePaymentHistoryPdf }) => {
+                        const summary = {
+                          principal: Number(loan?.principal) || 0,
+                          interestRateBps: loan?.interestRateBps || 0,
+                          totalOwed: (Number(loan?.principal) || 0) + ((Number(loan?.principal) || 0) * (loan?.interestRateBps || 0)) / 10000,
+                          repaid: Number(loan?.repaid) || 0,
+                          remaining: Math.max(0, ((Number(loan?.principal) || 0) + ((Number(loan?.principal) || 0) * (loan?.interestRateBps || 0)) / 10000) - (Number(loan?.repaid) || 0))
+                        };
+                        const mappedRecords = records.map(r => ({ date: r.date, amount: Number(r.amount), hash: r.hash }));
+                        const doc = generatePaymentHistoryPdf(summary, mappedRecords);
+                        doc.save("repayment-history.pdf");
+                      });
+                    }}
+                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-[var(--bg-primary)] border border-[var(--border-color)] text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)] transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                    </svg>
+                    Export to PDF
+                  </button>
+                )}
+              </div>
 
               {historyLoading && (
                 <div className="p-6 bg-[var(--bg-card)] rounded-lg text-sm text-[var(--text-muted)]">
