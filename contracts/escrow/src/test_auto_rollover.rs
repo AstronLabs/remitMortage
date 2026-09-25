@@ -33,6 +33,7 @@ fn base_config(admin: Address, token: Address, lending_pool: Address) -> EscrowC
         persistent_bump_amount: 518_400u32,
         persistent_lifetime_threshold: 129_600u32,
         yield_vault: None,
+        permissioned_mode: false,
     }
 }
 
@@ -62,7 +63,11 @@ fn test_default_opt_out_releases_funds_normally() {
     env.mock_all_auths();
 
     let (client, admin, borrower, token_address, recipient) = setup(&env);
-    client.initialize(&base_config(admin, token_address.clone(), recipient.clone()));
+    client.initialize(&base_config(
+        admin,
+        token_address.clone(),
+        recipient.clone(),
+    ));
 
     let goal_id = Symbol::new(&env, "house");
     let target_amount = 10_000_0000000i128;
@@ -93,7 +98,11 @@ fn test_opted_in_auto_rollover_seeds_new_cycle() {
     env.mock_all_auths();
 
     let (client, admin, borrower, token_address, recipient) = setup(&env);
-    client.initialize(&base_config(admin, token_address.clone(), recipient.clone()));
+    client.initialize(&base_config(
+        admin,
+        token_address.clone(),
+        recipient.clone(),
+    ));
 
     let goal_id = Symbol::new(&env, "house");
     let target_amount = 10_000_0000000i128;
@@ -128,7 +137,11 @@ fn test_mid_cycle_opt_out_reverts_to_normal_release() {
     env.mock_all_auths();
 
     let (client, admin, borrower, token_address, recipient) = setup(&env);
-    client.initialize(&base_config(admin, token_address.clone(), recipient.clone()));
+    client.initialize(&base_config(
+        admin,
+        token_address.clone(),
+        recipient.clone(),
+    ));
 
     let goal_id = Symbol::new(&env, "house");
     let target_amount = 10_000_0000000i128;

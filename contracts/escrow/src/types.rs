@@ -144,6 +144,18 @@ pub enum DataKey {
     /// Optional LendingPool contract address that early-exit penalty fees are
     /// routed to as investor yield. Unset means penalties stay in the contract.
     LendingPool,
+    /// Beneficiary designated by the borrower for a given goal.
+    Beneficiary(Address, Symbol),
+    /// Last ledger at which the goal owner performed an authenticated action.
+    LastOwnerActivity(Address, Symbol),
+    /// Marks that a beneficiary has already claimed a given goal.
+    BeneficiaryClaimed(Address, Symbol),
+    /// Ledgers of owner inactivity after which a beneficiary may claim.
+    BeneficiaryInactivityPeriod,
+    /// Admin-controlled signer set used for death/incapacity attestations.
+    BeneficiaryAttestors,
+    /// Yield shares allocated to a borrower for a given goal.
+    YieldShares(Address, Symbol),
     /// Reentrancy guard flag.
     ReentrancyGuard,
     /// Whitelist flag for a permissioned-mode address. Present and `true` means

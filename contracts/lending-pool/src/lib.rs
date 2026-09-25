@@ -18,8 +18,8 @@ mod test_loan_assumption;
 pub use crate::errors::{LoanAssumptionError, PoolError};
 pub use crate::types::{
     BatchDisburseItem, DataKey, HalvingInfo, InvestorRecord, LoanAssumptionRequest,
-    LoanCollateralRecord, LoanPortabilitySnapshot, LoanRecord, LoanStatus, PendingUpgradeRecord, PoolConfig, PoolHealth,
-    RepaymentSchedule, RestructureProposal, Tranche, TrancheInfo,
+    LoanCollateralRecord, LoanPortabilitySnapshot, LoanRecord, LoanStatus, PendingUpgradeRecord,
+    PoolConfig, PoolHealth, RepaymentSchedule, RestructureProposal, Tranche, TrancheInfo,
 };
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
@@ -150,6 +150,7 @@ impl LendingPoolContract {
                 tranche: Tranche::Senior,
                 accrued_yield: 0,
                 absorbed_loss: 0,
+                first_loss_cap_bps: None,
             })
     }
 
@@ -218,6 +219,12 @@ impl LendingPoolContract {
             .instance()
             .get(&DataKey::TotalDeposited)
             .unwrap_or(0i128)
+    }
+
+    fn set_total_deposited(env: &Env, amount: i128) {
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalDeposited, &amount);
     }
 
     fn read_total_repaid_interest(env: &Env) -> i128 {
@@ -998,7 +1005,9 @@ impl LendingPoolContract {
             // Update total liquidity and total deposited.
             let mut liquidity = Self::read_total_liquidity(&env);
             liquidity += amount;
-            env.storage().instance().set(&DataKey::TotalLiquidity, &liquidity);
+            env.storage()
+                .instance()
+                .set(&DataKey::TotalLiquidity, &liquidity);
 
             let total_dep = Self::read_total_deposited(&env) + amount;
             Self::set_total_deposited(&env, total_dep);
@@ -1014,34 +1023,6 @@ impl LendingPoolContract {
         tranche: Tranche,
     ) -> Result<(), PoolError> {
         Self::deposit_with_cap(env, investor, amount, tranche, None)
-    }
-
-            // Update total liquidity and total deposited.
-            let total = Self::read_total_liquidity(&env) + amount;
-            env.storage()
-                .instance()
-                .set(&DataKey::TotalLiquidity, &total);
-
-            let total_dep = Self::read_total_deposited(&env) + amount;
-            env.storage()
-                .instance()
-                .set(&DataKey::TotalDeposited, &total_dep);
-
-            env.storage()
-                .instance()
-                .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-
-            env.events().publish(
-                (symbol_short!("deposit"),),
-                (investor.clone(), amount, total),
-            );
-            env.events().publish(
-                (symbol_short!("debt_mnt"),),
-                (investor.clone(), tranche.clone(), amount),
-            );
-
-            Ok(())
-        }) // non_reentrant
     }
 
     /// Deposit penalty/fee revenue into the pool and distribute it as yield.
@@ -3024,7 +3005,10 @@ impl LendingPoolContract {
         config.admin.require_auth();
         let loan = Self::read_loan(&env, &loan_id)?;
         loan.borrower.require_auth();
-        let schedule = env.storage().persistent().get(&DataKey::LoanSchedule(loan_id.clone()));
+        let schedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::LoanSchedule(loan_id.clone()));
         let schedule_present = schedule.is_some();
         let schedule = schedule.unwrap_or(RepaymentSchedule {
             monthly_amount: 0,
@@ -3060,20 +3044,35 @@ impl LendingPoolContract {
         if Self::portability_proof(&env, &snapshot) != proof {
             return Err(PoolError::Unauthorized);
         }
-        if env.storage().persistent().has(&DataKey::Loan(snapshot.loan_id.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Loan(snapshot.loan_id.clone()))
+        {
             return Err(PoolError::LoanAlreadyExists);
         }
         Self::set_loan(&env, &snapshot.loan_id, &snapshot.loan);
         if snapshot.schedule_present {
-            env.storage().persistent().set(&DataKey::LoanSchedule(snapshot.loan_id.clone()), &snapshot.schedule);
+            env.storage().persistent().set(
+                &DataKey::LoanSchedule(snapshot.loan_id.clone()),
+                &snapshot.schedule,
+            );
         }
         let active = Self::read_borrower_active_loans(&env, &snapshot.loan.borrower);
-        if matches!(snapshot.loan.status, LoanStatus::Requested | LoanStatus::Approved) {
+        if matches!(
+            snapshot.loan.status,
+            LoanStatus::Requested | LoanStatus::Approved
+        ) {
             Self::set_borrower_active_loans(&env, &snapshot.loan.borrower, active + 1);
         }
         let count = Self::read_loan_count(&env);
-        env.storage().instance().set(&DataKey::LoanCount, &(count + 1));
-        env.events().publish((Symbol::new(&env, "loan_ported"),), (snapshot.loan_id, snapshot.source_pool));
+        env.storage()
+            .instance()
+            .set(&DataKey::LoanCount, &(count + 1));
+        env.events().publish(
+            (Symbol::new(&env, "loan_ported"),),
+            (snapshot.loan_id, snapshot.source_pool),
+        );
         Ok(())
     }
 
