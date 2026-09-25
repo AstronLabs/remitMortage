@@ -109,6 +109,8 @@ export interface Config {
   draftStaleExpiryGraceDays: number;
   /** When true, registration requires a valid unused invite code (soft-launch gating). */
   inviteCodeRequired: boolean;
+  /** When true, new applications are auto-assigned to an active reviewer (issue #621). */
+  assignmentQueueEnabled: boolean;
   /** Duration (ms) above which a database operation is captured as a slow query (issue #583). */
   slowQueryThresholdMs: number;
   /** Backup KYC provider endpoint. Null leaves failover disabled. */
@@ -289,6 +291,8 @@ export function loadConfig(): Config {
       10
     ),
     inviteCodeRequired: process.env.INVITE_CODE_REQUIRED === "true",
+    // Default on: the assignment queue is additive and best-effort.
+    assignmentQueueEnabled: process.env.ASSIGNMENT_QUEUE_ENABLED !== "false",
     slowQueryThresholdMs: parseInt(process.env.SLOW_QUERY_THRESHOLD_MS || "200", 10),
     kycBackupProviderUrl: process.env.KYC_BACKUP_PROVIDER_URL || null,
     kycBackupProviderApiKey: process.env.KYC_BACKUP_PROVIDER_API_KEY || null,

@@ -9,6 +9,7 @@ import {
   recordLoanCreation,
   type LoanSnapshot,
 } from "./loanHistory.js";
+import { autoAssignApplicationReviewer } from "./assignmentQueue.js";
 
 // lightweight id generator to avoid adding dependencies
 function makeId() {
@@ -134,6 +135,10 @@ export async function createApplication(
   // Seed the audit trail with the creation snapshot so later point-in-time
   // reconstructions have a base state to replay changes onto.
   await recordLoanCreation(application.id, snapshotOf(application));
+
+  // Issue #621: distribute the new application round-robin across active
+  // reviewers. Best-effort — a queue failure never blocks submission.
+  await autoAssignApplicationReviewer(application.id);
 
   return application;
 }
