@@ -515,6 +515,7 @@ async function _deliverToSubscription(
   data: WebhookPayload["data"]
 ): Promise<void> {
   const plaintextSecret = decrypt(subscription.secret);
+  const dispatchedAt = new Date();
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const timestamp = String(Date.now());
@@ -563,6 +564,9 @@ async function _deliverToSubscription(
         success,
         attempt,
         nextRetryAt,
+        dispatchedAt,
+        completedAt: new Date(),
+        outcome: success ? "success" : isTerminal ? "dlq" : "retry",
       },
     });
 

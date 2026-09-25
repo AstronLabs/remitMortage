@@ -3,6 +3,12 @@
 
 import { type Locale, t } from "../i18n/index.js";
 import { getBrandedHtml } from "../services/email.js";
+import { getCurrentTenant } from "../services/tenant.js";
+
+/** Translation with the current tenant's product name available as {brand}. */
+function tb(locale: Locale, key: string, vars?: Record<string, string | number>): string {
+  return t(locale, key, { brand: getCurrentTenant().name, ...vars });
+}
 
 export interface DepositReceiptParams {
   amount: string;
@@ -32,7 +38,7 @@ export interface LedgerAlertParams {
 }
 
 export function renderDepositReceipt(locale: Locale, params: DepositReceiptParams) {
-  const subject = t(locale, "email.deposit_receipt.subject");
+  const subject = tb(locale, "email.deposit_receipt.subject");
   const body = `
     <h2>${t(locale, "email.deposit_receipt.title")}</h2>
     <p>${t(locale, "email.deposit_receipt.body", { amount: params.amount })}</p>
@@ -56,7 +62,7 @@ export function renderDepositReceipt(locale: Locale, params: DepositReceiptParam
 }
 
 export function renderRepaymentReminder(locale: Locale, params: RepaymentReminderParams) {
-  const subject = t(locale, "email.repayment_reminder.subject");
+  const subject = tb(locale, "email.repayment_reminder.subject");
   const body = `
     <h2>${t(locale, "email.repayment_reminder.title")}</h2>
     <p>${t(locale, "email.repayment_reminder.body")}</p>
@@ -101,10 +107,10 @@ export function renderLoanStatusUpdate(locale: Locale, params: LoanStatusParams)
 }
 
 export function renderLockoutNotification(locale: Locale, params: LockoutParams) {
-  const subject = t(locale, "email.lockout.subject");
+  const subject = tb(locale, "email.lockout.subject");
   const body = `
     <h2 style="color: #ef4444;">${t(locale, "email.lockout.title")}</h2>
-    <p>${t(locale, "email.lockout.body")}</p>
+    <p>${tb(locale, "email.lockout.body")}</p>
     <p>${t(locale, "email.lockout.locked_message", { lockoutMinutes: params.lockoutMinutes })}</p>
     <table class="details-table">
       <tr>
@@ -131,7 +137,7 @@ export function renderLockoutNotification(locale: Locale, params: LockoutParams)
 }
 
 export function renderDepositAlert(locale: Locale, params: LedgerAlertParams) {
-  const subject = t(locale, "email.alert_deposit.subject");
+  const subject = tb(locale, "email.alert_deposit.subject");
   const body = `
     <h2>${t(locale, "email.alert_deposit.title")}</h2>
     <p>${t(locale, "email.alert_deposit.body", { amount: params.amount })}</p>
@@ -155,7 +161,7 @@ export function renderDepositAlert(locale: Locale, params: LedgerAlertParams) {
 }
 
 export function renderRepaymentAlert(locale: Locale, params: LedgerAlertParams) {
-  const subject = t(locale, "email.alert_repay.subject");
+  const subject = tb(locale, "email.alert_repay.subject");
   const body = `
     <h2>${t(locale, "email.alert_repay.title")}</h2>
     <p>${t(locale, "email.alert_repay.body", { amount: params.amount })}</p>
@@ -179,7 +185,7 @@ export function renderRepaymentAlert(locale: Locale, params: LedgerAlertParams) 
 }
 
 export function renderMilestoneApprovedAlert(locale: Locale, params: LedgerAlertParams) {
-  const subject = t(locale, "email.alert_milestone.subject");
+  const subject = tb(locale, "email.alert_milestone.subject");
   const body = `
     <h2>${t(locale, "email.alert_milestone.title")}</h2>
     <p>${t(locale, "email.alert_milestone.body")}</p>

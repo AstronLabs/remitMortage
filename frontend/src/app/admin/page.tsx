@@ -2,11 +2,12 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import toast, { Toaster } from "react-hot-toast";
 import { useWallet, OptionalWalletProvider } from "../../context/WalletContext";
 import { EmptyState } from "../../components/EmptyState";
+import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { ClipboardList, Hammer, History } from "lucide-react";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
@@ -132,6 +133,7 @@ function AdminShell({ children }: { children: React.ReactNode }) {
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
 type Tab = "loans" | "milestones" | "audit";
+const TAB_ORDER: Tab[] = ["loans", "milestones", "audit"];
 
 function AdminDashboard() {
   const [tab, setTab] = useState<Tab>("loans");
@@ -183,6 +185,24 @@ function AdminDashboard() {
     loadData();
   }, [loadData]);
 
+  function handleTabKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const index = TAB_ORDER.indexOf(tab);
+    const next =
+      event.key === "ArrowRight"
+        ? (index + 1) % TAB_ORDER.length
+        : event.key === "ArrowLeft"
+          ? (index - 1 + TAB_ORDER.length) % TAB_ORDER.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? TAB_ORDER.length - 1
+              : null;
+    if (next === null) return;
+    event.preventDefault();
+    setTab(TAB_ORDER[next]);
+    document.getElementById(`admin-tab-${TAB_ORDER[next]}`)?.focus();
+  }
+
   async function confirmAction() {
     if (!pendingAction) return;
     setSubmitting(true);
@@ -220,38 +240,49 @@ function AdminDashboard() {
 
       <ActiveLoansMapView />
 
-      <div className="flex gap-2 border-b border-[var(--border-color)]">
-        <TabButton active={tab === "loans"} onClick={() => setTab("loans")}>
+      <div
+        role="tablist"
+        aria-label="Admin sections"
+        onKeyDown={handleTabKeyDown}
+        className="flex gap-2 border-b border-[var(--border-color)]"
+      >
+        <TabButton id="loans" active={tab === "loans"} onClick={() => setTab("loans")}>
           Pending Loans
           {loans.length > 0 && <Count value={loans.length} />}
         </TabButton>
-        <TabButton active={tab === "milestones"} onClick={() => setTab("milestones")}>
+        <TabButton
+          id="milestones"
+          active={tab === "milestones"}
+          onClick={() => setTab("milestones")}
+        >
           Milestone Reviews
           {milestones.length > 0 && <Count value={milestones.length} />}
         </TabButton>
-        <TabButton active={tab === "audit"} onClick={() => setTab("audit")}>
-          <History className="h-3.5 w-3.5 mr-1.5" />
+        <TabButton id="audit" active={tab === "audit"} onClick={() => setTab("audit")}>
+          <History className="h-3.5 w-3.5 mr-1.5" aria-hidden="true" />
           Audit Log
         </TabButton>
       </div>
 
-      {tab === "loans" ? (
-        <PendingLoansTab
-          loans={loans}
-          loading={loading}
-          onApprove={(loan) => setPendingAction({ kind: "approve-loan", loan })}
-          onReject={(loan) => setPendingAction({ kind: "reject-loan", loan })}
-          onRefresh={loadData}
-        />
-      ) : tab === "milestones" ? (
-        <MilestoneReviewsTab
-          milestones={milestones}
-          loading={loading}
-          onApprove={(milestone) => setPendingAction({ kind: "approve-milestone", milestone })}
-        />
-      ) : (
-        <AuditLogViewer />
-      )}
+      <div id="admin-tabpanel" role="tabpanel" aria-labelledby={`admin-tab-${tab}`} tabIndex={0}>
+        {tab === "loans" ? (
+          <PendingLoansTab
+            loans={loans}
+            loading={loading}
+            onApprove={(loan) => setPendingAction({ kind: "approve-loan", loan })}
+            onReject={(loan) => setPendingAction({ kind: "reject-loan", loan })}
+            onRefresh={loadData}
+          />
+        ) : tab === "milestones" ? (
+          <MilestoneReviewsTab
+            milestones={milestones}
+            loading={loading}
+            onApprove={(milestone) => setPendingAction({ kind: "approve-milestone", milestone })}
+          />
+        ) : (
+          <AuditLogViewer />
+        )}
+      </div>
 
       {pendingAction && (
         <ConfirmationModal
@@ -274,16 +305,24 @@ function Count({ value }: { value: number }) {
 }
 
 function TabButton({
+  id,
   active,
   onClick,
   children,
 }: {
+  id: Tab;
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
   return (
     <button
+      type="button"
+      id={`admin-tab-${id}`}
+      role="tab"
+      aria-selected={active}
+      aria-controls="admin-tabpanel"
+      tabIndex={active ? 0 : -1}
       onClick={onClick}
       className={`px-4 py-2.5 text-sm font-medium -mb-px border-b-2 transition-colors ${
         active
@@ -774,6 +813,9 @@ function ConfirmationModal({
   onCancel: () => void;
 }) {
   const details = describeAction(action);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, true, { onEscape: onCancel });
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
@@ -783,6 +825,8 @@ function ConfirmationModal({
       onClick={onCancel}
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="w-full max-w-md rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] p-6"
         style={{ animation: "modal-pop 0.2s ease-out" }}
         onClick={(event) => event.stopPropagation()}

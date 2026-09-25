@@ -98,11 +98,14 @@ export async function startWebhookWorker(): Promise<void> {
 
       const result = await attemptPost(url, headers, body);
 
+      const completedAt = new Date();
+
       const success =
         "statusCode" in result &&
         result.statusCode !== undefined &&
         result.statusCode >= 200 &&
         result.statusCode < 300;
+      const isLastAttempt = job.attemptsMade >= (job.opts?.attempts || 5) - 1;
 
       await prisma.webhookDelivery.create({
         data: {
@@ -117,6 +120,11 @@ export async function startWebhookWorker(): Promise<void> {
           success,
           attempt,
           nextRetryAt: null,
+          // job.timestamp is when the dispatch enqueued the job, so retries
+          // count toward the delivery latency.
+          dispatchedAt: new Date(job.timestamp),
+          completedAt,
+          outcome: success ? "success" : isLastAttempt ? "dlq" : "retry",
         },
       });
 
@@ -144,7 +152,7 @@ export async function startWebhookWorker(): Promise<void> {
         error: errorMsg,
       });
 
-      if (job.attemptsMade >= (job.opts?.attempts || 5) - 1) {
+      if (isLastAttempt) {
         // last attempt - write to DLQ
         await prisma.webhookDLQ.create({
           data: {

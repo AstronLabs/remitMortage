@@ -111,6 +111,12 @@ export interface Config {
   inviteCodeRequired: boolean;
   /** Duration (ms) above which a database operation is captured as a slow query (issue #583). */
   slowQueryThresholdMs: number;
+  /** Webhook delivery p95 latency (ms) above which an endpoint is flagged (issue #619). */
+  webhookLatencySlaMs: number;
+  /** Default rolling window (minutes) for the webhook latency report. */
+  webhookLatencyWindowMinutes: number;
+  /** Raw white-label tenant records from TENANT_BRANDING (validated in services/tenant.ts). */
+  tenantBranding: unknown[];
 }
 
 /** Parses APPLICATION_SLA_HOURS (a JSON map of status -> SLA hours). */
@@ -144,6 +150,18 @@ function parseKmsKeyVersions(raw: string | undefined): Record<string, string> {
     // fall through to the dev default below
   }
   return devDefault;
+}
+
+/** Parses TENANT_BRANDING (a JSON array of tenant branding records). */
+function parseTenantBranding(raw: string | undefined): unknown[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // malformed input falls back to no extra tenants
+  }
+  return [];
 }
 
 /** Parses ALERT_RECIPIENTS (a JSON map of borrower address -> email address). */
@@ -258,5 +276,8 @@ export function loadConfig(): Config {
     ),
     inviteCodeRequired: process.env.INVITE_CODE_REQUIRED === "true",
     slowQueryThresholdMs: parseInt(process.env.SLOW_QUERY_THRESHOLD_MS || "200", 10),
+    webhookLatencySlaMs: parseInt(process.env.WEBHOOK_LATENCY_SLA_MS || "5000", 10),
+    webhookLatencyWindowMinutes: parseInt(process.env.WEBHOOK_LATENCY_WINDOW_MINUTES || "60", 10),
+    tenantBranding: parseTenantBranding(process.env.TENANT_BRANDING),
   };
 }

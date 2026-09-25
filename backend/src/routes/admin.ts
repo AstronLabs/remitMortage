@@ -12,6 +12,13 @@ import { mergeApplicants, MergeValidationError } from "../services/applicantMerg
 import { promoteWaitlistBatch } from "../services/inviteCode.js";
 import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
 import { listAutoRejectionRules, createAutoRejectionRule, updateAutoRejectionRule } from "../services/autoRejectionRuleStore.js";
+import {
+  getWebhookLatencyReport,
+  DEFAULT_LATENCY_SLA_MS,
+  DEFAULT_LATENCY_WINDOW_MINUTES,
+  MAX_LATENCY_WINDOW_MINUTES,
+} from "../services/webhookLatency.js";
+import { loadConfig } from "../config.js";
 
 export const adminRouter = Router();
 
@@ -191,6 +198,60 @@ adminRouter.patch("/auto-rejection-rules/:id", requireAdmin, async (req: Authent
   } catch (error) {
     logger.error("Update auto-rejection rule error", { error });
     return res.status(404).json({ error: "rule_not_found" });
+  }
+});
+
+function positiveIntParam(raw: unknown, fallback: number): number | null {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/**
+ * @openapi
+ * /api/admin/webhooks/latency:
+ *   get:
+ *     summary: Webhook delivery latency percentiles per endpoint
+ *     description: >-
+ *       Returns p50/p95/p99 dispatch-to-delivery latency for each subscriber
+ *       endpoint over a rolling window, with retry and DLQ counts. Endpoints
+ *       whose p95 exceeds the SLA threshold, or that only dead-lettered in the
+ *       window, are flagged with slaBreached.
+ *     tags:
+ *       - Admin
+ *     parameters:
+ *       - in: query
+ *         name: windowMinutes
+ *         schema: { type: integer, minimum: 1, maximum: 10080 }
+ *       - in: query
+ *         name: slaMs
+ *         schema: { type: integer, minimum: 1 }
+ *     responses:
+ *       200:
+ *         description: Latency report.
+ *       400:
+ *         description: Invalid windowMinutes or slaMs.
+ */
+adminRouter.get("/webhooks/latency", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const config = loadConfig();
+  const windowMinutes = positiveIntParam(
+    req.query.windowMinutes,
+    config.webhookLatencyWindowMinutes || DEFAULT_LATENCY_WINDOW_MINUTES
+  );
+  const slaMs = positiveIntParam(req.query.slaMs, config.webhookLatencySlaMs || DEFAULT_LATENCY_SLA_MS);
+
+  if (windowMinutes === null || windowMinutes > MAX_LATENCY_WINDOW_MINUTES) {
+    return res.status(400).json({ error: "invalid_window_minutes" });
+  }
+  if (slaMs === null) {
+    return res.status(400).json({ error: "invalid_sla_ms" });
+  }
+
+  try {
+    return res.json(await getWebhookLatencyReport({ windowMinutes, slaMs }));
+  } catch (error) {
+    logger.error("Webhook latency report error", { error });
+    return res.status(500).json({ error: "webhook_latency_report_failed" });
   }
 });
 
