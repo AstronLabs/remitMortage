@@ -71,6 +71,12 @@ import { startSecretsRotationScheduler } from "./jobs/secretsRotation.js";
 import { startJwtKeyRotationScheduler } from "./jobs/jwtKeyRotation.js";
 import { startRpcHealthMonitor } from "./services/rpcHealthMonitor.js";
 import { loadConfig } from "./config.js";
+import { getOcrProvider, setOcrProvider } from "./services/ocrService.js";
+import {
+  FailoverKycProvider,
+  HttpKycProvider,
+  sendKycFailoverAlert,
+} from "./services/kycProviderFailover.js";
 import logger from "./utils/logger.js";
 import { feeEstimator } from "./services/feeEstimator.js";
 import { initializeRedis } from "./services/redis.js";
@@ -84,6 +90,28 @@ import { startAnalyticsWorker, stopAnalyticsWorker } from "./workers/analyticsWo
 const app = express();
 const config = loadConfig();
 const PORT = config.port;
+
+// Serve KYC document verification from a backup provider when the primary
+// keeps failing. Disabled unless a backup provider URL is configured.
+if (config.kycBackupProviderUrl) {
+  setOcrProvider(
+    new FailoverKycProvider(
+      getOcrProvider(),
+      new HttpKycProvider({
+        url: config.kycBackupProviderUrl,
+        apiKey: config.kycBackupProviderApiKey,
+        timeoutMs: config.kycProviderTimeoutMs,
+      }),
+      {
+        failureThreshold: config.kycFailoverThreshold,
+        timeoutMs: config.kycProviderTimeoutMs,
+        cooldownMs: config.kycFailoverCooldownMs,
+        persistAlertAfterMs: config.kycFailoverAlertAfterMs,
+        onAlert: sendKycFailoverAlert,
+      }
+    )
+  );
+}
 
 void initializeRedis();
 

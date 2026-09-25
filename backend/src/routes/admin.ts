@@ -11,6 +11,12 @@ import { bulkReviewApplications, type BulkReviewDecision } from "../services/loa
 import { mergeApplicants, MergeValidationError } from "../services/applicantMerge.js";
 import { promoteWaitlistBatch } from "../services/inviteCode.js";
 import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
+import { getTaxIdMatchesForApplication } from "../services/taxIdDedup.js";
+import {
+  initiateServicingTransfer,
+  getServicingHistory,
+  ServicingTransferError,
+} from "../services/loanServicing.js";
 import { listAutoRejectionRules, createAutoRejectionRule, updateAutoRejectionRule } from "../services/autoRejectionRuleStore.js";
 import {
   getWebhookLatencyReport,
@@ -144,6 +150,60 @@ adminRouter.post("/loans/bulk-review", requireAdmin, async (req: AuthenticatedRe
   } catch (error) {
     logger.error("Bulk loan review error", { error });
     return res.status(500).json({ error: "bulk_review_failed" });
+  }
+});
+
+// Reviewer context for applications held with DUPLICATE_TAX_ID: the other
+// applicants sharing the tax ID and their applications. The tax ID itself is
+// never returned.
+adminRouter.get("/loans/:id/tax-id-matches", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const result = await getTaxIdMatchesForApplication(String(req.params.id));
+    if (!result) {
+      return res.status(404).json({ error: "not_found", message: "Loan application not found" });
+    }
+    return res.json(result);
+  } catch (error) {
+    logger.error("Tax ID match lookup error", { error });
+    return res.status(500).json({ error: "failed_to_load_tax_id_matches" });
+  }
+});
+
+// ── Loan servicing transfer ──────────────────────────────────────────────
+
+adminRouter.post("/loans/:id/servicing-transfer", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const body = req.body ?? {};
+  try {
+    const transfer = await initiateServicingTransfer({
+      loanId: String(req.params.id),
+      toServicer: body.toServicer,
+      toServicerContact: body.toServicerContact,
+      effectiveDate: body.effectiveDate,
+      reason: body.reason,
+      investorAddresses: body.investorAddresses,
+      initiatedBy: req.user?.walletAddress ?? "admin-api-key",
+      ipAddress: req.ip,
+    });
+    return res.status(201).json(transfer);
+  } catch (error) {
+    if (error instanceof ServicingTransferError) {
+      return res.status(error.httpStatus).json({ error: error.code, message: error.message });
+    }
+    logger.error("Loan servicing transfer error", { error });
+    return res.status(500).json({ error: "servicing_transfer_failed" });
+  }
+});
+
+adminRouter.get("/loans/:id/servicing-history", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const history = await getServicingHistory(String(req.params.id));
+    if (!history) {
+      return res.status(404).json({ error: "not_found", message: "Loan application not found" });
+    }
+    return res.json(history);
+  } catch (error) {
+    logger.error("Loan servicing history error", { error });
+    return res.status(500).json({ error: "failed_to_load_servicing_history" });
   }
 });
 

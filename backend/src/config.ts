@@ -111,6 +111,20 @@ export interface Config {
   inviteCodeRequired: boolean;
   /** Duration (ms) above which a database operation is captured as a slow query (issue #583). */
   slowQueryThresholdMs: number;
+  /** Backup KYC provider endpoint. Null leaves failover disabled. */
+  kycBackupProviderUrl: string | null;
+  /** Bearer token sent to the backup KYC provider. */
+  kycBackupProviderApiKey: string | null;
+  /** Consecutive primary KYC provider failures before failover activates. */
+  kycFailoverThreshold: number;
+  /** Per-call timeout (ms) for each KYC provider. */
+  kycProviderTimeoutMs: number;
+  /** How long (ms) to stay on the backup before probing the primary again. */
+  kycFailoverCooldownMs: number;
+  /** Alert again when failover is still active after this long (ms). */
+  kycFailoverAlertAfterMs: number;
+  /** HMAC key for applicant tax ID hashes used in duplicate detection. */
+  taxIdHashSecret: string;
   /** Webhook delivery p95 latency (ms) above which an endpoint is flagged (issue #619). */
   webhookLatencySlaMs: number;
   /** Default rolling window (minutes) for the webhook latency report. */
@@ -276,6 +290,13 @@ export function loadConfig(): Config {
     ),
     inviteCodeRequired: process.env.INVITE_CODE_REQUIRED === "true",
     slowQueryThresholdMs: parseInt(process.env.SLOW_QUERY_THRESHOLD_MS || "200", 10),
+    kycBackupProviderUrl: process.env.KYC_BACKUP_PROVIDER_URL || null,
+    kycBackupProviderApiKey: process.env.KYC_BACKUP_PROVIDER_API_KEY || null,
+    kycFailoverThreshold: parseInt(process.env.KYC_FAILOVER_THRESHOLD || "3", 10),
+    kycProviderTimeoutMs: parseInt(process.env.KYC_PROVIDER_TIMEOUT_MS || "10000", 10),
+    kycFailoverCooldownMs: parseInt(process.env.KYC_FAILOVER_COOLDOWN_MS || "60000", 10),
+    kycFailoverAlertAfterMs: parseInt(process.env.KYC_FAILOVER_ALERT_AFTER_MS || "900000", 10),
+    taxIdHashSecret: process.env.TAX_ID_HASH_SECRET || "default_tax_id_hash_secret",
     webhookLatencySlaMs: parseInt(process.env.WEBHOOK_LATENCY_SLA_MS || "5000", 10),
     webhookLatencyWindowMinutes: parseInt(process.env.WEBHOOK_LATENCY_WINDOW_MINUTES || "60", 10),
     tenantBranding: parseTenantBranding(process.env.TENANT_BRANDING),
