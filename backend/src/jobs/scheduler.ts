@@ -14,6 +14,8 @@ import { runSessionTokenPurgeJob } from "./sessionTokenPurge.js";
 import { runOrphanedRecordCleanupJob } from "./orphanedRecordCleanup.js";
 import { startAnalyticsRefreshScheduler, stopAnalyticsRefreshScheduler } from "./analyticsRefresh.js";
 import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
+import { runRateLimitAuditJob } from "./rateLimitAudit.js";
+import { runDeadlockDetectionJob } from "./deadlockDetection.js";
 import { prisma } from "../services/db.js";
 import { createPrismaSlowQueryStore } from "../services/slowQueryLog.js";
 
@@ -27,6 +29,8 @@ let sessionTokenPurgeTask: ReturnType<typeof cron.schedule> | null = null;
 let orphanedRecordCleanupTask: ReturnType<typeof cron.schedule> | null = null;
 let staleDraftCleanupTask: ReturnType<typeof cron.schedule> | null = null;
 let suspiciousActivityTask: ReturnType<typeof cron.schedule> | null = null;
+let rateLimitAuditTask: ReturnType<typeof cron.schedule> | null = null;
+let deadlockDetectionTask: ReturnType<typeof cron.schedule> | null = null;
 
 export function startScheduler() {
   if (schedulerTask) {
@@ -104,11 +108,22 @@ export function startScheduler() {
     }
   }, { timezone: "UTC" });
 
+  const auditSchedule = process.env.RATE_LIMIT_AUDIT_CRON_SCHEDULE || "0 * * * *"; // Hourly by default
+  rateLimitAuditTask = cron.schedule(auditSchedule, async () => {
+    console.log("[Scheduler] Triggering rate limit audit job...");
+    await runRateLimitAuditJob();
+  }, { timezone: "UTC" });
+
+  const deadlockSchedule = process.env.DEADLOCK_DETECTION_CRON_SCHEDULE || "*/5 * * * *"; // Every 5 minutes
+  deadlockDetectionTask = cron.schedule(deadlockSchedule, async () => {
+    await runDeadlockDetectionJob();
+  }, { timezone: "UTC" });
+
   // Start the materialized view refresh scheduler (every 5 minutes by default)
   startAnalyticsRefreshScheduler();
 
   console.log(
-    "[Scheduler] Started: repayment audit, session token purge, orphaned record cleanup, KYC expiry reminder, escrow reconciliation, application SLA monitor, admin portfolio digest, slow query digest, suspicious activity scan, and analytics refresh jobs scheduled."
+    "[Scheduler] Started: repayment audit, session token purge, orphaned record cleanup, KYC expiry reminder, escrow reconciliation, application SLA monitor, admin portfolio digest, slow query digest, suspicious activity scan, rate limit audit, deadlock detection, and analytics refresh jobs scheduled."
   );
 }
 
@@ -148,6 +163,14 @@ export function stopScheduler() {
   if (suspiciousActivityTask) {
     suspiciousActivityTask.stop();
     suspiciousActivityTask = null;
+  }
+  if (rateLimitAuditTask) {
+    rateLimitAuditTask.stop();
+    rateLimitAuditTask = null;
+  }
+  if (deadlockDetectionTask) {
+    deadlockDetectionTask.stop();
+    deadlockDetectionTask = null;
   }
   stopAnalyticsRefreshScheduler();
   console.log("[Scheduler] Stopped.");
