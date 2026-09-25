@@ -160,7 +160,7 @@
 .rm-invest-page .grid.grid-cols-1.md\:grid-cols-2 > div,
 .rm-invest-page .grid.grid-cols-1.lg\:grid-cols-2 > div { border-radius: 8px !important; }
 .rm-invest-page input, .rm-invest-page select { min-height: 47px; color: var(--workflow-text); background: #0e1815 !important; border: 1px solid #3a4b45 !important; border-radius: 6px !important; }
-.rm-invest-page input:focus, .rm-invest-page select:focus { border-color: var(--workflow-accent) !important; box-shadow: 0 0 0 3px rgba(85,195,157,.12); outline: none; }
+.rm-invest-page input:focus, .rm-invest-page select:focus { border-color: var(--workflow-accent) !important; box-shadow: 0 0 0 3px rgba(85,195,157,.12); }
 .rm-invest-page button { min-height: 40px; }
 .rm-invest-page .font-mono { font-family: inherit !important; }
 .rm-invest-page .bg-gradient-to-r { background-image: none !important; background-color: var(--workflow-accent) !important; }
@@ -1350,4 +1350,11 @@ body {
   [data-dnd-kit], .dnd-overlay, [role="status"] {
     display: none !important;
   }
+}
+
+/* Keyboard focus indicator for every interactive element. Left unlayered so
+   utilities such as `outline-none` cannot hide it from keyboard users. */
+:where(a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--color-blue);
+  outline-offset: 2px;
 }

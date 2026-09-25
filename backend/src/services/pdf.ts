@@ -4,6 +4,7 @@
 import PDFDocument from "pdfkit";
 import crypto from "crypto";
 import { RemittanceAnalysis } from "./stellar.js";
+import { DEFAULT_TENANT_ID, getCurrentTenant } from "./tenant.js";
 
 export interface VerificationReport {
   reportId: string;
@@ -37,13 +38,15 @@ export function streamVerificationPdf(
   stream: NodeJS.WritableStream
 ): void {
   const { reportId, generatedAt, analysis, reportHash } = report;
+  const tenant = getCurrentTenant();
+  const isDefaultTenant = tenant.id === DEFAULT_TENANT_ID;
 
   const doc = new PDFDocument({
     size: "A4",
     margin: 50,
     info: {
-      Title: "RemitMortgage Verification Report",
-      Author: "RemitMortgage Protocol",
+      Title: `${tenant.name} Verification Report`,
+      Author: `${tenant.name} Protocol`,
       Subject: "Remittance Eligibility Verification",
     },
   });
@@ -53,15 +56,19 @@ export function streamVerificationPdf(
   // ── Header / Branding ────────────────────────────────────────────────
   doc
     .rect(0, 0, doc.page.width, 90)
-    .fill("#1e293b"); // dark navy brand header
+    .fill(isDefaultTenant ? "#1e293b" : tenant.colors.header); // dark navy brand header
 
-  doc
-    .fillColor("#6366f1")
-    .fontSize(22)
-    .font("Helvetica-Bold")
-    .text("Remit", 50, 28, { continued: true })
-    .fillColor("#ffffff")
-    .text("Mortgage");
+  if (isDefaultTenant) {
+    doc
+      .fillColor("#6366f1")
+      .fontSize(22)
+      .font("Helvetica-Bold")
+      .text("Remit", 50, 28, { continued: true })
+      .fillColor("#ffffff")
+      .text("Mortgage");
+  } else {
+    doc.fillColor("#ffffff").fontSize(22).font("Helvetica-Bold").text(tenant.name, 50, 28);
+  }
 
   doc
     .fillColor("#94a3b8")
@@ -190,7 +197,7 @@ export function streamVerificationPdf(
     .text(
       "DISCLAIMER: This report is generated for informational purposes only and does not constitute " +
         "legal, financial, or mortgage advice. The hash above may be anchored on-chain in the " +
-        "RemitMortgage verification registry contract for auditability.",
+        `${tenant.name} verification registry contract for auditability.`,
       50,
       hashY + 40,
       { width: doc.page.width - 100, align: "justify" }
@@ -200,7 +207,9 @@ export function streamVerificationPdf(
     .fillColor("#cbd5e1")
     .fontSize(7.5)
     .text(
-      `© ${new Date().getFullYear()} RemitMortgage · Built on Stellar · MIT License`,
+      `© ${new Date().getFullYear()} ${
+        isDefaultTenant ? "RemitMortgage · Built on Stellar · MIT License" : tenant.legalEntity
+      }`,
       50,
       hashY + 72,
       { align: "center" }

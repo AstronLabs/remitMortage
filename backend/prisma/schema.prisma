@@ -652,11 +652,18 @@ model WebhookDelivery {
   attempt        Int                 @default(0)
   /// When the next retry should be attempted (null once terminal).
   nextRetryAt    DateTime?
+  /// When the event was originally dispatched (shared by every attempt of one dispatch).
+  dispatchedAt   DateTime?
+  /// When this attempt finished (response received or request failed).
+  completedAt    DateTime?
+  /// Attempt outcome: "success", "retry" (will be retried) or "dlq" (moved to the DLQ).
+  outcome        String?
   createdAt      DateTime            @default(now())
 
   @@index([subscriptionId])
   @@index([success])
   @@index([nextRetryAt])
+  @@index([completedAt])
 }
 
 model ApiKey {

@@ -12,6 +12,8 @@ export interface NotificationJobData {
   recipient: string;
   type: NotificationJobType;
   content: string;
+  /** Tenant whose branding the notification is sent with. */
+  tenantId?: string;
 }
 
 export type WebhookJobTopic =

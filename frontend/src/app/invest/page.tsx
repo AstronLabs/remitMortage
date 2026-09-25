@@ -410,15 +410,15 @@ function InvestPageInner() {
                 </div>
               ) : (
                 <form onSubmit={handleDeposit} className="space-y-4">
-                  <div>
-                    <label className="text-xs font-bold uppercase text-slate-400 block mb-2">
+                  <fieldset>
+                    <legend className="text-xs font-bold uppercase text-slate-400 block mb-2">
                       Select Capital Tranche
-                    </label>
+                    </legend>
                     <div className="grid grid-cols-2 gap-3">
                       {(["Senior", "Junior"] as Tranche[]).map((t) => (
                         <label
                           key={t}
-                          className={`cursor-pointer rounded-xl border p-4 text-xs transition-all ${
+                          className={`cursor-pointer rounded-xl border p-4 text-xs transition-all focus-within:ring-2 focus-within:ring-cyan-300 focus-within:ring-offset-2 focus-within:ring-offset-slate-900 ${
                             selectedTranche === t
                               ? "border-cyan-400 bg-cyan-500/10 text-white"
                               : "border-slate-800 text-slate-400 hover:border-slate-700"
@@ -455,7 +455,7 @@ function InvestPageInner() {
                         </label>
                       ))}
                     </div>
-                  </div>
+                  </fieldset>
 
                   <div>
                     <label
@@ -476,9 +476,15 @@ function InvestPageInner() {
                     />
                   </div>
 
-                  {depositError && <p className="text-xs text-red-400">{depositError}</p>}
+                  {depositError && (
+                    <p role="alert" className="text-xs text-red-400">
+                      {depositError}
+                    </p>
+                  )}
                   {depositSuccess && (
-                    <p className="text-xs text-emerald-400">Deposit submitted successfully.</p>
+                    <p role="status" className="text-xs text-emerald-400">
+                      Deposit submitted successfully.
+                    </p>
                   )}
 
                   <button
