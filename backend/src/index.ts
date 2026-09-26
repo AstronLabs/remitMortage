@@ -30,6 +30,7 @@ import { notificationsRouter } from "./routes/notifications.js";
 import { didRouter } from "./routes/did.js";
 import { adminRouter } from "./routes/admin.js";
 import { adminAuthRouter } from "./routes/adminAuth.js";
+import { impersonationRouter } from "./routes/impersonation.js";
 import { workspaceRouter } from "./routes/workspace.js";
 import { userRouter } from "./routes/user.js";
 import { metricsRouter } from "./routes/metrics.js";
@@ -207,6 +208,13 @@ app.use("/api/notifications", notificationsRouter);
 app.use("/api/referral", referralRouter);
 app.use("/api/admin", authMiddleware, adminRouter);
 app.use("/api/admin", adminAuthRouter);
+// Bare (no outer authMiddleware): impersonation/start and /end authenticate
+// via the admin's own token through requireAdmin regardless of whether an
+// impersonation cookie is also present, and /status reads only the
+// impersonation cookie itself — routing all three through authMiddleware
+// first would let its read-only enforcement block the very request that
+// ends an active impersonation session.
+app.use("/api/admin", impersonationRouter);
 app.use("/api/admin/api-keys", apiKeysRouter);
 app.use("/api/webhooks/pagerduty", incidentWebhookRouter);
 app.use("/api/webhooks", authMiddleware, webhooksRouter);

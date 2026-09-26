@@ -11,6 +11,8 @@ const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 import ActiveLoansMapView from "../../components/ActiveLoansMapView";
 import AuditLogViewer from "../../components/AuditLogViewer";
 import LoanCommentsPanel from "../../components/LoanCommentsPanel";
+import { useImpersonation } from "../../hooks/useImpersonation";
+import { startImpersonation } from "../../lib/impersonationApi";
 
 // The admin wallet authorized to approve loans and milestones. Configured via
 // NEXT_PUBLIC_ADMIN_ADDRESS at build time.
@@ -139,6 +141,8 @@ function AdminDashboard() {
   const [loading, setLoading] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const { status: impersonationStatus } = useImpersonation();
+  const isReadOnly = impersonationStatus.active;
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -183,6 +187,11 @@ function AdminDashboard() {
 
   async function confirmAction() {
     if (!pendingAction) return;
+    if (isReadOnly) {
+      toast.error("Approvals are disabled while viewing read-only.");
+      setPendingAction(null);
+      return;
+    }
     setSubmitting(true);
     try {
       if (pendingAction.kind === "approve-loan") {
@@ -214,6 +223,8 @@ function AdminDashboard() {
 
   return (
     <div className="space-y-8">
+      <ViewAsUserPanel isReadOnly={isReadOnly} />
+
       <PoolOverviewCard overview={overview} loading={loading} />
 
       <ActiveLoansMapView />
@@ -237,6 +248,7 @@ function AdminDashboard() {
         <PendingLoansTab
           loans={loans}
           loading={loading}
+          isReadOnly={isReadOnly}
           onApprove={(loan) => setPendingAction({ kind: "approve-loan", loan })}
           onReject={(loan) => setPendingAction({ kind: "reject-loan", loan })}
         />
@@ -244,6 +256,7 @@ function AdminDashboard() {
         <MilestoneReviewsTab
           milestones={milestones}
           loading={loading}
+          isReadOnly={isReadOnly}
           onApprove={(milestone) => setPendingAction({ kind: "approve-milestone", milestone })}
         />
       ) : (
@@ -293,6 +306,83 @@ function TabButton({
   );
 }
 
+// ── View As User (read-only impersonation) ─────────────────────────────────
+
+function ViewAsUserPanel({ isReadOnly }: { isReadOnly: boolean }) {
+  const [targetWallet, setTargetWallet] = useState("");
+  const [reason, setReason] = useState("");
+  const [starting, setStarting] = useState(false);
+
+  async function handleStart(e: React.FormEvent) {
+    e.preventDefault();
+    if (!targetWallet.trim()) return;
+
+    setStarting(true);
+    try {
+      await startImpersonation(targetWallet.trim(), reason.trim() || undefined);
+      toast.success("Now viewing as user, read-only. Look for the banner at the top of the page.");
+      setTargetWallet("");
+      setReason("");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to start impersonation session.");
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  if (isReadOnly) {
+    return (
+      <div className="p-4 rounded-lg border border-rose-500/30 bg-rose-500/10 text-sm text-rose-300">
+        You're currently viewing as another user, read-only. End that session (via the banner above)
+        before starting a new one.
+      </div>
+    );
+  }
+
+  return (
+    <details className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)]">
+      <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold text-[var(--text-primary)]">
+        View as user (read-only support session)
+      </summary>
+      <form onSubmit={handleStart} className="flex flex-col gap-3 px-4 pb-4 md:flex-row md:items-end">
+        <div className="flex-1">
+          <label htmlFor="impersonate-wallet" className="block text-xs text-[var(--text-muted)] mb-1">
+            User wallet address
+          </label>
+          <input
+            id="impersonate-wallet"
+            type="text"
+            value={targetWallet}
+            onChange={(e) => setTargetWallet(e.target.value)}
+            placeholder="G..."
+            className="w-full rounded-lg border border-[var(--border-color)] bg-transparent px-3 py-2 text-sm font-mono"
+          />
+        </div>
+        <div className="flex-1">
+          <label htmlFor="impersonate-reason" className="block text-xs text-[var(--text-muted)] mb-1">
+            Reason (optional, for the audit log)
+          </label>
+          <input
+            id="impersonate-reason"
+            type="text"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Support ticket #1234"
+            className="w-full rounded-lg border border-[var(--border-color)] bg-transparent px-3 py-2 text-sm"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={starting || !targetWallet.trim()}
+          className="btn-primary !py-2 !px-4 whitespace-nowrap disabled:opacity-50"
+        >
+          {starting ? "Starting…" : "View as user"}
+        </button>
+      </form>
+    </details>
+  );
+}
+
 // ── Pool Overview ────────────────────────────────────────────────────────────
 
 function PoolOverviewCard({
@@ -330,11 +420,13 @@ function PoolOverviewCard({
 function PendingLoansTab({
   loans,
   loading,
+  isReadOnly,
   onApprove,
   onReject,
 }: {
   loans: PendingLoan[];
   loading: boolean;
+  isReadOnly: boolean;
   onApprove: (loan: PendingLoan) => void;
   onReject: (loan: PendingLoan) => void;
 }) {
@@ -386,13 +478,17 @@ function PendingLoansTab({
               <button
                 data-testid={`admin-approve-${loan.id}`}
                 onClick={() => onApprove(loan)}
-                className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors"
+                disabled={isReadOnly}
+                title={isReadOnly ? "Disabled while viewing read-only" : undefined}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-emerald-500/15"
               >
                 Approve
               </button>
               <button
                 onClick={() => onReject(loan)}
-                className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors"
+                disabled={isReadOnly}
+                title={isReadOnly ? "Disabled while viewing read-only" : undefined}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-red-500/10"
               >
                 Reject
               </button>
@@ -417,10 +513,12 @@ function ScoreBadge({ score }: { score: number }) {
 function MilestoneReviewsTab({
   milestones,
   loading,
+  isReadOnly,
   onApprove,
 }: {
   milestones: MilestoneReview[];
   loading: boolean;
+  isReadOnly: boolean;
   onApprove: (milestone: MilestoneReview) => void;
 }) {
   if (loading) return <EmptyRow text="Loading milestone reviews…" />;
@@ -466,7 +564,9 @@ function MilestoneReviewsTab({
           <div className="shrink-0">
             <button
               onClick={() => onApprove(milestone)}
-              className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors"
+              disabled={isReadOnly}
+              title={isReadOnly ? "Disabled while viewing read-only" : undefined}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-emerald-500/15"
             >
               Approve Disbursement
             </button>

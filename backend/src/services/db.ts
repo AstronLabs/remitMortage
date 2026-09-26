@@ -448,6 +448,14 @@ export async function createLoanApplication(data: {
 
 // ── NotificationPreference ─────────────────────────────────────────────────
 
+/**
+ * How often a category's non-urgent alerts are delivered. Structurally
+ * identical to the generated Prisma enum of the same name, declared locally
+ * so this module doesn't require `prisma generate` to have run for a type
+ * check — the two are interchangeable at the Prisma Client boundary.
+ */
+export type NotificationFrequency = "IMMEDIATE" | "DAILY_DIGEST" | "WEEKLY_DIGEST";
+
 export type NotificationPreferenceData = {
   email?: string;
   phone?: string;
@@ -457,6 +465,12 @@ export type NotificationPreferenceData = {
   escrowReached?: boolean;
   paymentMissed?: boolean;
   loanMilestones?: boolean;
+  governanceAlerts?: boolean;
+  // Deliberately no `securityFrequency` — security-critical alerts are
+  // always immediate and are never controlled by a stored preference.
+  depositsFrequency?: NotificationFrequency;
+  milestonesFrequency?: NotificationFrequency;
+  governanceFrequency?: NotificationFrequency;
   webhookUrl?: string;
   timezone?: string;
   businessDays?: string;

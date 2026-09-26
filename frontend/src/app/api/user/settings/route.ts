@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+type NotificationFrequency = "IMMEDIATE" | "DAILY_DIGEST" | "WEEKLY_DIGEST";
+
 type UserSettingsPayload = {
   profile?: {
     displayName?: string;
@@ -14,6 +16,12 @@ type UserSettingsPayload = {
     paymentMissed?: boolean;
     loanMilestones?: boolean;
     loanApproval?: boolean;
+    governanceAlerts?: boolean;
+    // No `securityFrequency` — security alerts are always immediate and are
+    // never represented as a stored/configurable preference.
+    depositsFrequency?: NotificationFrequency;
+    milestonesFrequency?: NotificationFrequency;
+    governanceFrequency?: NotificationFrequency;
     webhookUrl?: string;
   };
   contractor?: {
@@ -26,6 +34,11 @@ type UserSettingsPayload = {
 const settingsStore = new Map<string, UserSettingsPayload & { updatedAt: string }>();
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const VALID_FREQUENCIES: NotificationFrequency[] = ["IMMEDIATE", "DAILY_DIGEST", "WEEKLY_DIGEST"];
+
+function isValidFrequency(value: unknown): value is NotificationFrequency {
+  return typeof value === "string" && (VALID_FREQUENCIES as string[]).includes(value);
+}
 
 function isValidWebhookUrl(value: string) {
   try {
@@ -60,6 +73,10 @@ export async function GET(request: NextRequest) {
       paymentMissed: true,
       loanMilestones: true,
       loanApproval: true,
+      governanceAlerts: true,
+      depositsFrequency: "IMMEDIATE" as NotificationFrequency,
+      milestonesFrequency: "IMMEDIATE" as NotificationFrequency,
+      governanceFrequency: "IMMEDIATE" as NotificationFrequency,
       webhookUrl: "",
     },
     contractor: { businessName: "", registrationNumber: "", serviceRegion: "" },
@@ -88,6 +105,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Security alerts are never configurable — there is no securityFrequency
+    // field in UserSettingsPayload at all, so a request that includes one is
+    // rejected outright rather than silently dropped.
+    if ((body.notifications as Record<string, unknown> | undefined)?.securityFrequency !== undefined) {
+      return NextResponse.json(
+        {
+          error: "security_frequency_not_configurable",
+          message: "Security alerts are always delivered immediately and cannot be changed.",
+        },
+        { status: 400 }
+      );
+    }
+
+    for (const field of ["depositsFrequency", "milestonesFrequency", "governanceFrequency"] as const) {
+      const value = body.notifications?.[field];
+      if (value !== undefined && !isValidFrequency(value)) {
+        return NextResponse.json(
+          { error: "invalid_frequency", field, message: `${field} must be one of: ${VALID_FREQUENCIES.join(", ")}` },
+          { status: 400 }
+        );
+      }
+    }
+
     const savedSettings = {
       profile: {
         displayName: body.profile?.displayName?.trim() ?? "",
@@ -102,6 +142,10 @@ export async function POST(request: NextRequest) {
         paymentMissed: body.notifications?.paymentMissed ?? true,
         loanMilestones: body.notifications?.loanMilestones ?? true,
         loanApproval: body.notifications?.loanApproval ?? true,
+        governanceAlerts: body.notifications?.governanceAlerts ?? true,
+        depositsFrequency: body.notifications?.depositsFrequency ?? "IMMEDIATE",
+        milestonesFrequency: body.notifications?.milestonesFrequency ?? "IMMEDIATE",
+        governanceFrequency: body.notifications?.governanceFrequency ?? "IMMEDIATE",
         webhookUrl,
       },
       contractor: {
