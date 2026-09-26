@@ -51,6 +51,25 @@ pub struct PoolConfig {
     /// Loan origination fee, in basis points, deducted from each disbursement
     /// and routed to `treasury_address`. Loan accounting remains gross.
     pub origination_fee_bps: u32,
+    /// Loan application (processing) fee, in basis points of the requested
+    /// principal, collected from the borrower when the application is
+    /// submitted. Unlike the origination fee — which is taken out of the
+    /// disbursement and is only ever payable by a loan that reaches funds —
+    /// the application fee is paid up front, before any credit decision, so
+    /// it is escrowed by the pool against that application until a final
+    /// decision is reached:
+    ///
+    /// * `approve_loan` retains it and routes it to `treasury_address`.
+    /// * `reject_loan` and `cancel_loan` refund it in full to the borrower
+    ///   automatically, in the same transaction as the transition.
+    ///
+    /// The escrowed tokens are never booked as pool liquidity, so settling
+    /// the fee in either direction leaves investor accounting untouched.
+    ///
+    /// `0` — the deployment default — charges no application fee at all, so
+    /// existing integrations are unaffected until an admin opts in via
+    /// `set_application_fee_bps`.
+    pub application_fee_bps: u32,
     /// Minimum number of ledgers an LP's deposit must remain in the pool
     /// before a withdrawal is allowed. 0 means no lockup.
     pub lockup_duration_ledgers: u32,
@@ -137,6 +156,11 @@ pub enum LoanStatus {
     /// Loan defaulted — losses are distributed via the waterfall.
     /// Loan has defaulted after missed payments.
     Defaulted = 4,
+    /// The admin rejected this application. Terminal, and distinct from
+    /// `Cancelled` so a credit decision is distinguishable on-chain from a
+    /// borrower withdrawing their own request. Any application fee escrowed
+    /// at submission is refunded to the borrower on entry to this state.
+    Rejected = 5,
 }
 
 /// Repayment schedule for a loan, tracked on-chain.
@@ -303,6 +327,16 @@ pub enum DataKey {
     PendingAdmin,
     /// Total withdrawal fees collected and routed to treasury.
     TotalWithdrawalFees,
+    /// Application (processing) fee escrowed for a loan, keyed by loan ID.
+    /// Present only while a `Requested` loan is awaiting a final decision;
+    /// removed as soon as the fee is settled — retained by `approve_loan`,
+    /// or refunded by `reject_loan` / `cancel_loan`. A missing entry means
+    /// either no fee was collected or it has already been settled.
+    ApplicationFee(BytesN<32>),
+    /// Lifetime application fees retained by the protocol, i.e. collected on
+    /// applications that went on to be approved. Refunded fees are never
+    /// counted here.
+    TotalApplicationFees,
     /// Lifetime protocol fees skimmed from interest by the fee switch and
     /// routed to the treasury.
     TotalProtocolFees,
