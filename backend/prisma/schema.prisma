@@ -626,6 +626,10 @@ model WebhookSubscription {
   status      WebhookSubscriptionStatus @default(active)
   /// Optional owning wallet address — used to scope management API access.
   ownerAddress String?
+  /// Payload contract selected by the subscriber. New subscriptions use v2.
+  webhookSchemaVersion Int                       @default(2)
+  /// Set when the selected version is approaching removal.
+  deprecationNotifiedAt DateTime?
   createdAt   DateTime                  @default(now())
   updatedAt   DateTime                  @updatedAt
 
@@ -634,6 +638,7 @@ model WebhookSubscription {
   @@index([status])
   @@index([ownerAddress])
   @@index([secretRotatedAt])
+  @@index([webhookSchemaVersion])
 }
 
 /// Immutable delivery attempt record — one row per HTTP attempt.

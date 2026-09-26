@@ -77,6 +77,8 @@ fn deploy_protocol<'a>(env: &Env) -> Protocol<'a> {
         grace_period_ledgers: 120_960,
         default_penalty_bps: 1_000,
         yield_vault: None,
+        match_bps: 0,
+        match_cap: 0,
     });
 
     Protocol {

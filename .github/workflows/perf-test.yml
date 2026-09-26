@@ -53,6 +53,19 @@ jobs:
         DATABASE_URL: postgresql://remitmortage:remitmortage_pass@localhost:5432/remitmortage
       run: npx tsx scripts/db-perf.ts
 
+    - name: Detect query plan regressions
+      working-directory: ./backend
+      env:
+        DATABASE_URL: postgresql://remitmortage:remitmortage_pass@localhost:5432/remitmortage
+      run: npx tsx scripts/query-plan-regression.ts
+
+    - name: Upload query plan report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: query-plan-report
+        path: backend/query-plan-baselines.json
+
     - name: Run Contract Resource Benchmarks
       run: ./scripts/benchmark-contracts.sh
 

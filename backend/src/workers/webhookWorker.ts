@@ -6,7 +6,7 @@ import { Worker, WorkerOptions } from "bullmq";
 import { getClusterClient } from "../services/redisCluster.js";
 import { WebhookJobData } from "../services/queueService.js";
 import { decrypt } from "../utils/crypto.js";
-import { signPayload } from "../services/webhook.js";
+import { signPayload, shapeWebhookPayload } from "../services/webhook.js";
 import { prisma } from "../services/db.js";
 import logger from "../utils/logger.js";
 
@@ -66,7 +66,7 @@ export async function startWebhookWorker(): Promise<void> {
   worker = new Worker<WebhookJobData>(
     "remitmortgage-webhooks",
     async (job) => {
-      const { subscriptionId, url, encryptedSecret, topic, data } = job.data;
+      const { subscriptionId, url, encryptedSecret, topic, data, webhookSchemaVersion } = job.data;
       const attempt = job.attemptsMade;
 
       logger.info("[webhook-worker] processing delivery", {
@@ -86,7 +86,7 @@ export async function startWebhookWorker(): Promise<void> {
         data,
       };
 
-      const body = JSON.stringify(payload);
+      const body = JSON.stringify(shapeWebhookPayload(payload, webhookSchemaVersion));
       const signature = signPayload(plaintextSecret, timestamp, body);
 
       const headers: Record<string, string> = {
