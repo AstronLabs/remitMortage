@@ -401,6 +401,31 @@ export async function getApplicant(stellarAddress: string) {
   return decryptApplicant(applicant);
 }
 
+/**
+ * Resolves an Applicant by Stellar address or internal id, auto-creating one
+ * if the identifier looks like a Stellar G-address and no record exists yet.
+ * Shared resolution logic for preference lookups (NotificationPreference,
+ * CommunicationPreference) that should all treat "user identifier" the same
+ * way. Returns null for an unresolvable, non-address identifier rather than
+ * creating a garbage record for it.
+ */
+export async function resolveOrCreateApplicant(stellarAddressOrId: string) {
+  const applicant = await prisma.applicant.findFirst({
+    where: {
+      deletedAt: null,
+      OR: [{ stellarAddress: stellarAddressOrId }, { id: stellarAddressOrId }],
+    },
+  });
+
+  if (applicant) return applicant;
+
+  if (stellarAddressOrId.startsWith("G") && stellarAddressOrId.length === 56) {
+    return prisma.applicant.create({ data: { stellarAddress: stellarAddressOrId } });
+  }
+
+  return null;
+}
+
 // ── VerificationResult ────────────────────────────────────────────────────
 
 export async function createVerificationResult(data: {

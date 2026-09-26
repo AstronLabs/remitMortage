@@ -3,8 +3,13 @@ import logger from "../utils/logger.js";
 import { sendEmail, sendDepositReceipt, sendRepaymentReminder, sendLoanStatusUpdate } from "./email.js";
 import { sendWebhook } from "./webhook.js";
 import { queueService } from "./queueService.js";
+import {
+  getCommunicationPreferences,
+  type CommunicationCategory,
+  type CommunicationChannel,
+} from "./communicationPreferences.js";
 
-export type NotificationType = "EMAIL" | "WEBHOOK" | "SMS";
+export type NotificationType = "EMAIL" | "WEBHOOK" | "SMS" | "PUSH";
 
 const MAX_ATTEMPTS = 5;
 const BASE_BACKOFF_MS = 60 * 1000; // 1 minute base backoff
@@ -207,6 +212,8 @@ export async function dispatchNotification(id: string): Promise<boolean> {
       success = await handleEmailDispatch(notification.recipient, notification.content);
     } else if (notification.type === "SMS") {
       success = await handleSmsDispatch(notification.recipient, notification.content);
+    } else if (notification.type === "PUSH") {
+      success = await handlePushDispatch(notification.recipient, notification.content);
     } else if (notification.type === "WEBHOOK") {
       let payload = {};
       try {
@@ -301,6 +308,22 @@ async function handleSmsDispatch(recipient: string, content: string): Promise<bo
 }
 
 /**
+ * Internal helper to dispatch browser/mobile push notifications.
+ *
+ * There is no push subscription registry on the backend yet (see
+ * lib/webPush.ts on the frontend, which manages subscriptions client-side
+ * without a corresponding backend delivery service) — `recipient` here is
+ * the applicant's wallet address rather than a real push endpoint. This
+ * stays a simulated dispatch, same honesty level as handleSmsDispatch above,
+ * until that registry exists.
+ */
+async function handlePushDispatch(recipient: string, content: string): Promise<boolean> {
+  logger.info(`[Push Dispatcher] Sending push notification for ${recipient}: "${content}"`);
+  // Simulated push provider integration (e.g. web-push / FCM / APNs)
+  return true;
+}
+
+/**
  * Internal helper to send correct email format depending on whether content is JSON-structured.
  */
 async function handleEmailDispatch(recipient: string, content: string): Promise<boolean> {
@@ -350,6 +373,20 @@ const FREQUENCY_FIELD_BY_EVENT: Partial<
   ESCROW_REACHED: "depositsFrequency",
   MILESTONE_UPDATE: "milestonesFrequency",
   GOVERNANCE_PROPOSAL: "governanceFrequency",
+};
+
+/**
+ * Maps each event type to the fine-grained per-category, per-channel opt-in
+ * matrix category governing it. PAYMENT_MISSED has no entry — it hasn't been
+ * migrated off the coarser emailAlerts/smsAlerts global toggles, which
+ * dispatchMaturityAlerts falls back to for any event type absent here.
+ */
+const COMMUNICATION_CATEGORY_BY_EVENT: Partial<Record<MaturityAlertEventType, CommunicationCategory>> = {
+  ESCROW_APPROACHING: "DEPOSITS",
+  ESCROW_REACHED: "DEPOSITS",
+  MILESTONE_UPDATE: "MILESTONES",
+  GOVERNANCE_PROPOSAL: "GOVERNANCE",
+  SECURITY_ALERT: "SECURITY",
 };
 
 export async function dispatchMaturityAlerts(
@@ -450,17 +487,37 @@ export async function dispatchMaturityAlerts(
         ? computeBusinessHoursDelay(preferences, isUrgent)
         : computeDigestDelay(preferences, frequency);
 
-  // Note: the emailAlerts/smsAlerts channel toggles below still apply even to
-  // security alerts — "always immediate" governs *timing*, not whether the
-  // user has that delivery channel switched on at all.
+  // For the four categories with a fine-grained opt-in matrix, that matrix
+  // decides whether each channel is attempted at all — independently per
+  // category, which is the whole point of this feature (disabling SMS for
+  // deposits must not touch email/push, or SMS for any other category).
+  // PAYMENT_MISSED isn't in that matrix yet, so it keeps using the coarser
+  // emailAlerts/smsAlerts global toggles below, unchanged from before.
+  const communicationCategory = COMMUNICATION_CATEGORY_BY_EVENT[event.type];
+  const channelMatrix = communicationCategory ? await getCommunicationPreferences(applicantAddress) : null;
+
+  function channelEnabled(channel: CommunicationChannel, legacyToggle: boolean): boolean {
+    if (communicationCategory && channelMatrix) {
+      return channelMatrix[communicationCategory][channel].enabled;
+    }
+    return legacyToggle;
+  }
+
   const dispatches: Promise<any>[] = [];
 
-  if (emailAlerts && email) {
+  if (email && channelEnabled("EMAIL", Boolean(emailAlerts))) {
     dispatches.push(queueNotification(email, "EMAIL", `${subject}: ${text}`, delayMs));
   }
 
-  if (smsAlerts && phone) {
+  if (phone && channelEnabled("SMS", Boolean(smsAlerts))) {
     dispatches.push(queueNotification(phone, "SMS", `${subject}: ${text}`, delayMs));
+  }
+
+  // Push has no legacy toggle to fall back to (it didn't exist as a channel
+  // before this matrix), so an uncategorized event type (PAYMENT_MISSED)
+  // simply never sends push.
+  if (channelEnabled("PUSH", false)) {
+    dispatches.push(queueNotification(applicantAddress, "PUSH", `${subject}: ${text}`, delayMs));
   }
 
   if (webhookUrl) {

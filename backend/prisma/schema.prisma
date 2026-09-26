@@ -185,6 +185,7 @@ model Applicant {
   borrowerCredentials BorrowerCredential[]
   kycDocuments        KycDocument[]
   notificationPreference NotificationPreference?
+  communicationPreferences CommunicationPreference[]
   deletedAt          DateTime?
 
   @@index([deletedAt])
@@ -573,6 +574,42 @@ model ApiKey {
 
   @@index([key])
   @@index([revoked])
+}
+
+enum CommunicationChannel {
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum CommunicationCategory {
+  DEPOSITS
+  MILESTONES
+  GOVERNANCE
+  SECURITY
+}
+
+// Per-user, per-category, per-channel opt-in matrix — distinct from
+// NotificationPreference's coarse global email/SMS toggles and per-category
+// delivery frequency (depositsFrequency etc.). Each cell also records when
+// and why consent was granted, for compliance auditability (SMS in
+// particular requires demonstrable opt-in in many jurisdictions). See
+// services/communicationPreferences.ts for the read/write logic and the
+// per-channel opt-in-by-default vs. opt-out-by-default rules.
+model CommunicationPreference {
+  id               String                 @id @default(uuid())
+  applicantId      String
+  applicant        Applicant              @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  category         CommunicationCategory
+  channel          CommunicationChannel
+  enabled          Boolean                @default(false)
+  consentTimestamp DateTime?
+  consentSource    String?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@unique([applicantId, category, channel])
+  @@index([applicantId])
 }
 
 model NotificationPreference {
