@@ -803,3 +803,35 @@ model SlowQueryLog {
   @@index([fingerprint])
   @@index([fingerprint, occurredAt])
 }
+
+enum EmailSuppressionReason {
+  HARD_BOUNCE
+  SOFT_BOUNCE
+  SPAM_COMPLAINT
+}
+
+/// Outbound email suppression list, fed by the email provider's bounce and
+/// complaint webhook. Every send checks this table first. Hard bounces and spam
+/// complaints suppress permanently; soft bounces suppress until
+/// `suppressedUntil` (exponential backoff) and become permanent after repeated
+/// failures.
+model EmailSuppression {
+  id               String                 @id @default(uuid())
+  /// Lower-cased, trimmed recipient address.
+  email            String                 @unique
+  reason           EmailSuppressionReason
+  /// True for hard bounces and complaints; soft bounces rely on `suppressedUntil`.
+  permanent        Boolean                @default(false)
+  /// End of the current soft-bounce backoff window.
+  suppressedUntil  DateTime?
+  softBounceCount  Int                    @default(0)
+  /// Internal flag raised on spam complaints for staff follow-up.
+  flaggedForReview Boolean                @default(false)
+  /// Provider-supplied reason text from the most recent event.
+  lastDetail       String?
+  lastEventAt      DateTime               @default(now())
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@index([permanent])
+}

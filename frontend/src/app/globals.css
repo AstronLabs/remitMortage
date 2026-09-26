@@ -28,7 +28,7 @@
   /* Text & Neutral tokens */
   --color-text: #f8fafc;
   --color-text-2: #94a3b8;
-  --color-text-3: #64748b;
+  --color-text-3: #8190a5; /* muted text; >= 4.5:1 on every dark surface (WCAG AA) */
   --color-border: rgba(255, 255, 255, 0.08);
   --color-border-glow: rgba(56, 189, 248, 0.3);
 
@@ -347,7 +347,7 @@
   --color-navy-mid: #1e293b;
   --color-text: #0f172a;
   --color-text-2: #475569;
-  --color-text-3: #94a3b8;
+  --color-text-3: #5b6b82;
   --color-border: rgba(0, 0, 0, 0.08);
   --color-border-glow: rgba(2, 132, 199, 0.3);
   --bg-primary: #f8fafc;
@@ -356,7 +356,19 @@
   --bg-glass: rgba(255, 255, 255, 0.85);
   --text-primary: #0f172a;
   --text-secondary: #475569;
-  --text-muted: #94a3b8;
+  --text-muted: #5b6b82;
+
+  /* The dark-theme accents are too light to read as text on light surfaces;
+     these darker shades of the same hues keep every text pairing at WCAG AA
+     (checked by __tests__/contrastAudit.test.ts). */
+  --color-blue: #0369a1;
+  --color-lime: #047857;
+  --color-green: #047857;
+  --color-red: #b91c1c;
+  --color-amber: #b45309;
+  --color-cyan: #0e7490;
+  --accent-primary: #0369a1;
+  --accent-secondary: #047857;
 
   --glass-card-bg: rgba(255, 255, 255, 0.7);
   --glass-card-border: rgba(0, 0, 0, 0.08);
@@ -375,21 +387,22 @@
 /* Color-blind-friendly palette overrides (validated against common deficiency simulations) */
 [data-palette="colorblind"] {
   /* High-contrast, distinguishable colors for all status meanings */
-  --status-success: #0066cc;     /* Strong blue (replaces green) */
+  /* Shades are tuned to read at WCAG AA (4.5:1) on the dark surfaces. */
+  --status-success: #4da3ff;     /* Strong blue (replaces green) */
   --status-warning: #ff8800;     /* Vivid orange (replaces yellow/amber) */
-  --status-error: #cc0000;       /* Deep red (enhanced contrast) */
-  --status-info: #6600cc;        /* Purple (replaces cyan) */
+  --status-error: #ff6666;       /* Bright red (enhanced contrast) */
+  --status-info: #b388ff;        /* Purple (replaces cyan) */
   --status-pending: #ff8800;     /* Orange (same as warning for consistency) */
-  --status-overdue: #cc0000;     /* Deep red (same as error) */
-  --status-healthy: #0066cc;     /* Blue (same as success) */
+  --status-overdue: #ff6666;     /* Bright red (same as error) */
+  --status-healthy: #4da3ff;     /* Blue (same as success) */
   --status-neutral: var(--color-text-2); /* Unchanged */
 
   /* Update primary accents to be more distinguishable */
-  --color-blue: #0066cc;
-  --color-lime: #0066cc;         /* Use blue instead of green */
+  --color-blue: #4da3ff;
+  --color-lime: #4da3ff;         /* Use blue instead of green */
   --color-amber: #ff8800;        /* Enhanced orange */
-  --color-red: #cc0000;          /* Enhanced red */
-  --color-cyan: #6600cc;         /* Use purple instead of cyan */
+  --color-red: #ff6666;          /* Enhanced red */
+  --color-cyan: #b388ff;         /* Use purple instead of cyan */
   
   /* Update gradient colors for better contrast */
   --accent-gradient: linear-gradient(135deg, #0066cc, #6600cc, #ff8800);
@@ -399,12 +412,19 @@
 /* Combined light + colorblind palette */
 [data-theme="light"][data-palette="colorblind"] {
   --status-success: #004499;     /* Darker blue for light theme */
-  --status-warning: #cc6600;     /* Darker orange for light theme */
+  --status-warning: #a85300;     /* Darker orange for light theme */
   --status-error: #990000;       /* Darker red for light theme */
   --status-info: #4d0099;        /* Darker purple for light theme */
-  --status-pending: #cc6600;     
-  --status-overdue: #990000;     
-  --status-healthy: #004499;     
+  --status-pending: #a85300;
+  --status-overdue: #990000;
+  --status-healthy: #004499;
+
+  /* The dark colorblind accents above are too light for light surfaces. */
+  --color-blue: #004499;
+  --color-lime: #004499;
+  --color-amber: #a85300;
+  --color-red: #990000;
+  --color-cyan: #4d0099;
 }
 
 /* ══════════════════════════════════════════════════════════════════════

@@ -2417,6 +2417,62 @@ impl LendingPoolContract {
         Ok(releasable)
     }
 
+    /// Voluntarily add collateral to an active loan.
+    ///
+    /// `from` (the borrower or any party willing to back the loan) transfers
+    /// `amount` of the pool token into the contract, and the loan's tracked
+    /// collateral increases by the same amount so health checks such as
+    /// [`Self::get_releasable_collateral`] reflect it immediately. Only
+    /// `Approved` loans can be topped up; closed (repaid or cancelled),
+    /// defaulted, or not-yet-approved loans revert with
+    /// [`PoolError::InvalidLoanState`].
+    ///
+    /// Emits `collateral_topped_up` with the new remaining collateral and
+    /// collateralization ratio (bps). Returns the new ratio.
+    pub fn top_up_collateral(
+        env: Env,
+        loan_id: BytesN<32>,
+        from: Address,
+        amount: i128,
+    ) -> Result<u32, PoolError> {
+        Self::check_not_paused(&env)?;
+        if amount <= 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+        from.require_auth();
+
+        let loan = Self::read_loan(&env, &loan_id)?;
+        if loan.status != LoanStatus::Approved {
+            return Err(PoolError::InvalidLoanState);
+        }
+
+        let config = Self::read_config(&env)?;
+        Self::token_client(&env, &config.token).transfer(
+            &from,
+            &env.current_contract_address(),
+            &amount,
+        );
+
+        let mut collateral = Self::get_or_default_loan_collateral(&env, &loan_id, &loan);
+        collateral.initial_collateral = collateral
+            .initial_collateral
+            .checked_add(amount)
+            .ok_or(PoolError::InvalidAmount)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::LoanCollateral(loan_id.clone()), &collateral);
+
+        let (_, remaining_collateral, ratio_bps) =
+            Self::compute_collateral_release(&loan, &collateral);
+
+        env.events().publish(
+            (Symbol::new(&env, "collateral_topped_up"), loan_id),
+            (from, amount, remaining_collateral, ratio_bps),
+        );
+
+        Ok(ratio_bps)
+    }
+
     /// Trigger an on-chain liquidation for a defaulted loan.
     /// Allocates the seized savings collateral to the lending pool to cover investor losses.
     /// Returns true when an approved loan's repayment obligations are overdue
@@ -8838,5 +8894,130 @@ mod test {
 
         let res = client.try_release_collateral_by_id(&loan_id);
         assert!(res.is_err());
+    }
+
+    // ── Mid-loan collateral top-up ──────────────────────────────────────
+
+    #[test]
+    fn test_top_up_improves_below_threshold_position() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, token_address, client) = setup_pool(&env);
+        let token = token::Client::new(&env, &token_address);
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+        client.request_loan(&borrower, &loan_id, &70_000_0000000i128);
+        client.approve_loan(&loan_id);
+        // 10k against 70k is ~14.28%, below the 30% minimum.
+        client.set_loan_collateral(&loan_id, &10_000_0000000i128, &3_000u32);
+        let (_, _, ratio_before) = client.get_releasable_collateral(&loan_id);
+        assert_eq!(ratio_before, 1_428u32);
+
+        StellarAssetClient::new(&env, &token_address).mint(&borrower, &20_000_0000000i128);
+        let pool_before = token.balance(&client.address);
+
+        let ratio = client.top_up_collateral(&loan_id, &borrower, &20_000_0000000i128);
+
+        // 30k against 70k is ~42.85%, back above the minimum.
+        assert_eq!(ratio, 4_285u32);
+        let (_, remaining, ratio_after) = client.get_releasable_collateral(&loan_id);
+        assert_eq!(remaining, 30_000_0000000i128);
+        assert_eq!(ratio_after, 4_285u32);
+        assert!(ratio_after >= 3_000u32);
+        assert_eq!(
+            client
+                .get_loan_collateral(&loan_id)
+                .unwrap()
+                .initial_collateral,
+            30_000_0000000i128
+        );
+        assert_eq!(token.balance(&borrower), 0);
+        assert_eq!(
+            token.balance(&client.address),
+            pool_before + 20_000_0000000i128
+        );
+    }
+
+    #[test]
+    fn test_top_up_on_healthy_loan_increases_collateral() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, token_address, client) = setup_pool(&env);
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+        client.request_loan(&borrower, &loan_id, &70_000_0000000i128);
+        client.approve_loan(&loan_id);
+        client.set_loan_collateral(&loan_id, &30_000_0000000i128, &3_000u32);
+
+        StellarAssetClient::new(&env, &token_address).mint(&borrower, &7_000_0000000i128);
+        let ratio = client.top_up_collateral(&loan_id, &borrower, &7_000_0000000i128);
+        let topped_up = env.events().all().iter().any(|(_, topics, _)| {
+            topics.get(0).map(|t| {
+                <Symbol as soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>::try_from_val(&env, &t)
+                    .ok()
+                    == Some(Symbol::new(&env, "collateral_topped_up"))
+            }) == Some(true)
+        });
+        assert!(topped_up);
+
+        // 37k against 70k is ~52.85%.
+        assert_eq!(ratio, 5_285u32);
+        assert_eq!(
+            client
+                .get_loan_collateral(&loan_id)
+                .unwrap()
+                .initial_collateral,
+            37_000_0000000i128
+        );
+    }
+
+    #[test]
+    fn test_top_up_on_defaulted_loan_reverts() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (_admin, token_address, loan_id, client) = setup_overdue_loan(&env);
+        client.mark_default(&loan_id);
+
+        let payer = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_address).mint(&payer, &1_000_0000000i128);
+        let res = client.try_top_up_collateral(&loan_id, &payer, &1_000_0000000i128);
+        assert_eq!(res.err().unwrap().unwrap(), PoolError::InvalidLoanState);
+    }
+
+    #[test]
+    fn test_top_up_on_closed_loan_reverts() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, token_address, client) = setup_pool(&env);
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+        client.request_loan(&borrower, &loan_id, &50_000_0000000i128);
+        client.cancel_loan(&loan_id);
+
+        StellarAssetClient::new(&env, &token_address).mint(&borrower, &1_000_0000000i128);
+        let res = client.try_top_up_collateral(&loan_id, &borrower, &1_000_0000000i128);
+        assert_eq!(res.err().unwrap().unwrap(), PoolError::InvalidLoanState);
+    }
+
+    #[test]
+    fn test_top_up_rejects_non_positive_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, _token_address, client) = setup_pool(&env);
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+        client.request_loan(&borrower, &loan_id, &50_000_0000000i128);
+        client.approve_loan(&loan_id);
+
+        let res = client.try_top_up_collateral(&loan_id, &borrower, &0i128);
+        assert_eq!(res.err().unwrap().unwrap(), PoolError::InvalidAmount);
     }
 }
