@@ -103,6 +103,8 @@ pub enum PoolError {
     BorrowerLoanCapExceeded = 46,
     /// Refinancing request was submitted before the cooldown window elapsed.
     RefinanceCooldownActive = 47,
+    /// Application fee exceeds the ceiling permitted on a single application.
+    ApplicationFeeTooHigh = 48,
     /// Withdrawal amount exceeds the pool's configured per-transaction limit.
     WithdrawalExceedsMaxSingleLimit = 50,
 }
