@@ -69,6 +69,8 @@ const DEFAULT_OVERDUE_LEDGERS: u32 = 3 * LEDGERS_PER_MONTH; // ~90 days past due
 const BPS_SCALE: u32 = 10_000;
 /// Origination fees may not exceed 100% of a disbursement.
 const MAX_ORIGINATION_FEE_BPS: u32 = BPS_SCALE;
+/// Application fees may not exceed 100% of the requested principal.
+const MAX_APPLICATION_FEE_BPS: u32 = BPS_SCALE;
 /// Utilization threshold for low-fee tier (50%).
 const UTILIZATION_LOW_THRESHOLD_BPS: u32 = 5_000; // 50%
 /// Utilization threshold for medium-fee tier (80%).
@@ -309,6 +311,111 @@ impl LendingPoolContract {
             .ok_or(PoolError::InvalidAmount)?
             / BPS_SCALE as i128;
         Ok((fee, principal - fee))
+    }
+
+    // ── Application Fee Escrow Helpers ───────────────────────────────────
+
+    /// The application fee escrowed for `loan_id`, awaiting a final decision
+    /// on that application. A missing entry means nothing is escrowed — either
+    /// the deployment charges no application fee, or the fee has already been
+    /// settled.
+    fn read_application_fee(env: &Env, loan_id: &BytesN<32>) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ApplicationFee(loan_id.clone()))
+            .unwrap_or(0i128)
+    }
+
+    /// Write (or, for a non-positive `amount`, clear) the escrowed application
+    /// fee for `loan_id`.
+    fn set_application_fee(env: &Env, loan_id: &BytesN<32>, amount: i128) {
+        let key = DataKey::ApplicationFee(loan_id.clone());
+        if amount <= 0 {
+            env.storage().persistent().remove(&key);
+        } else {
+            env.storage().persistent().set(&key, &amount);
+        }
+    }
+
+    /// The application (processing) fee owed on a `principal`-sized
+    /// application, in token stroops. `0` when the pool charges no
+    /// application fee, which is the deployment default.
+    fn calculate_application_fee(config: &PoolConfig, principal: i128) -> Result<i128, PoolError> {
+        if config.application_fee_bps > MAX_APPLICATION_FEE_BPS {
+            return Err(PoolError::ApplicationFeeTooHigh);
+        }
+        if principal <= 0 || config.application_fee_bps == 0 {
+            return Ok(0);
+        }
+        Ok(principal
+            .checked_mul(config.application_fee_bps as i128)
+            .ok_or(PoolError::InvalidAmount)?
+            / BPS_SCALE as i128)
+    }
+
+    /// Refund the escrowed application fee for `loan_id` to `borrower`.
+    ///
+    /// Called on every non-approval terminal transition — `reject_loan` and
+    /// `cancel_loan` — so a borrower who never gets a loan never pays an
+    /// application fee. A no-op when nothing is escrowed, so callers need not
+    /// branch on whether a fee applies.
+    ///
+    /// The escrow record is cleared *before* the transfer, so no re-entrant
+    /// path can refund the same fee twice.
+    fn refund_application_fee(
+        env: &Env,
+        config: &PoolConfig,
+        loan_id: &BytesN<32>,
+        borrower: &Address,
+    ) {
+        let fee = Self::read_application_fee(env, loan_id);
+        if fee <= 0 {
+            return;
+        }
+        Self::set_application_fee(env, loan_id, 0);
+
+        let token = Self::token_client(env, &config.token);
+        token.transfer(&env.current_contract_address(), borrower, &fee);
+
+        env.events().publish(
+            (Symbol::new(env, "app_fee_refund"),),
+            (loan_id.clone(), borrower.clone(), fee),
+        );
+    }
+
+    /// Retain the escrowed application fee for `loan_id` on approval: the fee
+    /// becomes protocol revenue and leaves the escrow for the treasury.
+    ///
+    /// This is the mirror image of `refund_application_fee` and deliberately
+    /// triggers no refund — an approved application pays for the work the
+    /// underwriting decision cost.
+    fn retain_application_fee(env: &Env, config: &PoolConfig, loan_id: &BytesN<32>) {
+        let fee = Self::read_application_fee(env, loan_id);
+        if fee <= 0 {
+            return;
+        }
+        Self::set_application_fee(env, loan_id, 0);
+
+        let token = Self::token_client(env, &config.token);
+        token.transfer(
+            &env.current_contract_address(),
+            &config.treasury_address,
+            &fee,
+        );
+
+        let total: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalApplicationFees)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalApplicationFees, &(total + fee));
+
+        env.events().publish(
+            (Symbol::new(env, "app_fee_retained"),),
+            (loan_id.clone(), config.treasury_address.clone(), fee),
+        );
     }
 
     fn read_loan(env: &Env, loan_id: &BytesN<32>) -> Result<LoanRecord, PoolError> {
@@ -861,6 +968,11 @@ impl LendingPoolContract {
             fee_switch_bps: 0,
             // Disabled by default for backwards-compatible deployments.
             origination_fee_bps: 0,
+            // No application fee charged at deployment: a loan application is
+            // free until an admin opts in via `set_application_fee_bps`, at
+            // which point the fee is escrowed per application and refunded
+            // automatically if that application is rejected or withdrawn.
+            application_fee_bps: 0,
             lockup_duration_ledgers,
             // No deposit floor at deployment, so existing integrations are
             // unaffected until an admin sets one via `set_min_deposit_amount`.
@@ -911,6 +1023,9 @@ impl LendingPoolContract {
         env.storage()
             .instance()
             .set(&DataKey::TotalWithdrawalFees, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalApplicationFees, &0i128);
         env.storage()
             .instance()
             .set(&DataKey::TotalProtocolFees, &0i128);
@@ -1126,12 +1241,17 @@ impl LendingPoolContract {
         // Enforce the per-borrower active-loan cap, when one is configured.
         // `0` disables the cap. An "active" loan is one in Requested or
         // Approved state; the counter is released when a loan is repaid,
-        // cancelled or defaulted.
-        let active_loan_cap = Self::read_config(env)?.max_active_loans_per_borrower;
+        // cancelled, rejected or defaulted.
+        let config = Self::read_config(env)?;
+        let active_loan_cap = config.max_active_loans_per_borrower;
         let borrower_active_loans = Self::read_borrower_active_loans(env, &borrower);
         if active_loan_cap != 0 && borrower_active_loans >= active_loan_cap {
             return Err(PoolError::BorrowerLoanCapExceeded);
         }
+
+        // Price the application fee up front so a misconfigured fee fails the
+        // request before any state is written or any token moves.
+        let application_fee = Self::calculate_application_fee(&config, principal)?;
 
         let interest_rate_bps = Self::resolve_borrower_interest_rate(env, &borrower)?;
 
@@ -1152,6 +1272,23 @@ impl LendingPoolContract {
         };
 
         Self::set_loan(env, &loan_id, &loan);
+
+        // Escrow the application (processing) fee against this application.
+        // The tokens sit in the pool contract until the application reaches a
+        // final decision: `approve_loan` retains them as protocol revenue,
+        // while `reject_loan` and `cancel_loan` refund them in full. They are
+        // deliberately not booked as pool liquidity, so settling the fee in
+        // either direction leaves investor accounting untouched.
+        if application_fee > 0 {
+            let token = Self::token_client(env, &config.token);
+            token.transfer(&borrower, &env.current_contract_address(), &application_fee);
+            Self::set_application_fee(env, &loan_id, application_fee);
+
+            env.events().publish(
+                (Symbol::new(env, "app_fee_collected"),),
+                (borrower.clone(), loan_id.clone(), application_fee),
+            );
+        }
 
         // Track the new loan against the borrower's active-loan count.
         Self::set_borrower_active_loans(env, &borrower, borrower_active_loans + 1);
@@ -1229,6 +1366,11 @@ impl LendingPoolContract {
             .instance()
             .set(&DataKey::ActiveLoanCommitments, &new_commitments);
 
+        // The application was approved, so its escrowed application fee is
+        // earned rather than owed: settle it to the treasury. No refund is
+        // triggered on this path, and the borrower keeps the full principal.
+        Self::retain_application_fee(&env, &config, &loan_id);
+
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
@@ -1239,15 +1381,76 @@ impl LendingPoolContract {
         Ok(())
     }
 
-    /// Borrower cancels their own loan request before an admin acts on it.
+    /// Admin rejects a pending loan application.
+    ///
+    /// The negative counterpart to `approve_loan`: the loan must be
+    /// `Requested` and the admin must authorise the call. Unlike a borrower
+    /// withdrawing their own request via `cancel_loan`, the outcome is
+    /// recorded as `Rejected`, so a credit decision stays distinguishable
+    /// on-chain from a self-service cancellation.
+    ///
+    /// Any application fee escrowed at submission is refunded to the borrower
+    /// in full, automatically, in the same transaction. This is deliberately
+    /// not a separate admin step: a borrower who is turned down must never
+    /// have to chase a manual refund to get their money back.
+    ///
+    /// Fails if the loan is missing (`LoanNotFound`) or is not `Requested`
+    /// (`InvalidLoanState`) — a rejected application cannot be rejected twice,
+    /// and an approved one cannot be revoked through this path.
+    pub fn reject_loan(env: Env, loan_id: BytesN<32>) -> Result<(), PoolError> {
+        Self::check_not_paused(&env)?;
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        let mut loan = Self::read_loan(&env, &loan_id)?;
+
+        if loan.status != LoanStatus::Requested {
+            return Err(PoolError::InvalidLoanState);
+        }
+
+        loan.status = LoanStatus::Rejected;
+        Self::set_loan(&env, &loan_id, &loan);
+
+        // A rejection frees the borrower's slot, exactly as a borrower-initiated
+        // cancellation does, so a turn-down never costs them an application slot.
+        Self::release_borrower_loan_slot(&env, &loan.borrower);
+
+        // Automatic full refund of the escrowed application fee. No-op when the
+        // pool charges no application fee.
+        Self::refund_application_fee(&env, &config, &loan_id, &loan.borrower);
+
+        let count = Self::read_loan_count(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::LoanCount, &count.saturating_sub(1));
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events().publish(
+            (Symbol::new(&env, "loan_rejected"),),
+            (loan.borrower.clone(), loan_id.clone()),
+        );
+
+        Ok(())
+    }
+
+    /// Borrower cancels (withdraws) their own loan request before an admin
+    /// acts on it.
     ///
     /// Only the borrower named on the loan may cancel, and only while the loan
-    /// is still `Requested`. Approved, repaid, defaulted or already cancelled
-    /// loans are rejected with `InvalidLoanState`. A requested loan holds no
-    /// pool liquidity, so cancelling only clears the record: the status moves
-    /// to `Cancelled` and the loan count is decremented.
+    /// is still `Requested`. Approved, repaid, defaulted, rejected or already
+    /// cancelled loans are rejected with `InvalidLoanState`. A requested loan
+    /// holds no pool liquidity, so cancelling only clears the record: the
+    /// status moves to `Cancelled` and the loan count is decremented.
+    ///
+    /// Withdrawing an application is not a fee-worthy outcome, so any
+    /// application fee escrowed at submission is refunded to the borrower in
+    /// full — the same automatic refund a rejection triggers.
     pub fn cancel_loan(env: Env, loan_id: BytesN<32>) -> Result<(), PoolError> {
         Self::check_not_paused(&env)?;
+        let config = Self::read_config(&env)?;
 
         let mut loan = Self::read_loan(&env, &loan_id)?;
         loan.borrower.require_auth();
@@ -1261,6 +1464,10 @@ impl LendingPoolContract {
 
         // Cancelling a still-pending request frees the borrower's slot.
         Self::release_borrower_loan_slot(&env, &loan.borrower);
+
+        // Automatic full refund of the escrowed application fee. No-op when the
+        // pool charges no application fee.
+        Self::refund_application_fee(&env, &config, &loan_id, &loan.borrower);
 
         let count = Self::read_loan_count(&env);
         env.storage()
@@ -3562,6 +3769,54 @@ impl LendingPoolContract {
     /// Returns the current loan origination fee in basis points.
     pub fn get_origination_fee_bps(env: Env) -> Result<u32, PoolError> {
         Ok(Self::read_config(&env)?.origination_fee_bps)
+    }
+
+    /// Set the loan application (processing) fee, in basis points of the
+    /// requested principal. Admin-only.
+    ///
+    /// The new rate applies to applications submitted *after* this call;
+    /// applications already pending keep the fee they were charged and
+    /// escrowed. `0` makes applications free again, and any fees still
+    /// escrowed against pending applications remain refundable.
+    pub fn set_application_fee_bps(env: Env, new_bps: u32) -> Result<(), PoolError> {
+        if new_bps > MAX_APPLICATION_FEE_BPS {
+            return Err(PoolError::ApplicationFeeTooHigh);
+        }
+
+        let mut config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        let previous_bps = config.application_fee_bps;
+        config.application_fee_bps = new_bps;
+        env.storage().instance().set(&DataKey::Config, &config);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events()
+            .publish((Symbol::new(&env, "app_fee_set"),), (previous_bps, new_bps));
+        Ok(())
+    }
+
+    /// Returns the current loan application fee in basis points. `0` means
+    /// applications are free.
+    pub fn get_application_fee_bps(env: Env) -> Result<u32, PoolError> {
+        Ok(Self::read_config(&env)?.application_fee_bps)
+    }
+
+    /// The application fee currently escrowed for `loan_id`, still awaiting the
+    /// final decision on that application. `0` means either nothing was
+    /// collected or the fee has already been settled.
+    pub fn get_application_fee(env: Env, loan_id: BytesN<32>) -> i128 {
+        Self::read_application_fee(&env, &loan_id)
+    }
+
+    /// Lifetime application fees retained by the protocol — those collected on
+    /// applications that went on to be approved. Refunded fees are not counted.
+    pub fn get_total_application_fees(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalApplicationFees)
+            .unwrap_or(0)
     }
 
     /// Lifetime interest routed to the treasury by the fee switch.
@@ -7202,6 +7457,443 @@ mod test {
         // The record is retained as Cancelled, so the ID stays taken.
         let result = client.try_request_loan(&borrower, &loan_id, &10_000_0000000i128);
         assert_eq!(result.unwrap_err(), Ok(PoolError::LoanAlreadyExists));
+    }
+
+    // ── Application Fee Escrow Tests ─────────────────────────────────────
+    //
+    // An application (processing) fee is paid by the borrower *before* any
+    // credit decision is made, so it is escrowed by the pool against that
+    // application until the decision lands:
+    //
+    //   approve_loan → fee retained by the protocol, routed to the treasury
+    //   reject_loan  → fee refunded to the borrower, automatically
+    //   cancel_loan  → fee refunded to the borrower, automatically
+    //
+    // A borrower who never receives a loan must never end up keeping the fee,
+    // and the refund must not depend on a separate admin action.
+
+    /// Fee rate used by the application-fee tests: 2 % of the requested
+    /// principal.
+    const APP_FEE_BPS: u32 = 200;
+
+    /// The application fee owed on a `principal`-sized application, restating
+    /// the contract's own arithmetic so the tests do not hardcode amounts.
+    fn app_fee_of(principal: i128) -> i128 {
+        (principal * APP_FEE_BPS as i128) / 10_000
+    }
+
+    /// Everything an application-fee test needs: a client, a token client, a
+    /// funded borrower, and the loan ID / principal / expected fee triple to
+    /// use with them.
+    struct AppFeeFixture<'a> {
+        client: LendingPoolContractClient<'a>,
+        token: token::Client<'a>,
+        borrower: Address,
+        loan_id: BytesN<32>,
+        principal: i128,
+        fee: i128,
+        /// Borrower's balance before the application fee is charged.
+        borrower_start: i128,
+        treasury: Address,
+    }
+
+    /// Pool with a 2 % application fee enabled, liquidity funded, a funded
+    /// borrower, and nothing submitted yet.
+    fn setup_application_fee_pool<'a>(env: &'a Env) -> AppFeeFixture<'a> {
+        let (_admin, investor, treasury, token_address, client) = setup_pool(env);
+        let token = token::Client::new(env, &token_address);
+        let borrower = Address::generate(env);
+        let principal = 10_000_0000000i128;
+
+        // The escrow must never be mistaken for pool liquidity, so the deposit
+        // below is what the pool is expected to hold at every step.
+        client.set_application_fee_bps(&APP_FEE_BPS);
+        client.deposit(&investor, &70_000_0000000i128, &Tranche::Senior);
+
+        // The borrower needs to be able to pay the fee up front.
+        StellarAssetClient::new(env, &token_address).mint(&borrower, &principal);
+
+        AppFeeFixture {
+            borrower_start: token.balance(&borrower),
+            client,
+            token,
+            borrower,
+            loan_id: mock_loan_id(env),
+            principal,
+            fee: app_fee_of(principal),
+            treasury,
+        }
+    }
+
+    /// Number of `app_fee_refund` events this contract has emitted so far.
+    /// Number of `app_fee_refund` events emitted by the most recent contract
+    /// invocation. The test environment only surfaces the events of the latest
+    /// call, so this must be read straight after the transition under test and
+    /// before any other contract call.
+    fn count_refund_events(env: &Env, contract: &Address) -> u32 {
+        use soroban_sdk::TryFromVal;
+        env.events()
+            .all()
+            .iter()
+            .filter(|(addr, topics, _)| {
+                // `Val` is not comparable, so the topic is decoded back into a
+                // `Symbol` — which is — before the comparison.
+                addr == contract
+                    && topics.len() == 1
+                    && Symbol::try_from_val(env, &topics.get(0).unwrap())
+                        == Ok(Symbol::new(env, "app_fee_refund"))
+            })
+            .count() as u32
+    }
+
+    /// Approved application: the fee is retained by the protocol and **no
+    /// refund is triggered**.
+    #[test]
+    fn test_approved_application_retains_the_application_fee() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let f = setup_application_fee_pool(&env);
+
+        f.client.request_loan(&f.borrower, &f.loan_id, &f.principal);
+        assert_eq!(f.token.balance(&f.borrower), f.borrower_start - f.fee);
+
+        f.client.approve_loan(&f.loan_id);
+
+        // The acceptance criterion: approval must not trigger a refund.
+        let refunds = count_refund_events(&env, &f.client.address);
+        assert_eq!(refunds, 0);
+
+        // Retained: the fee reaches the treasury, not back to the borrower.
+        assert_eq!(f.token.balance(&f.treasury), f.fee);
+        assert_eq!(f.token.balance(&f.borrower), f.borrower_start - f.fee);
+        assert_eq!(f.client.get_application_fee(&f.loan_id), 0);
+        assert_eq!(f.client.get_total_application_fees(), f.fee);
+        assert_eq!(
+            f.client.get_loan_info(&f.loan_id).status,
+            LoanStatus::Approved
+        );
+    }
+
+    /// Rejected application: the *full* collected fee is refunded to the
+    /// applicant automatically, in the same transaction as the rejection —
+    /// no separate admin refund step and no manual intervention.
+    #[test]
+    fn test_rejected_application_refunds_the_full_application_fee() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let f = setup_application_fee_pool(&env);
+
+        f.client.request_loan(&f.borrower, &f.loan_id, &f.principal);
+        assert_eq!(f.token.balance(&f.borrower), f.borrower_start - f.fee);
+
+        f.client.reject_loan(&f.loan_id);
+
+        // The refund fired as part of the rejection itself.
+        assert_eq!(count_refund_events(&env, &f.client.address), 1);
+
+        // The applicant is made whole, to the stroop.
+        assert_eq!(f.token.balance(&f.borrower), f.borrower_start);
+        assert_eq!(f.token.balance(&f.treasury), 0);
+
+        // The escrow is emptied and nothing was banked as revenue.
+        assert_eq!(f.client.get_application_fee(&f.loan_id), 0);
+        assert_eq!(f.client.get_total_application_fees(), 0);
+        assert_eq!(
+            f.client.get_loan_info(&f.loan_id).status,
+            LoanStatus::Rejected
+        );
+    }
+
+    /// Withdrawn-by-borrower application: the same automatic refund as a
+    /// rejection — a self-service withdrawal is not a fee-worthy outcome.
+    #[test]
+    fn test_withdrawn_application_refunds_the_full_application_fee() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let f = setup_application_fee_pool(&env);
+
+        f.client.request_loan(&f.borrower, &f.loan_id, &f.principal);
+        assert_eq!(f.token.balance(&f.borrower), f.borrower_start - f.fee);
+
+        f.client.cancel_loan(&f.loan_id);
+
+        assert_eq!(count_refund_events(&env, &f.client.address), 1);
+        assert_eq!(f.token.balance(&f.borrower), f.borrower_start);
+        assert_eq!(f.token.balance(&f.treasury), 0);
+        assert_eq!(f.client.get_application_fee(&f.loan_id), 0);
+        assert_eq!(f.client.get_total_application_fees(), 0);
+        assert_eq!(
+            f.client.get_loan_info(&f.loan_id).status,
+            LoanStatus::Cancelled
+        );
+    }
+
+    /// While an application is pending its fee sits in escrow: booked against
+    /// the application, but never counted as pool liquidity, so settling it in
+    /// either direction cannot move investor accounting.
+    #[test]
+    fn test_pending_application_fee_is_escrowed_and_outside_pool_liquidity() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let f = setup_application_fee_pool(&env);
+        let deposit = 70_000_0000000i128;
+
+        f.client.request_loan(&f.borrower, &f.loan_id, &f.principal);
+
+        // Escrowed against the application, awaiting the final decision.
+        assert_eq!(f.client.get_application_fee(&f.loan_id), f.fee);
+        assert_eq!(f.client.get_total_application_fees(), 0);
+
+        // Held by the contract, yet invisible to the liquidity accounting that
+        // backs investor withdrawals.
+        assert_eq!(f.client.get_liquidity(), deposit);
+        assert_eq!(f.token.balance(&f.client.address), deposit + f.fee);
+
+        // Approval settles the fee to the treasury, still without touching
+        // pool liquidity.
+        f.client.approve_loan(&f.loan_id);
+        assert_eq!(f.client.get_liquidity(), deposit);
+        assert_eq!(f.token.balance(&f.client.address), deposit);
+    }
+
+    /// Refunds must not be repeatable: the escrow is emptied on settlement, and
+    /// a second terminal transition on a rejected application is rejected
+    /// outright rather than paying out again.
+    #[test]
+    fn test_application_fee_cannot_be_refunded_twice() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let f = setup_application_fee_pool(&env);
+
+        f.client.request_loan(&f.borrower, &f.loan_id, &f.principal);
+        f.client.reject_loan(&f.loan_id);
+
+        // The borrower was refunded exactly once.
+        assert_eq!(count_refund_events(&env, &f.client.address), 1);
+        assert_eq!(f.token.balance(&f.borrower), f.borrower_start);
+
+        // Rejecting again is not a legal transition...
+        let result = f.client.try_reject_loan(&f.loan_id);
+        assert_eq!(result.unwrap_err(), Ok(PoolError::InvalidLoanState));
+        // ...nor is withdrawing an already-rejected application.
+        let result = f.client.try_cancel_loan(&f.loan_id);
+        assert_eq!(result.unwrap_err(), Ok(PoolError::InvalidLoanState));
+        assert_eq!(f.token.balance(&f.borrower), f.borrower_start);
+    }
+
+    /// A rejection is an underwriting decision, so only the admin may make it —
+    /// and a failed attempt must not release the applicant's fee.
+    #[test]
+    fn test_reject_loan_requires_admin_signature() {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+        use soroban_sdk::IntoVal;
+
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let f = setup_application_fee_pool(&env);
+
+        f.client.request_loan(&f.borrower, &f.loan_id, &f.principal);
+
+        // An unrelated third party signs instead of the admin.
+        let stranger = Address::generate(&env);
+        env.mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &f.client.address,
+                fn_name: "reject_loan",
+                args: (f.loan_id.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        assert!(f.client.try_reject_loan(&f.loan_id).is_err());
+        assert_eq!(count_refund_events(&env, &f.client.address), 0);
+
+        // Untouched: still pending, still escrowed, nothing refunded.
+        env.mock_all_auths_allowing_non_root_auth();
+        assert_eq!(
+            f.client.get_loan_info(&f.loan_id).status,
+            LoanStatus::Requested
+        );
+        assert_eq!(f.token.balance(&f.borrower), f.borrower_start - f.fee);
+        assert_eq!(f.client.get_application_fee(&f.loan_id), f.fee);
+    }
+
+    /// A rejection only applies to a still-pending application, and an unknown
+    /// loan ID is not rejectable either.
+    #[test]
+    fn test_reject_loan_rejects_non_pending_and_unknown_loans() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let f = setup_application_fee_pool(&env);
+
+        // Unknown loan.
+        let unknown = BytesN::from_array(&env, &[9u8; 32]);
+        let result = f.client.try_reject_loan(&unknown);
+        assert_eq!(result.unwrap_err(), Ok(PoolError::LoanNotFound));
+
+        // Already approved: this path cannot revoke a credit decision, and the
+        // fee stays retained rather than being refunded.
+        f.client.request_loan(&f.borrower, &f.loan_id, &f.principal);
+        f.client.approve_loan(&f.loan_id);
+        let result = f.client.try_reject_loan(&f.loan_id);
+        assert_eq!(result.unwrap_err(), Ok(PoolError::InvalidLoanState));
+        assert_eq!(
+            f.client.get_loan_info(&f.loan_id).status,
+            LoanStatus::Approved
+        );
+        assert_eq!(f.client.get_total_application_fees(), f.fee);
+    }
+
+    /// A rejection frees the borrower's active-loan slot just like a withdrawal
+    /// does — a turn-down must not cost them an application slot — and the
+    /// pool's emergency stop still covers the refund path.
+    #[test]
+    fn test_reject_loan_frees_the_borrower_slot_and_honours_pause() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let f = setup_application_fee_pool(&env);
+
+        f.client.set_borrower_active_loan_cap(&1);
+        f.client.request_loan(&f.borrower, &f.loan_id, &f.principal);
+        assert_eq!(f.client.get_borrower_active_loans(&f.borrower), 1);
+
+        f.client.reject_loan(&f.loan_id);
+        assert_eq!(f.client.get_borrower_active_loans(&f.borrower), 0);
+
+        // The pool's emergency stop still covers the refund path, so a paused
+        // pool cannot be drained via rejections either.
+        let second = BytesN::from_array(&env, &[7u8; 32]);
+        f.client.request_loan(&f.borrower, &second, &f.principal);
+        f.client.pause();
+        let result = f.client.try_reject_loan(&second);
+        assert_eq!(result.unwrap_err(), Ok(PoolError::ContractPaused));
+    }
+
+    /// The application-fee rate is admin-only and capped at 100 % of the
+    /// requested principal, exactly like the origination fee.
+    #[test]
+    fn test_set_application_fee_bps_requires_admin_and_caps_at_100_percent() {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+        use soroban_sdk::IntoVal;
+
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, _token, client) = setup_pool(&env);
+        let attacker = Address::generate(&env);
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &attacker,
+                invoke: &MockAuthInvoke {
+                    contract: &client.address,
+                    fn_name: "set_application_fee_bps",
+                    args: (APP_FEE_BPS,).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_set_application_fee_bps(&APP_FEE_BPS);
+        assert!(result.is_err());
+        assert_eq!(client.get_application_fee_bps(), 0);
+
+        let result = client.try_set_application_fee_bps(&(BPS_SCALE + 1));
+        assert_eq!(result.unwrap_err(), Ok(PoolError::ApplicationFeeTooHigh));
+
+        client.set_application_fee_bps(&250);
+        assert_eq!(client.get_application_fee_bps(), 250);
+    }
+
+    /// Backwards compatibility: the deployment default charges no application
+    /// fee, so an application that is rejected or withdrawn moves no tokens at
+    /// all and the refund path is a no-op.
+    #[test]
+    fn test_no_application_fee_is_charged_by_default() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, investor, _treasury, token_address, client) = setup_pool(&env);
+        let token = token::Client::new(&env, &token_address);
+        let borrower = Address::generate(&env);
+        let principal = 10_000_0000000i128;
+        StellarAssetClient::new(&env, &token_address).mint(&borrower, &principal);
+
+        client.deposit(&investor, &70_000_0000000i128, &Tranche::Senior);
+        assert_eq!(client.get_application_fee_bps(), 0);
+
+        let rejected = mock_loan_id(&env);
+        let withdrawn = BytesN::from_array(&env, &[3u8; 32]);
+
+        client.request_loan(&borrower, &rejected, &principal);
+        client.request_loan(&borrower, &withdrawn, &principal);
+        assert_eq!(token.balance(&borrower), principal);
+        assert_eq!(client.get_application_fee(&rejected), 0);
+        assert_eq!(token.balance(&client.address), 70_000_0000000i128);
+
+        client.reject_loan(&rejected);
+        client.cancel_loan(&withdrawn);
+
+        // Nothing was charged, so nothing was refunded and no refund fired.
+        assert_eq!(token.balance(&borrower), principal);
+        assert_eq!(client.get_total_application_fees(), 0);
+        assert_eq!(count_refund_events(&env, &client.address), 0);
+    }
+
+    /// The fee is priced against the principal the borrower asked for, and
+    /// rounding is floored — a tiny application never overcharges.
+    #[test]
+    fn test_application_fee_is_principal_based_and_floors_to_zero() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+        let borrower = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_address).mint(&borrower, &1_000_0000000i128);
+        client.set_application_fee_bps(&APP_FEE_BPS);
+
+        // 2 % of 1 stroop floors to 0 rather than rounding up to 1.
+        let dust = BytesN::from_array(&env, &[4u8; 32]);
+        client.request_loan(&borrower, &dust, &1);
+        assert_eq!(client.get_application_fee(&dust), 0);
+
+        // 2 % of 10 000 USDC is 200 USDC.
+        let sized = BytesN::from_array(&env, &[5u8; 32]);
+        client.request_loan(&borrower, &sized, &10_000_0000000i128);
+        assert_eq!(client.get_application_fee(&sized), 200_0000000i128);
+    }
+
+    /// A pending application settles against the rate in force when it was
+    /// submitted, so changing the rate mid-review can neither reprice it nor
+    /// forfeit the fee already escrowed.
+    #[test]
+    fn test_changing_the_application_fee_does_not_disturb_escrowed_fees() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let f = setup_application_fee_pool(&env);
+
+        f.client.request_loan(&f.borrower, &f.loan_id, &f.principal);
+        assert_eq!(f.client.get_application_fee(&f.loan_id), f.fee);
+
+        // Raising the rate does not retroactively reprice the pending
+        // application, and turning the fee off does not forfeit it.
+        f.client.set_application_fee_bps(&500);
+        assert_eq!(f.client.get_application_fee_bps(), 500);
+        assert_eq!(f.client.get_application_fee(&f.loan_id), f.fee);
+
+        f.client.set_application_fee_bps(&0);
+        assert_eq!(f.client.get_application_fee_bps(), 0);
+        assert_eq!(f.client.get_application_fee(&f.loan_id), f.fee);
+
+        f.client.reject_loan(&f.loan_id);
+        assert_eq!(f.token.balance(&f.borrower), f.borrower_start);
+        assert_eq!(f.client.get_application_fee(&f.loan_id), 0);
     }
 
     // ── Maturity Rebate Tests (Issue #298) ─────────────────────────────
