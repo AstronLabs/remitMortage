@@ -5,6 +5,7 @@ import nodemailer from "nodemailer";
 import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
 import { getCurrentTenant, type TenantBranding } from "./tenant.js";
+import { isEmailSuppressed } from "./emailSuppression.js";
 
 const config = loadConfig();
 
@@ -151,6 +152,10 @@ export function getBrandedHtml(
  * Sends a generic HTML email.
  */
 export async function sendEmail(to: string, subject: string, htmlContent: string): Promise<boolean> {
+  if (await isEmailSuppressed(to)) {
+    logger.info(`[EmailService] Skipping send to suppressed address ${to}`);
+    return false;
+  }
   try {
     await transporter.sendMail({
       from: getCurrentTenant().senderEmail,

@@ -37,6 +37,12 @@ export interface Config {
   sendgridApiKey: string;
   /** Verified sender address for SendGrid alert emails. */
   sendgridFrom: string;
+  /**
+   * Shared secret the email provider's bounce/complaint webhook must present
+   * (`x-webhook-token` header or `token` query param). The webhook rejects
+   * every request while this is empty.
+   */
+  emailWebhookSecret: string;
   /** Map of on-chain borrower address -> alert recipient email address. */
   alertRecipients: Record<string, string>;
   /** Fallback recipient used when a borrower address has no mapped email. */
@@ -227,6 +233,7 @@ export function loadConfig(): Config {
       process.env.SENDGRID_FROM ||
       process.env.SMTP_FROM ||
       "no-reply@remitmortgage.com",
+    emailWebhookSecret: process.env.EMAIL_WEBHOOK_SECRET || "",
     alertRecipients: parseAlertRecipients(process.env.ALERT_RECIPIENTS),
     alertDefaultRecipient: process.env.ALERT_DEFAULT_RECIPIENT || "",
     webhookSecret: process.env.WEBHOOK_SECRET || "default_signing_secret_key",

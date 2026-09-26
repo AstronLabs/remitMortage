@@ -24,6 +24,7 @@ import {
   DEFAULT_LATENCY_WINDOW_MINUTES,
   MAX_LATENCY_WINDOW_MINUTES,
 } from "../services/webhookLatency.js";
+import { listSuppressedApplicants } from "../services/emailSuppression.js";
 import { loadConfig } from "../config.js";
 
 export const adminRouter = Router();
@@ -292,6 +293,20 @@ function positiveIntParam(raw: unknown, fallback: number): number | null {
  *       400:
  *         description: Invalid windowMinutes or slaMs.
  */
+/**
+ * Applicants whose notification email is on the suppression list (hard bounce,
+ * spam complaint, or inside a soft-bounce backoff window), so staff can prompt
+ * them to update their contact details.
+ */
+adminRouter.get("/email-suppressions", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    return res.json({ suppressions: await listSuppressedApplicants() });
+  } catch (error) {
+    logger.error("List email suppressions error", { error });
+    return res.status(500).json({ error: "failed_to_list_email_suppressions" });
+  }
+});
+
 adminRouter.get("/webhooks/latency", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   const config = loadConfig();
   const windowMinutes = positiveIntParam(
