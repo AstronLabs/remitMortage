@@ -112,6 +112,7 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 42 | `NoCollateralToRelease` | No collateral available for release. |
 | 45 | `OriginationFeeTooHigh` | Origination fee exceeds the full-disbursement ceiling. |
 | 46 | `BorrowerLoanCapExceeded` | Borrower already holds the maximum number of active loans permitted by `max_active_loans_per_borrower`. |
+| 48 | `ApplicationFeeTooHigh` | Application fee exceeds the ceiling permitted on a single application. |
 | 50 | `WithdrawalExceedsMaxSingleLimit` | Withdrawal amount exceeds the pool's configured per-transaction limit. |
 | 51 | `AddressNotWhitelisted` | Address is not whitelisted when permissioned mode is enabled. |
 | 52 | `RefinanceCooldownActive` | Refinancing request was submitted before the cooldown window elapsed. |
