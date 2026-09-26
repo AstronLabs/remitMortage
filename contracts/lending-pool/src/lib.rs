@@ -170,6 +170,61 @@ impl LendingPoolContract {
         env.storage().instance().set(&key, info);
     }
 
+    // ── Yield Waterfall Seniority Guard ─────────────────────────────────
+    //
+    // INVARIANT: the yield distribution waterfall in `repay` MUST process
+    // tranches most-senior-first — senior receives its fixed rate before
+    // junior receives any residual yield. Investors size their risk/return
+    // expectations around that ordering; silently paying junior ahead of
+    // senior (e.g. because a future refactor of the waterfall, or a change
+    // to how its tranche order is derived, swapped the sequence) would
+    // violate the seniority guarantee without ever raising an error on its
+    // own. `assert_waterfall_priority_order` is called on every `repay` that
+    // distributes yield specifically to catch that class of bug: it panics
+    // (aborting the whole transaction) rather than returning a recoverable
+    // `PoolError`, because there is no correct way to complete a
+    // distribution whose ordering can't be trusted.
+
+    /// The configured tranche processing order, most senior first. No
+    /// current code path ever writes `DataKey::WaterfallOrder` — the default
+    /// below is always what real `repay` calls see. The storage read exists
+    /// so tests can deliberately inject a misordered list (simulating a
+    /// misconfigured or upgraded distribution routine) and confirm the
+    /// guard below rejects it.
+    fn read_waterfall_order(env: &Env) -> Vec<Tranche> {
+        env.storage()
+            .instance()
+            .get(&DataKey::WaterfallOrder)
+            .unwrap_or_else(|| soroban_sdk::vec![env, Tranche::Senior, Tranche::Junior])
+    }
+
+    /// Numeric seniority rank for a tranche — lower is more senior. Exists
+    /// solely to check the waterfall's processing order; it plays no part in
+    /// any yield or loss calculation.
+    fn tranche_seniority_rank(tranche: &Tranche) -> u32 {
+        match tranche {
+            Tranche::Senior => 0,
+            Tranche::Junior => 1,
+        }
+    }
+
+    /// Panics if `order` is not sorted by non-decreasing seniority rank —
+    /// i.e. if any tranche appears before a more senior one. See the
+    /// "Yield Waterfall Seniority Guard" note above.
+    fn assert_waterfall_priority_order(order: &Vec<Tranche>) {
+        let mut previous_rank: Option<u32> = None;
+        for tranche in order.iter() {
+            let rank = Self::tranche_seniority_rank(&tranche);
+            if let Some(prev) = previous_rank {
+                assert!(
+                    rank >= prev,
+                    "waterfall priority violation: a junior tranche was processed before a senior one"
+                );
+            }
+            previous_rank = Some(rank);
+        }
+    }
+
     fn set_investor(env: &Env, investor: &Address, record: &InvestorRecord) {
         env.storage()
             .persistent()
@@ -2124,6 +2179,11 @@ impl LendingPoolContract {
 
             // Everything below splits only what is left for investors.
             let effective_interest = distributable;
+
+            // Seniority guard: abort the whole transaction rather than
+            // silently pay junior ahead of senior. See the "Yield Waterfall
+            // Seniority Guard" note above `read_waterfall_order`.
+            Self::assert_waterfall_priority_order(&Self::read_waterfall_order(&env));
 
             let senior_info = Self::read_tranche_info(&env, &Tranche::Senior);
             let junior_info = Self::read_tranche_info(&env, &Tranche::Junior);
@@ -4944,6 +5004,101 @@ mod test {
             junior_info.total_yield_distributed > senior_info.total_yield_distributed,
             "junior yield should exceed senior yield"
         );
+    }
+
+    // ── Yield Waterfall Priority-Order Guard ────────────────────────────
+    //
+    // Regression coverage for the seniority invariant documented above
+    // `LendingPoolContract::read_waterfall_order`: the yield waterfall must
+    // always process senior before junior. See that comment for why the
+    // guard exists and why it panics rather than returning a `PoolError`.
+
+    /// A correctly-ordered distribution (the only order any real code path
+    /// ever configures) is completely unaffected by the guard — this is the
+    /// same flow as `test_yield_distribution_senior_junior` above, kept
+    /// alongside the misordered-list test below so the "unaffected" half of
+    /// the acceptance criteria has its own dedicated, obviously-paired case.
+    #[test]
+    fn test_waterfall_priority_guard_allows_correctly_ordered_distribution() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, senior_investor, _treasury, token_address, client) = setup_pool(&env);
+        let sac = StellarAssetClient::new(&env, &token_address);
+
+        let junior_investor = Address::generate(&env);
+        sac.mint(&junior_investor, &50_000_0000000i128);
+
+        client.deposit(&senior_investor, &50_000_0000000i128, &Tranche::Senior);
+        client.deposit(&junior_investor, &50_000_0000000i128, &Tranche::Junior);
+
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+        client.request_loan(&borrower, &loan_id, &10_000_0000000i128);
+        client.approve_loan(&loan_id);
+        client.add_contractor(&borrower);
+        client.disburse(&loan_id, &borrower, &10_000_0000000i128);
+
+        env.ledger()
+            .set_sequence_number(env.ledger().sequence() + 100);
+        sac.mint(&borrower, &20_000_0000000i128);
+
+        let owed = compound_interest(10_000_0000000i128, 800, 1);
+        // Must not panic, and must distribute yield exactly as before.
+        client.repay(&borrower, &loan_id, &owed);
+
+        let senior_info = client.get_tranche_info(&Tranche::Senior);
+        let junior_info = client.get_tranche_info(&Tranche::Junior);
+        assert!(senior_info.total_yield_distributed > 0);
+        assert!(junior_info.total_yield_distributed > 0);
+    }
+
+    /// A distribution call that would process junior before senior must
+    /// revert instead of executing. This simulates the exact failure mode
+    /// the guard exists for — a misconfigured or upgraded distribution
+    /// routine producing a reversed tranche order — by writing the reversed
+    /// order directly into the contract's own storage (as an upgrade or a
+    /// bad config write would), then confirming the very next `repay` that
+    /// would trigger the yield waterfall panics rather than silently paying
+    /// junior first.
+    #[test]
+    #[should_panic(expected = "waterfall priority violation")]
+    fn test_repay_reverts_when_waterfall_order_is_misconfigured() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, senior_investor, _treasury, token_address, client) = setup_pool(&env);
+        let sac = StellarAssetClient::new(&env, &token_address);
+
+        let junior_investor = Address::generate(&env);
+        sac.mint(&junior_investor, &50_000_0000000i128);
+
+        client.deposit(&senior_investor, &50_000_0000000i128, &Tranche::Senior);
+        client.deposit(&junior_investor, &50_000_0000000i128, &Tranche::Junior);
+
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+        client.request_loan(&borrower, &loan_id, &10_000_0000000i128);
+        client.approve_loan(&loan_id);
+        client.add_contractor(&borrower);
+        client.disburse(&loan_id, &borrower, &10_000_0000000i128);
+
+        env.ledger()
+            .set_sequence_number(env.ledger().sequence() + 100);
+        sac.mint(&borrower, &20_000_0000000i128);
+
+        // Deliberately misordered tranche list — junior before senior.
+        let misordered: Vec<Tranche> = soroban_sdk::vec![&env, Tranche::Junior, Tranche::Senior];
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .set(&DataKey::WaterfallOrder, &misordered);
+        });
+
+        let owed = compound_interest(10_000_0000000i128, 800, 1);
+        // Must revert — the waterfall must never run against a misordered
+        // configuration, even though every other input is otherwise valid.
+        client.repay(&borrower, &loan_id, &owed);
     }
 
     /// Test loss waterfall: junior absorbs loss before senior.

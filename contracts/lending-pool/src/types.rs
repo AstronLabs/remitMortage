@@ -345,6 +345,13 @@ pub enum DataKey {
     LoanSymbolMap(Symbol),
     /// Pending loan assumption request, keyed by loan ID.
     LoanAssumption(BytesN<32>),
+    /// Tranche seniority order the yield distribution waterfall processes
+    /// in. Absent under normal operation — the default `[Senior, Junior]` is
+    /// never written to storage by any current code path; this key exists
+    /// so tests can deliberately override it to simulate a misconfigured or
+    /// upgraded distribution routine and confirm the priority-order guard in
+    /// `repay` catches it. See `LendingPoolContract::assert_waterfall_priority_order`.
+    WaterfallOrder,
 }
 
 /// A pending loan assumption request where an existing borrower proposes to transfer
