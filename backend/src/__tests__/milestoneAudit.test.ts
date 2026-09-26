@@ -16,7 +16,19 @@ jest.mock("../services/ipfsCleanup.js", () => ({
 // Prisma client) for the unrelated /unpin route. Stub the DB layer so these
 // proposal-focused tests stay DB-free.
 jest.mock("../services/db.js", () => ({
-  prisma: { unpinnedCid: { create: jest.fn() } },
+  prisma: {
+    unpinnedCid: { create: jest.fn() },
+    trackedCid: {
+      upsert: jest.fn().mockResolvedValue(undefined),
+      update: jest.fn().mockResolvedValue(undefined),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+    milestoneEvidenceReference: {
+      upsert: jest.fn().mockResolvedValue(undefined),
+      deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
+  },
 }));
 
 const app = express();

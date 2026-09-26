@@ -24,7 +24,20 @@ jest.mock("../services/db.js", () => ({
     unpinnedCid: {
       create: jest.fn(),
     },
+    trackedCid: {
+      upsert: jest.fn().mockResolvedValue(undefined),
+      update: jest.fn().mockResolvedValue(undefined),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+    milestoneEvidenceReference: {
+      upsert: jest.fn().mockResolvedValue(undefined),
+      deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
   },
+}));
+jest.mock("../services/contractorAuth.js", () => ({
+  verifyUploadAuthorization: jest.fn(() => ({ ok: false, status: 401, error: "unauthorized" })),
 }));
 
 import express from "express";

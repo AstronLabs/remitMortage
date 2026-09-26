@@ -44,6 +44,41 @@ model UnpinnedCid {
   createdAt    DateTime @default(now())
 }
 
+/// Registry of every CID pinned by this application.
+/// The orphan-cleanup job uses this table to identify objects that no longer
+/// have an active referencing record. A CID is considered referenced when its
+/// referenceType + referenceId still exists in the relevant store.
+model TrackedCid {
+  id            String   @id @default(uuid())
+  /// The IPFS CID (e.g. "QmXyz..." or a v1 bafy... CID).
+  cid           String   @unique
+  /// Human-readable category: "milestone_evidence", "kyc_document", etc.
+  referenceType String
+  /// ID of the record that references this CID (proposalId, documentId…).
+  referenceId   String
+  /// UTC timestamp when the CID was first pinned. Used for grace-period math.
+  pinnedAt      DateTime @default(now())
+  /// Set when the cleanup job successfully unpins this CID.
+  unpinnedAt    DateTime?
+  /// Set when the cleanup job determines this CID is orphaned (referenceId gone).
+  markedOrphanAt DateTime?
+
+  @@index([referenceType, referenceId])
+  @@index([pinnedAt])
+  @@index([unpinnedAt])
+}
+
+/// Durable ownership records used to protect milestone evidence from cleanup.
+/// Multiple proposals may legitimately refer to the same content-addressed CID.
+model MilestoneEvidenceReference {
+  proposalId String
+  cid        String
+  createdAt  DateTime @default(now())
+
+  @@id([proposalId, cid])
+  @@index([cid])
+}
+
 enum VerificationStatus {
   PENDING
   ELIGIBLE

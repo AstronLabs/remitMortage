@@ -47,6 +47,10 @@ import { startNotificationScheduler } from "./services/notification.js";
 import { startScheduler } from "./jobs/scheduler.js";
 import { startBackupScheduler } from "./jobs/backupScheduler.js";
 import { startWebhookKeyRotationScheduler } from "./jobs/webhookKeyRotation.js";
+import {
+  startIpfsOrphanCleanupScheduler,
+  stopIpfsOrphanCleanupScheduler,
+} from "./jobs/ipfsOrphanCleanup.js";
 import { startRpcHealthMonitor } from "./services/rpcHealthMonitor.js";
 import { loadConfig } from "./config.js";
 import logger from "./utils/logger.js";
@@ -175,6 +179,7 @@ app.listen(PORT, () => {
   startScheduler();
   startBackupScheduler();
   startWebhookKeyRotationScheduler();
+  startIpfsOrphanCleanupScheduler();
   // Proactively monitor Soroban RPC node health and alert operators on
   // degradation, downtime or failover through the existing webhook mechanism.
   startRpcHealthMonitor();
@@ -183,6 +188,7 @@ app.listen(PORT, () => {
 // ── Graceful Shutdown ─────────────────────────────────────────────────
 async function shutdown(signal: string) {
   logger.info(`[shutdown] received ${signal}, shutting down gracefully`);
+  stopIpfsOrphanCleanupScheduler();
   await Promise.allSettled([
     stopNotificationWorker(),
     stopWebhookWorker(),
