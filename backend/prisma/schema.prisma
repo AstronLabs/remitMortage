@@ -12,6 +12,15 @@ enum NotificationStatus {
   Failed
 }
 
+// How often a category's non-urgent alerts are delivered. Security-critical
+// alerts never use this — they are always sent immediately in code, and
+// there is deliberately no securityFrequency column to persist otherwise.
+enum NotificationFrequency {
+  IMMEDIATE
+  DAILY_DIGEST
+  WEEKLY_DIGEST
+}
+
 enum LoanStatus {
   Draft
   Pending
@@ -703,7 +712,16 @@ model NotificationPreference {
   escrowReached     Boolean  @default(true)
   paymentMissed     Boolean  @default(true)
   loanMilestones    Boolean  @default(true)
+  governanceAlerts  Boolean  @default(true)
   webhookUrl        String?
+
+  // Per-category delivery cadence (immediate / daily digest / weekly digest).
+  // Deliberately no `securityFrequency` field — security-critical alerts
+  // (e.g. new-device login) are always sent immediately in code and are
+  // never gated by a stored preference. See services/notification.ts.
+  depositsFrequency    NotificationFrequency @default(IMMEDIATE)
+  milestonesFrequency  NotificationFrequency @default(IMMEDIATE)
+  governanceFrequency  NotificationFrequency @default(IMMEDIATE)
 
   // Business hours throttling fields
   timezone          String   @default("UTC")
@@ -730,6 +748,30 @@ model SessionToken {
   @@index([walletAddress])
   @@index([expiresAt])
   @@index([createdAt])
+}
+
+// Tracks admin "view as user" read-only support sessions end-to-end: who
+// impersonated whom, the window it was valid for, and when it actually
+// ended (which may be earlier than expiresAt if explicitly revoked). This is
+// the enforcement source of truth (authMiddleware checks it on every
+// impersonated request); AuditLog additionally gets start/end entries
+// referencing this row's id so the audit trail is queryable alongside every
+// other admin action.
+model ImpersonationSession {
+  id            String    @id @default(uuid())
+  adminAddress  String
+  targetAddress String
+  reason        String?
+  ipAddress     String?
+  startedAt     DateTime  @default(now())
+  expiresAt     DateTime
+  endedAt       DateTime?
+  endedBy       String?
+  createdAt     DateTime  @default(now())
+
+  @@index([adminAddress])
+  @@index([targetAddress])
+  @@index([expiresAt])
 }
 
 model InviteCode {

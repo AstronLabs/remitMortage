@@ -4,11 +4,17 @@
 import { Request, Response, NextFunction } from "express";
 import { verifySessionToken } from "../services/jwtKeyRing.js";
 import { loadConfig } from "../config.js";
+import { IMPERSONATION_COOKIE, isImpersonationSessionActive } from "../services/impersonation.js";
 
 export interface AuthenticatedRequest extends Request {
   user?: {
     walletAddress: string;
     network: string;
+    impersonation?: {
+      sessionId: string;
+      adminAddress: string;
+      readOnly: true;
+    };
   };
   workspaceAccess?: {
     workspaceId: string;
@@ -16,7 +22,48 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
-export function authMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+/** HTTP methods that never mutate state — allowed through a read-only impersonation session. */
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+export async function authMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  // An active "view as user" support session takes priority over the caller's
+  // own login cookie so an admin's regular session is never silently swapped
+  // out — impersonation lives in its own cookie, checked first.
+  const impersonationToken = req.cookies?.[IMPERSONATION_COOKIE];
+  if (impersonationToken) {
+    try {
+      const decoded = jwt.verify(impersonationToken, process.env.JWT_SECRET || "default_jwt_secret") as {
+        walletAddress: string;
+        network: string;
+        impersonation: { sessionId: string; adminAddress: string; readOnly: true };
+      };
+
+      const stillActive = await isImpersonationSessionActive(decoded.impersonation.sessionId);
+      if (!stillActive) {
+        res.status(401).json({
+          error: "impersonation_session_ended",
+          message: "This support session has ended or expired.",
+        });
+        return;
+      }
+
+      if (!SAFE_METHODS.has(req.method)) {
+        res.status(403).json({
+          error: "read_only_impersonation",
+          message: "Mutating actions are disabled while viewing as another user.",
+        });
+        return;
+      }
+
+      req.user = decoded;
+      next();
+      return;
+    } catch (err) {
+      res.status(401).json({ error: "unauthorized", message: "Invalid or expired impersonation session" });
+      return;
+    }
+  }
+
   // Accept token from HTTP-only cookie or Authorization: Bearer <token> header
   const authHeader = req.headers.authorization;
   const token =
