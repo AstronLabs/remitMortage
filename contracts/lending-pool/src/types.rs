@@ -51,6 +51,55 @@ pub struct PoolConfig {
     /// Loan origination fee, in basis points, deducted from each disbursement
     /// and routed to `treasury_address`. Loan accounting remains gross.
     pub origination_fee_bps: u32,
+    /// Loan application (processing) fee, in basis points of the requested
+    /// principal, collected from the borrower when the application is
+    /// submitted. Unlike the origination fee — which is taken out of the
+    /// disbursement and is only ever payable by a loan that reaches funds —
+    /// the application fee is paid up front, before any credit decision, so
+    /// it is escrowed by the pool against that application until a final
+    /// decision is reached:
+    ///
+    /// * `approve_loan` retains it and routes it to `treasury_address`.
+    /// * `reject_loan` and `cancel_loan` refund it in full to the borrower
+    ///   automatically, in the same transaction as the transition.
+    ///
+    /// The escrowed tokens are never booked as pool liquidity, so settling
+    /// the fee in either direction leaves investor accounting untouched.
+    ///
+    /// `0` — the deployment default — charges no application fee at all, so
+    /// existing integrations are unaffected until an admin opts in via
+    /// `set_application_fee_bps`.
+    pub application_fee_bps: u32,
+    /// How long a borrower must have held an escrow savings relationship
+    /// before their early-prepayment penalty is waived, measured in ledgers
+    /// at the moment the loan was originated.
+    ///
+    /// The waiver is a loyalty reward for borrowers who actually built their
+    /// down payment through the escrow savings programme, rather than a
+    /// discount handed to anyone who takes a loan. A borrower whose recorded
+    /// relationship age meets this threshold pays no penalty when `repay`
+    /// closes their loan ahead of schedule; anyone below it is charged the
+    /// standard penalty unchanged. Because it only forgives a fee and never
+    /// touches principal or interest, waiving it does not erode the pool's
+    /// interest revenue.
+    ///
+    /// The age is latched onto the loan at origination
+    /// (`LoanRecord::escrow_relationship_ledgers`) from the relationship start
+    /// recorded by the escrow bridge, so a borrower cannot change their own
+    /// eligibility mid-loan by opening or extending an escrow account. The
+    /// threshold in force at repayment is the one applied, so governance
+    /// changes still take effect on loans that are already running.
+    ///
+    /// `0` — the deployment default — disables the waiver entirely, so every
+    /// borrower is charged the standard penalty until an admin opts in via
+    /// `set_prepay_waiver_ledgers`. `0` cannot mean "waive
+    /// everyone": a borrower with no escrow relationship records an age of
+    /// `0`, and the two must not collide.
+    ///
+    /// Named `prepay_waiver_ledgers` rather than the longer
+    /// `prepayment_penalty_waiver_ledgers` because Soroban caps contract-type
+    /// field names at 30 characters.
+    pub prepay_waiver_ledgers: u32,
     /// Minimum number of ledgers an LP's deposit must remain in the pool
     /// before a withdrawal is allowed. 0 means no lockup.
     pub lockup_duration_ledgers: u32,
@@ -140,6 +189,11 @@ pub enum LoanStatus {
     /// Loan defaulted — losses are distributed via the waterfall.
     /// Loan has defaulted after missed payments.
     Defaulted = 4,
+    /// The admin rejected this application. Terminal, and distinct from
+    /// `Cancelled` so a credit decision is distinguishable on-chain from a
+    /// borrower withdrawing their own request. Any application fee escrowed
+    /// at submission is refunded to the borrower on entry to this state.
+    Rejected = 5,
 }
 
 /// Repayment schedule for a loan, tracked on-chain.
@@ -185,6 +239,15 @@ pub struct LoanRecord {
     pub defaulted_ledger: u32,
     /// Optional escrow contract address that originated this loan via the bridge.
     pub escrow_origin: Option<Address>,
+    /// Age of the borrower's escrow savings relationship at the moment this
+    /// loan was originated, in ledgers. `0` means the borrower had no
+    /// recorded relationship.
+    ///
+    /// Latched at origination rather than read at repayment time so that the
+    /// early-prepayment penalty a borrower is assessed cannot be changed after
+    /// the fact by opening or closing an escrow account. See
+    /// `PoolConfig::prepay_waiver_ledgers` for how it is used.
+    pub escrow_relationship_ledgers: u32,
     /// Ledger sequence when the loan was refinanced.
     pub refinanced_at_ledger: Option<u32>,
     /// Previous interest rate before refinancing.
@@ -306,6 +369,25 @@ pub enum DataKey {
     PendingAdmin,
     /// Total withdrawal fees collected and routed to treasury.
     TotalWithdrawalFees,
+    /// Ledger at which a borrower's escrow savings relationship began, as
+    /// recorded by the escrow bridge. Used to derive the relationship age that
+    /// gets latched onto a loan at origination, which in turn gates the
+    /// early-prepayment penalty waiver. A missing entry means the borrower has
+    /// no recorded relationship and latches an age of `0`.
+    EscrowRelationshipStart(Address),
+    /// Total early-prepayment penalties collected and routed to treasury.
+    /// Excludes penalties waived for loyalty, which are never charged.
+    TotalPrepaymentPenalties,
+    /// Application (processing) fee escrowed for a loan, keyed by loan ID.
+    /// Present only while a `Requested` loan is awaiting a final decision;
+    /// removed as soon as the fee is settled — retained by `approve_loan`,
+    /// or refunded by `reject_loan` / `cancel_loan`. A missing entry means
+    /// either no fee was collected or it has already been settled.
+    ApplicationFee(BytesN<32>),
+    /// Lifetime application fees retained by the protocol, i.e. collected on
+    /// applications that went on to be approved. Refunded fees are never
+    /// counted here.
+    TotalApplicationFees,
     /// Lifetime protocol fees skimmed from interest by the fee switch and
     /// routed to the treasury.
     TotalProtocolFees,
