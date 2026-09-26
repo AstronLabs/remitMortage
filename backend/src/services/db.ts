@@ -437,6 +437,31 @@ export async function getApplicant(stellarAddress: string) {
   return decryptApplicant(applicant);
 }
 
+/**
+ * Resolves an Applicant by Stellar address or internal id, auto-creating one
+ * if the identifier looks like a Stellar G-address and no record exists yet.
+ * Shared resolution logic for preference lookups (NotificationPreference,
+ * CommunicationPreference) that should all treat "user identifier" the same
+ * way. Returns null for an unresolvable, non-address identifier rather than
+ * creating a garbage record for it.
+ */
+export async function resolveOrCreateApplicant(stellarAddressOrId: string) {
+  const applicant = await prisma.applicant.findFirst({
+    where: {
+      deletedAt: null,
+      OR: [{ stellarAddress: stellarAddressOrId }, { id: stellarAddressOrId }],
+    },
+  });
+
+  if (applicant) return applicant;
+
+  if (stellarAddressOrId.startsWith("G") && stellarAddressOrId.length === 56) {
+    return prisma.applicant.create({ data: { stellarAddress: stellarAddressOrId } });
+  }
+
+  return null;
+}
+
 // ── VerificationResult ────────────────────────────────────────────────────
 
 export async function createVerificationResult(data: {
@@ -484,6 +509,14 @@ export async function createLoanApplication(data: {
 
 // ── NotificationPreference ─────────────────────────────────────────────────
 
+/**
+ * How often a category's non-urgent alerts are delivered. Structurally
+ * identical to the generated Prisma enum of the same name, declared locally
+ * so this module doesn't require `prisma generate` to have run for a type
+ * check — the two are interchangeable at the Prisma Client boundary.
+ */
+export type NotificationFrequency = "IMMEDIATE" | "DAILY_DIGEST" | "WEEKLY_DIGEST";
+
 export type NotificationPreferenceData = {
   email?: string;
   phone?: string;
@@ -493,6 +526,12 @@ export type NotificationPreferenceData = {
   escrowReached?: boolean;
   paymentMissed?: boolean;
   loanMilestones?: boolean;
+  governanceAlerts?: boolean;
+  // Deliberately no `securityFrequency` — security-critical alerts are
+  // always immediate and are never controlled by a stored preference.
+  depositsFrequency?: NotificationFrequency;
+  milestonesFrequency?: NotificationFrequency;
+  governanceFrequency?: NotificationFrequency;
   webhookUrl?: string;
   timezone?: string;
   businessDays?: string;

@@ -300,3 +300,21 @@ resource "aws_lambda_permission" "allow_sns_to_call_lambda" {
   principal     = "sns.amazonaws.com"
   source_arn    = aws_sns_topic.cost_anomaly_alerts.arn
 }
+
+# ── Outputs consumed by docs/COST_ANOMALY_TRIAGE_RUNBOOK.md's runbook-ref
+# blocks (see docs/RUNBOOK_DRIFT_DETECTION.md) so the triage runbook's cited
+# resource names and threshold stay checkable against live infrastructure.
+output "cost_anomaly_alerts_topic_name" {
+  description = "Name of the SNS topic AWS Cost Anomaly Detection publishes to"
+  value       = aws_sns_topic.cost_anomaly_alerts.name
+}
+
+output "cost_anomaly_notifier_function_name" {
+  description = "Name of the Lambda function that posts cost anomaly alerts to Slack"
+  value       = aws_lambda_function.cost_anomaly_slack_notifier.function_name
+}
+
+output "cost_anomaly_threshold_usd" {
+  description = "Dollar impact threshold that triggers a cost anomaly alert"
+  value       = var.cost_anomaly_threshold_amount
+}

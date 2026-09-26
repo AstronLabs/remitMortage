@@ -12,6 +12,15 @@ enum NotificationStatus {
   Failed
 }
 
+// How often a category's non-urgent alerts are delivered. Security-critical
+// alerts never use this — they are always sent immediately in code, and
+// there is deliberately no securityFrequency column to persist otherwise.
+enum NotificationFrequency {
+  IMMEDIATE
+  DAILY_DIGEST
+  WEEKLY_DIGEST
+}
+
 enum LoanStatus {
   Draft
   Pending
@@ -179,6 +188,7 @@ model Applicant {
   borrowerCredentials BorrowerCredential[]
   kycDocuments        KycDocument[]
   notificationPreference NotificationPreference?
+  communicationPreferences CommunicationPreference[]
   deletedAt          DateTime?
 
   @@index([deletedAt])
@@ -691,6 +701,42 @@ model ApiKey {
   @@index([revoked])
 }
 
+enum CommunicationChannel {
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum CommunicationCategory {
+  DEPOSITS
+  MILESTONES
+  GOVERNANCE
+  SECURITY
+}
+
+// Per-user, per-category, per-channel opt-in matrix — distinct from
+// NotificationPreference's coarse global email/SMS toggles and per-category
+// delivery frequency (depositsFrequency etc.). Each cell also records when
+// and why consent was granted, for compliance auditability (SMS in
+// particular requires demonstrable opt-in in many jurisdictions). See
+// services/communicationPreferences.ts for the read/write logic and the
+// per-channel opt-in-by-default vs. opt-out-by-default rules.
+model CommunicationPreference {
+  id               String                 @id @default(uuid())
+  applicantId      String
+  applicant        Applicant              @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  category         CommunicationCategory
+  channel          CommunicationChannel
+  enabled          Boolean                @default(false)
+  consentTimestamp DateTime?
+  consentSource    String?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@unique([applicantId, category, channel])
+  @@index([applicantId])
+}
+
 model NotificationPreference {
   id                String   @id @default(uuid())
   applicantId       String   @unique
@@ -703,7 +749,16 @@ model NotificationPreference {
   escrowReached     Boolean  @default(true)
   paymentMissed     Boolean  @default(true)
   loanMilestones    Boolean  @default(true)
+  governanceAlerts  Boolean  @default(true)
   webhookUrl        String?
+
+  // Per-category delivery cadence (immediate / daily digest / weekly digest).
+  // Deliberately no `securityFrequency` field — security-critical alerts
+  // (e.g. new-device login) are always sent immediately in code and are
+  // never gated by a stored preference. See services/notification.ts.
+  depositsFrequency    NotificationFrequency @default(IMMEDIATE)
+  milestonesFrequency  NotificationFrequency @default(IMMEDIATE)
+  governanceFrequency  NotificationFrequency @default(IMMEDIATE)
 
   // Business hours throttling fields
   timezone          String   @default("UTC")
@@ -730,6 +785,30 @@ model SessionToken {
   @@index([walletAddress])
   @@index([expiresAt])
   @@index([createdAt])
+}
+
+// Tracks admin "view as user" read-only support sessions end-to-end: who
+// impersonated whom, the window it was valid for, and when it actually
+// ended (which may be earlier than expiresAt if explicitly revoked). This is
+// the enforcement source of truth (authMiddleware checks it on every
+// impersonated request); AuditLog additionally gets start/end entries
+// referencing this row's id so the audit trail is queryable alongside every
+// other admin action.
+model ImpersonationSession {
+  id            String    @id @default(uuid())
+  adminAddress  String
+  targetAddress String
+  reason        String?
+  ipAddress     String?
+  startedAt     DateTime  @default(now())
+  expiresAt     DateTime
+  endedAt       DateTime?
+  endedBy       String?
+  createdAt     DateTime  @default(now())
+
+  @@index([adminAddress])
+  @@index([targetAddress])
+  @@index([expiresAt])
 }
 
 model InviteCode {

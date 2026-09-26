@@ -1,0 +1,127 @@
+name: Runbook Drift Detection
+
+# Runbooks under docs/ cite specific Terraform-managed resource names, ARNs,
+# and thresholds via fenced ```runbook-ref``` blocks (see
+# docs/RUNBOOK_DRIFT_DETECTION.md). This job extracts those claims daily and
+# compares them against live Terraform outputs/state, so a renamed or
+# removed resource — or a changed threshold — gets caught before an on-call
+# engineer follows a stale instruction during an incident.
+
+on:
+  schedule:
+    # 03:00 UTC daily — after the Terraform drift check (02:00) settles, so
+    # any infra change that landed overnight is reflected before this runs.
+    - cron: '0 3 * * *'
+  workflow_dispatch: {}
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  check-runbook-drift:
+    name: Check runbook references against live infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run unit tests for the drift checker itself
+        run: node --test scripts/check-runbook-drift.test.mjs
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.9"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Check runbook-ref annotations against Terraform
+        id: check
+        run: |
+          set +e
+          node scripts/check-runbook-drift.mjs | tee runbook-drift-report.txt
+          CHECK_EXIT=${PIPESTATUS[0]}
+          echo "exit_code=$CHECK_EXIT" >> "$GITHUB_OUTPUT"
+
+          if [ "$CHECK_EXIT" -eq 0 ]; then
+            echo "drift_detected=false" >> "$GITHUB_OUTPUT"
+            echo "✅ No runbook drift detected"
+          elif [ "$CHECK_EXIT" -eq 2 ]; then
+            echo "drift_detected=true" >> "$GITHUB_OUTPUT"
+            echo "⚠️  Runbook drift detected"
+          else
+            echo "drift_detected=false" >> "$GITHUB_OUTPUT"
+            echo "❌ Runbook drift check failed to run (see log above)"
+            exit 1
+          fi
+
+      - name: Upload Drift Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runbook-drift-report
+          path: runbook-drift-report.txt
+          retention-days: 30
+
+      - name: Post Drift Notification (Slack/Discord)
+        if: steps.check.outputs.drift_detected == 'true'
+        run: |
+          REPORT=$(cat runbook-drift-report.txt)
+          PAYLOAD=$(jq -n \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg report "$REPORT" \
+            '{
+              text: ("⚠️ *Runbook Drift Detected*\n" +
+                     "One or more runbooks under `docs/` reference infrastructure that has changed or no longer exists.\n" +
+                     "Run: " + $run_url + "\n\n```" + $report + "```\n" +
+                     "See `docs/RUNBOOK_DRIFT_DETECTION.md` for the annotation convention and remediation.")
+            }')
+          curl -sf -X POST \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "${{ secrets.DEVOPS_ALERT_WEBHOOK_URL }}"
+
+      - name: Open GitHub Issue on Drift
+        if: steps.check.outputs.drift_detected == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('runbook-drift-report.txt', 'utf8');
+            const runUrl = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Drift] Runbook references out of sync with infrastructure`,
+              body: [
+                `## Runbook Drift Detected`,
+                ``,
+                `**Detected at:** ${new Date().toISOString()}`,
+                `**Workflow run:** ${runUrl}`,
+                ``,
+                `A scheduled check found that one or more runbooks under \`docs/\` cite`,
+                `resource names, ARNs, or thresholds that no longer match live Terraform`,
+                `state/outputs — usually because the infrastructure was renamed, removed,`,
+                `or reconfigured without updating the runbook.`,
+                ``,
+                '```',
+                report.trim(),
+                '```',
+                ``,
+                `### Next Steps`,
+                `See [\`docs/RUNBOOK_DRIFT_DETECTION.md\`](../blob/main/docs/RUNBOOK_DRIFT_DETECTION.md)`,
+                `for the \`runbook-ref\` annotation convention. Update the flagged runbook's`,
+                `prose and its \`runbook-ref\` block together, then confirm locally:`,
+                ``,
+                '```bash',
+                'node scripts/check-runbook-drift.mjs',
+                '```',
+              ].join('\n'),
+              labels: ['documentation', 'drift', 'needs-review'],
+            });

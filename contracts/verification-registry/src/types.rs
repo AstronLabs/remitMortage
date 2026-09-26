@@ -73,6 +73,24 @@ pub struct DecayConfig {
     pub min_score: u32,
 }
 
+/// A borrower's open score appeal, awaiting reviewer resolution.
+///
+/// Only one of these may exist per borrower at a time — filing a second
+/// appeal while one is already open is rejected, and resolving the appeal
+/// removes this record entirely rather than marking it closed, which is
+/// what allows a borrower to file again in the future.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppealRecord {
+    /// The borrower who filed the appeal.
+    pub borrower: Address,
+    /// The anchored score in effect at the moment the appeal was filed —
+    /// the score the borrower is contesting.
+    pub score_at_appeal: u32,
+    /// Ledger sequence at which the appeal was filed.
+    pub requested_ledger: u32,
+}
+
 /// Dynamic borrower risk profile derived from repayment callbacks.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -112,4 +130,9 @@ pub enum DataKey {
     /// Score decay parameters. Absent until `set_decay_config` is called, in
     /// which case the protocol defaults apply.
     DecayConfig,
+    /// Address authorized to resolve borrower score appeals.
+    Reviewer,
+    /// Open score appeal keyed by borrower address. Absent means the
+    /// borrower has no appeal currently awaiting resolution.
+    Appeal(Address),
 }

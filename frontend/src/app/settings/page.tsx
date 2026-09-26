@@ -85,6 +85,26 @@ const notificationDetails: Record<
   },
 };
 
+type FrequencyCategory = "deposits" | "milestones" | "governance";
+
+const frequencyCategoryDetails: { key: FrequencyCategory; label: string; description: string }[] = [
+  {
+    key: "deposits",
+    label: "Deposits & Down-Payment Progress",
+    description: "Escrow approaching/reached alerts (section 2 above).",
+  },
+  {
+    key: "milestones",
+    label: "Construction Milestones",
+    description: "Milestone disbursement updates (section 3 above).",
+  },
+  {
+    key: "governance",
+    label: "Governance Proposals",
+    description: "New protocol governance proposals open for voting.",
+  },
+];
+
 const verifiedWallets = [
   {
     chain: "Ethereum",
@@ -155,6 +175,11 @@ export default function SettingsPage() {
     loanMilestones: true,
     loanApproval: true,
   });
+  const [frequencies, setFrequencies] = useState<Record<FrequencyCategory, NotificationFrequency>>({
+    deposits: "IMMEDIATE",
+    milestones: "IMMEDIATE",
+    governance: "IMMEDIATE",
+  });
   const [webhookUrl, setWebhookUrl] = useState("https://partner.example.com/remitmortgage/webhook");
   const [businessName, setBusinessName] = useState("Keystone Build Partners");
   const [registrationNumber, setRegistrationNumber] = useState("NG-RC-204918");
@@ -199,6 +224,11 @@ export default function SettingsPage() {
               if (data.settings.notifications.webhookUrl !== undefined) {
                 setWebhookUrl(data.settings.notifications.webhookUrl);
               }
+              setFrequencies((prev) => ({
+                deposits: data.settings.notifications.depositsFrequency ?? prev.deposits,
+                milestones: data.settings.notifications.milestonesFrequency ?? prev.milestones,
+                governance: data.settings.notifications.governanceFrequency ?? prev.governance,
+              }));
             }
             if (data.settings.contractor) {
               if (data.settings.contractor.businessName) setBusinessName(data.settings.contractor.businessName);
@@ -271,7 +301,13 @@ export default function SettingsPage() {
         body: JSON.stringify({
           userId,
           profile: { displayName, email, phone },
-          notifications: { ...notifications, webhookUrl },
+          notifications: {
+            ...notifications,
+            webhookUrl,
+            depositsFrequency: frequencies.deposits,
+            milestonesFrequency: frequencies.milestones,
+            governanceFrequency: frequencies.governance,
+          },
           contractor: { businessName, registrationNumber, serviceRegion },
         }),
       });
@@ -290,6 +326,12 @@ export default function SettingsPage() {
           escrowReached: notifications.escrowReached,
           paymentMissed: notifications.paymentMissed,
           loanMilestones: notifications.loanMilestones,
+          // Governance alerts have no on/off toggle in this UI — only their
+          // delivery cadence is configurable, so this always stays enabled.
+          governanceAlerts: true,
+          depositsFrequency: frequencies.deposits,
+          milestonesFrequency: frequencies.milestones,
+          governanceFrequency: frequencies.governance,
           webhookUrl,
         }),
       }).catch(() => null);
@@ -588,6 +630,39 @@ export default function SettingsPage() {
                     {webhookError && <span className="text-xs text-red-400 block">{webhookError}</span>}
                     {webhookStatus && <span className="text-xs text-cyan-300 block">{webhookStatus}</span>}
                   </label>
+
+                  {/* Notification Frequency */}
+                  <div className="space-y-3 pt-2 border-t border-slate-800">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-400">
+                      6. Notification Frequency
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Choose how often you receive non-urgent alerts for each category below.
+                      Immediate sends one email per event; digests batch that category's alerts
+                      into a single email at the cadence you pick.
+                    </p>
+                    <div className="space-y-3">
+                      {frequencyCategoryDetails.map((cat) => (
+                        <NotificationFrequencyControl
+                          key={cat.key}
+                          label={cat.label}
+                          description={cat.description}
+                          value={frequencies[cat.key]}
+                          onChange={(value) =>
+                            setFrequencies((prev) => ({ ...prev, [cat.key]: value }))
+                          }
+                        />
+                      ))}
+                      <NotificationFrequencyControl
+                        label="Security Alerts"
+                        description="New-device logins and other security-sensitive events."
+                        value="IMMEDIATE"
+                        onChange={() => {}}
+                        locked
+                        lockedReason="Security alerts always send immediately and can't be delayed or batched — this keeps you from missing unauthorized account activity while waiting on a digest."
+                      />
+                    </div>
+                  </div>
 
                   <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between text-xs text-slate-400">
                     <span>Active Notification Rules:</span>

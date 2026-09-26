@@ -31,4 +31,10 @@ pub enum RegistryError {
     InvalidRateLimits = 11,
     /// Decay parameters are invalid (zero period, or scores out of range).
     InvalidDecayConfig = 12,
+    /// The borrower already has an open appeal awaiting resolution.
+    AppealAlreadyOpen = 13,
+    /// No open appeal exists for the borrower.
+    NoOpenAppeal = 14,
+    /// No reviewer has been configured to resolve score appeals.
+    ReviewerNotConfigured = 15,
 }
