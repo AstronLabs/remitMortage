@@ -1,5 +1,8 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 const es = {
-  "email.deposit_receipt.subject": "Recibo de Depósito - RemitMortgage",
+  "email.deposit_receipt.subject": "Recibo de Depósito - {brand}",
   "email.deposit_receipt.title": "Depósito Confirmado",
   "email.deposit_receipt.body": "Recibimos exitosamente su depósito de <strong>{amount} USDC</strong>. Su progreso de remesa ha sido actualizado en consecuencia.",
   "email.deposit_receipt.amount_label": "Monto",
@@ -7,7 +10,7 @@ const es = {
   "email.deposit_receipt.date_label": "Fecha",
   "email.deposit_receipt.footer": "Su depósito será procesado automáticamente en su cuenta de depósito de hipoteca.",
 
-  "email.repayment_reminder.subject": "Recordatorio de Pago - RemitMortgage",
+  "email.repayment_reminder.subject": "Recordatorio de Pago - {brand}",
   "email.repayment_reminder.title": "Recordatorio de Pago",
   "email.repayment_reminder.body": "Este es un recordatorio de que un pago próximo está programado para su préstamo.",
   "email.repayment_reminder.amount_due_label": "Monto Adeudado",
@@ -23,9 +26,9 @@ const es = {
   "email.loan_status.updated_at_label": "Actualizado En",
   "email.loan_status.footer": "Inicie sesión en el panel de control para ver más detalles sobre su solicitud.",
 
-  "email.lockout.subject": "Alerta de Seguridad: Cuenta Bloqueada - RemitMortgage",
+  "email.lockout.subject": "Alerta de Seguridad: Cuenta Bloqueada - {brand}",
   "email.lockout.title": "Alerta de Seguridad: Cuenta Temporalmente Bloqueada",
-  "email.lockout.body": "Se detectaron múltiples intentos de inicio de sesión fallidos consecutivos en su cuenta de RemitMortgage.",
+  "email.lockout.body": "Se detectaron múltiples intentos de inicio de sesión fallidos consecutivos en su cuenta de {brand}.",
   "email.lockout.locked_message": "Para proteger sus registros financieros y activos de acceso no autorizado, su cuenta ha sido temporalmente bloqueada por <strong>{lockoutMinutes} minuto(s)</strong>.",
   "email.lockout.duration_label": "Duración del Bloqueo",
   "email.lockout.ip_label": "Dirección IP de Origen",
@@ -33,7 +36,7 @@ const es = {
   "email.lockout.footer": "Si esto no fue usted, alguien puede estar intentando adivinar su contraseña. Recomendamos encarecidamente restablecer su contraseña inmediatamente una vez que expire el período de bloqueo.",
   "email.lockout.cta": "Restablecer Contraseña",
 
-  "email.alert_deposit.subject": "Depósito Recibido - RemitMortgage",
+  "email.alert_deposit.subject": "Depósito Recibido - {brand}",
   "email.alert_deposit.title": "Depósito Recibido",
   "email.alert_deposit.body": "Un depósito de <strong>{amount} USDC</strong> fue registrado en cadena contra su depósito de hipoteca.",
   "email.alert_deposit.amount_label": "Monto",
@@ -41,7 +44,7 @@ const es = {
   "email.alert_deposit.ledger_label": "Libro Mayor",
   "email.alert_deposit.footer": "No se requiere acción. Su línea de tiempo de remesa ha sido actualizada automáticamente.",
 
-  "email.alert_repay.subject": "Pago Registrado - RemitMortgage",
+  "email.alert_repay.subject": "Pago Registrado - {brand}",
   "email.alert_repay.title": "Pago Registrado",
   "email.alert_repay.body": "Aplicamos un pago de <strong>{amount} USDC</strong> a su saldo de préstamo pendiente.",
   "email.alert_repay.amount_label": "Monto",
@@ -49,7 +52,7 @@ const es = {
   "email.alert_repay.ledger_label": "Libro Mayor",
   "email.alert_repay.footer": "Inicie sesión en el panel de control para revisar su calendario de amortización actualizado.",
 
-  "email.alert_milestone.subject": "Hito Aprobado - RemitMortgage",
+  "email.alert_milestone.subject": "Hito Aprobado - {brand}",
   "email.alert_milestone.title": "Hito Aprobado",
   "email.alert_milestone.body": "Un hito de construcción en su proyecto ha sido aprobado y los fondos están listos para ser liberados.",
   "email.alert_milestone.milestone_label": "Hito",

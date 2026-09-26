@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { randomBytes, timingSafeEqual } from "crypto";
 import { Request, Response, NextFunction } from "express";
 

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { prisma } from "./db.js";
 import type { LoanApplication } from "./loanStore.js";
 

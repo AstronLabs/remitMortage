@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Request, Response, NextFunction } from "express";
 import { prisma } from "../services/db.js";
 
@@ -30,6 +33,7 @@ export function requireScopedApiKey(requiredScope: string) {
         return;
       }
 
+      res.locals.apiKey = apiKey;
       next();
     } catch (err) {
       res.status(500).json({ error: "internal_server_error", message: "Error validating API key" });

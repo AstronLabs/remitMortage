@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";

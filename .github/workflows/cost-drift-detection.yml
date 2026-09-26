@@ -1,0 +1,263 @@
+name: Terraform Cost Drift Detection
+
+# Infracost estimates what a Terraform config should cost at PR time
+# (infracost.yml). This workflow checks whether real billing later drifts away
+# from that estimate — e.g. an autoscaling misconfiguration running far more
+# capacity than planned.
+#
+#   record-baseline  On every deploy of Terraform changes to main, snapshot the
+#                    Infracost breakdown as the cost baseline for that deploy.
+#   detect-drift     Monthly, compare last month's actual AWS spend per service
+#                    (Cost Explorer) with the baseline, and alert via Slack/Discord
+#                    and a GitHub issue when a service exceeds its estimate by
+#                    more than COST_DRIFT_THRESHOLD_PCT.
+#   unit-tests       Tests for the comparison script on PRs that change it.
+#
+# See docs/TERRAFORM_COST_DRIFT_DETECTION.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "devops/**.tf"
+      - "infrastructure/terraform/**.tf"
+      - "infracost.yml"
+  pull_request:
+    paths:
+      - "scripts/cost_drift_check.py"
+      - "scripts/test_cost_drift_check.py"
+      - ".github/workflows/cost-drift-detection.yml"
+  schedule:
+    # 06:00 UTC on the 3rd — gives AWS time to finalize the previous month's charges.
+    - cron: "0 6 3 * *"
+  workflow_dispatch:
+    inputs:
+      threshold_pct:
+        description: "Alert when actual spend exceeds the estimate by more than this percent"
+        required: false
+        default: ""
+      environment:
+        description: "Environment tag value to filter Cost Explorer by"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+env:
+  # Percent over the Infracost estimate at which a service is flagged.
+  COST_DRIFT_THRESHOLD_PCT: "25"
+  # Overruns smaller than this many USD are never flagged, whatever the percent.
+  COST_DRIFT_MIN_DELTA_USD: "10"
+  # Cost Explorer is filtered to resources tagged Environment=<this value>.
+  COST_DRIFT_ENVIRONMENT: "production"
+  BASELINE_ARTIFACT: infracost-cost-baseline
+
+jobs:
+  unit-tests:
+    name: Cost Drift Script Tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run unit tests
+        run: python3 -m unittest discover -s scripts -p "test_cost_drift_check.py" -v
+
+  record-baseline:
+    name: Record Infracost Baseline
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Infracost
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Generate baseline
+        run: |
+          infracost breakdown \
+            --config-file=infracost.yml \
+            --format=json \
+            --out-file=infracost-baseline.json
+          echo "Baseline for ${GITHUB_SHA}: \$$(jq -r '.totalMonthlyCost // "0"' infracost-baseline.json)/month" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BASELINE_ARTIFACT }}
+          path: infracost-baseline.json
+          retention-days: 90
+
+  detect-drift:
+    name: Detect Cost Drift
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve settings
+        id: settings
+        run: |
+          THRESHOLD="${{ github.event.inputs.threshold_pct }}"
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+          # Previous full calendar month; Cost Explorer's End date is exclusive.
+          START=$(date -u -d "$(date -u +%Y-%m-01) -1 month" +%Y-%m-01)
+          END=$(date -u +%Y-%m-01)
+          {
+            echo "threshold=${THRESHOLD:-$COST_DRIFT_THRESHOLD_PCT}"
+            echo "environment=${ENVIRONMENT:-$COST_DRIFT_ENVIRONMENT}"
+            echo "start=$START"
+            echo "end=$END"
+            echo "period=${START%-01}"
+          } >> "$GITHUB_OUTPUT"
+
+      # Use the baseline recorded by the most recent Terraform deploy to main.
+      # If it has expired (no Terraform change in 90 days), the current main
+      # config *is* what is deployed, so regenerating it is equivalent.
+      - name: Download latest deploy baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow cost-drift-detection.yml \
+            --branch main --event push --status success \
+            --limit 1 --json databaseId -q '.[0].databaseId')
+          if [ -n "$RUN_ID" ] && gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" -n "$BASELINE_ARTIFACT" -D baseline; then
+            echo "source=deploy run $RUN_ID" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Infracost
+        if: steps.baseline.outputs.found != 'true'
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Regenerate baseline from main
+        if: steps.baseline.outputs.found != 'true'
+        run: |
+          mkdir -p baseline
+          infracost breakdown --config-file=infracost.yml --format=json --out-file=baseline/infracost-baseline.json
+          echo "::notice::No recorded deploy baseline available; regenerated from ${GITHUB_SHA}."
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Fetch actual cost by service
+        run: |
+          aws ce get-cost-and-usage \
+            --time-period "Start=${{ steps.settings.outputs.start }},End=${{ steps.settings.outputs.end }}" \
+            --granularity MONTHLY \
+            --metrics UnblendedCost \
+            --group-by Type=DIMENSION,Key=SERVICE \
+            --filter "{\"Tags\":{\"Key\":\"Environment\",\"Values\":[\"${{ steps.settings.outputs.environment }}\"]}}" \
+            > actual-costs.json
+
+      - name: Compare actual spend against baseline
+        id: compare
+        run: |
+          set +e
+          python3 scripts/cost_drift_check.py \
+            --baseline baseline/infracost-baseline.json \
+            --actuals actual-costs.json \
+            --threshold-pct "${{ steps.settings.outputs.threshold }}" \
+            --min-delta-usd "$COST_DRIFT_MIN_DELTA_USD" \
+            --period "${{ steps.settings.outputs.period }} (Environment=${{ steps.settings.outputs.environment }})" \
+            --report cost-drift-report.md
+          EXIT=$?
+          set -e
+          cat cost-drift-report.md >> "$GITHUB_STEP_SUMMARY"
+          if [ "$EXIT" -eq 2 ]; then
+            echo "drift_detected=true" >> "$GITHUB_OUTPUT"
+          elif [ "$EXIT" -eq 0 ]; then
+            echo "drift_detected=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "❌ Cost drift comparison failed"
+            exit 1
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cost-drift-report-${{ steps.settings.outputs.period }}
+          path: |
+            cost-drift-report.md
+            actual-costs.json
+            baseline/infracost-baseline.json
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: Post drift notification (Slack/Discord)
+        if: steps.compare.outputs.drift_detected == 'true'
+        env:
+          WEBHOOK_URL: ${{ secrets.DEVOPS_ALERT_WEBHOOK_URL }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "DEVOPS_ALERT_WEBHOOK_URL not set; skipping chat notification."
+            exit 0
+          fi
+          DRIFTED=$(grep -F '**DRIFT**' cost-drift-report.md | cut -d'|' -f2,5 | sed 's/^ */• /')
+          PAYLOAD=$(jq -n \
+            --arg period "${{ steps.settings.outputs.period }}" \
+            --arg threshold "${{ steps.settings.outputs.threshold }}" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg drifted "$DRIFTED" \
+            '{
+              text: ("💸 *Terraform Cost Drift Detected* — " + $period + "\n" +
+                     "Actual spend exceeded the Infracost estimate by more than " + $threshold + "% for:\n" +
+                     $drifted + "\n" +
+                     "Run: " + $run_url + "\n" +
+                     "See `docs/TERRAFORM_COST_DRIFT_DETECTION.md` for triage steps.")
+            }')
+          curl -sf -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK_URL"
+
+      - name: Open GitHub issue on drift
+        if: steps.compare.outputs.drift_detected == 'true'
+        uses: actions/github-script@v7
+        env:
+          PERIOD: ${{ steps.settings.outputs.period }}
+          BASELINE_SOURCE: ${{ steps.baseline.outputs.source || 'regenerated from main' }}
+        with:
+          script: |
+            const fs = require('fs');
+            const title = `[Cost Drift] Actual spend exceeded Terraform estimate — ${process.env.PERIOD}`;
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'cost-drift',
+            });
+            if (existing.some((issue) => issue.title === title)) {
+              core.info(`Issue already open for ${process.env.PERIOD}; not creating a duplicate.`);
+              return;
+            }
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: [
+                fs.readFileSync('cost-drift-report.md', 'utf8'),
+                `**Baseline:** ${process.env.BASELINE_SOURCE}`,
+                `**Workflow run:** ${runUrl}`,
+                ``,
+                `See [\`docs/TERRAFORM_COST_DRIFT_DETECTION.md\`](../blob/main/docs/TERRAFORM_COST_DRIFT_DETECTION.md) for triage steps.`,
+              ].join('\n'),
+              labels: ['infrastructure', 'cost-drift', 'needs-review'],
+            });

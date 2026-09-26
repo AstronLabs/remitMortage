@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { randomUUID } from "node:crypto";
 import type { RequestHandler } from "express";
 import rTracer from "cls-rtracer";

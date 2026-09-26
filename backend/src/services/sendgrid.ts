@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 /**
  * Thin SendGrid client wrapper.
  *
@@ -10,6 +13,8 @@ import axios from "axios";
 import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
 import { configuredSecretId, secrets } from "./secretsManager.js";
+import { DEFAULT_TENANT_ID, getCurrentTenant } from "./tenant.js";
+import { isEmailSuppressed } from "./emailSuppression.js";
 
 const SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send";
 
@@ -58,8 +63,13 @@ export async function sendGridSend(message: SendGridMessage): Promise<boolean> {
     logger.warn("[sendgrid] SENDGRID_API_KEY not set, skipping email dispatch");
     return false;
   }
+  if (await isEmailSuppressed(message.to)) {
+    logger.info(`[sendgrid] Skipping send to suppressed address ${message.to}`);
+    return false;
+  }
 
-  const sender = message.from ?? from;
+  const tenant = getCurrentTenant();
+  const sender = message.from ?? (tenant.id === DEFAULT_TENANT_ID ? from : tenant.senderEmail);
 
   try {
     const client = await loadOfficialClient(apiKey);

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { rpc, scValToNative, StrKey, xdr } from "@stellar/stellar-sdk";
 
 export const STELLARCHAIN_TX_BASE = "https://testnet.stellarchain.io/transactions/";

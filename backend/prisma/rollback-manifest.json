@@ -1,0 +1,25 @@
+{
+  "$comment": "Migrations that cannot be rolled back automatically. Every entry MUST reference a reviewed runbook file (relative to this directory). The rollback check fails if a migration has no down.sql and is not listed here, or if a listed runbook is missing.",
+  "irreversible": [
+    {
+      "migration": "20260825_partition_auditlog",
+      "runbook": "rollback-runbooks/20260825_partition_auditlog.md",
+      "reason": "Rewrites AuditLog into a partitioned table and copies rows across. The reverse requires recreating the unpartitioned table and copying data back under operator supervision."
+    },
+    {
+      "migration": "20260826_manual_edit_audit_triggers",
+      "runbook": "rollback-runbooks/20260826_manual_edit_audit_triggers.md",
+      "reason": "Installs audit triggers and revokes direct DML on AuditLog. Reverting the grant posture is an attended security operation."
+    },
+    {
+      "migration": "20260827_row_level_security",
+      "runbook": "rollback-runbooks/20260827_row_level_security.md",
+      "reason": "Enables row-level security and tenant-isolation policies across core tables. Disabling RLS in production is an attended security change."
+    },
+    {
+      "migration": "20260828000000_add_draft_stale_cleanup_fields",
+      "runbook": "rollback-runbooks/20260828000000_add_draft_stale_cleanup_fields.md",
+      "reason": "Adds the 'Draft' value to the LoanStatus enum. PostgreSQL cannot remove enum values, so this is irreversible without recreating the type."
+    }
+  ]
+}

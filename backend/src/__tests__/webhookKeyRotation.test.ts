@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { runWebhookKeyRotationSweep } from "../jobs/webhookKeyRotation.js";
 import { rotateDueSecrets, pruneExpiredPreviousSecrets } from "../services/webhook.js";
 import { queueNotification } from "../services/notification.js";

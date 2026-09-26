@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 /**
  * KYC OCR auto-fill tests — issue #529-equivalent (KYC OCR).
  *

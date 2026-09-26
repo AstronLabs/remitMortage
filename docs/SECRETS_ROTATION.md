@@ -24,3 +24,31 @@ Secrets Manager four-step contract: `createSecret`, `setSecret`, `testSecret`,
 and `finishSecret`. The `finishSecret` step must promote the new version only
 after `testSecret` succeeds and revoke the old credential after the grace
 window.
+
+## JWT session signing keys
+
+Session JWTs are signed and verified through a key ring
+(`backend/src/services/jwtKeyRing.ts`) instead of a single `JWT_SECRET`, so the
+signing key can be rotated without logging every user out.
+
+- `JWT_SECRET` / `JWT_KEY_KID` — the current signing key and the `kid` stamped
+  into new tokens.
+- `JWT_PREVIOUS_SECRETS` / `JWT_PREVIOUS_KEY_KIDS` — comma-separated keys that
+  are still inside their grace period. Verification accepts the current key plus
+  these.
+- `JWT_KEY_GRACE_PERIOD_SECONDS` — how long a retired key keeps verifying tokens
+  (default 7 days).
+- `JWT_KEY_ROTATION_INTERVAL_SECONDS` — how old the current key may get before
+  the scheduler rotates it (default 30 days).
+- `JWT_KEY_ROTATION_CRON_SCHEDULE` — cron for the rotation sweep (default
+  `0 4 * * *` UTC).
+
+New tokens are always signed with the current key and carry its `kid`. During
+rotation the previous key is retired, not deleted: it keeps validating for the
+grace period, then the next sweep prunes it and tokens signed under it are
+rejected. Legacy tokens without a `kid` are verified against every active key.
+
+To rotate in a deployment, set the new value in `JWT_SECRET`, move the old value
+into `JWT_PREVIOUS_SECRETS`, and leave it there until the grace period elapses.
+Rotate `JWT_SECRET` in your secret manager first so the app picks up the new key
+before old sessions issued under the previous key fall out of grace.

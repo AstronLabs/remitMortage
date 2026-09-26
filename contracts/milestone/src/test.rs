@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 #![cfg(test)]
 
 use super::*;
@@ -1406,4 +1409,305 @@ fn test_release_milestone_succeeds_when_flag_is_clear() {
     if let Err(e) = res {
         assert_ne!(e, Ok(MilestoneError::ReentrancyGuard));
     }
+}
+
+// ── Dispute Arbitration Timeout ──────────────────────────────────────────
+
+use crate::types::DisputeOutcome;
+use soroban_sdk::testutils::Events;
+use soroban_sdk::TryFromVal;
+
+const ARBITRATION_WINDOW: u32 = 1_000;
+
+/// Approved milestone with a configured arbitration panel and a borrower on
+/// the loan. Returns the harness, arbitrators, and borrower.
+fn setup_arbitration(
+    env: &Env,
+    arbitrator_count: u32,
+    threshold: u32,
+) -> (Harness<'_>, Vec<Address>, Address) {
+    let h = setup(env, 1, 1, 5_000, 10_000);
+    let pid = proposal_id(env);
+    h.milestone.propose_milestone(
+        &h.contractor,
+        &pid,
+        &loan_id(env),
+        &1_000i128,
+        &evidence(env),
+        &cidv0(env),
+    );
+    h.milestone
+        .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
+
+    let borrower = Address::generate(env);
+    h.pool.set_loan_borrower(&loan_id(env), &borrower);
+
+    let mut arbitrators = Vec::new(env);
+    for _ in 0..arbitrator_count {
+        arbitrators.push_back(Address::generate(env));
+    }
+    h.milestone
+        .set_arbitration_config(&h.admin, &arbitrators, &threshold, &ARBITRATION_WINDOW);
+
+    (h, arbitrators, borrower)
+}
+
+fn advance_ledger(env: &Env, ledgers: u32) {
+    env.ledger().with_mut(|li| li.sequence_number += ledgers);
+}
+
+/// Second topic of the most recent event published by the milestone contract.
+fn last_dispute_event(env: &Env) -> Symbol {
+    let (_, topics, _) = env.events().all().last().unwrap();
+    Symbol::try_from_val(env, &topics.get(1).unwrap()).unwrap()
+}
+
+#[test]
+fn test_arbitration_config_validation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let h = setup(&env, 1, 1, 5_000, 10_000);
+    let arbitrators = Vec::from_array(&env, [Address::generate(&env)]);
+
+    assert_eq!(
+        h.milestone
+            .try_set_arbitration_config(&h.admin, &arbitrators, &2, &100),
+        Err(Ok(MilestoneError::InvalidThreshold))
+    );
+    assert_eq!(
+        h.milestone
+            .try_set_arbitration_config(&h.admin, &arbitrators, &1, &0),
+        Err(Ok(MilestoneError::InvalidArbitrationWindow))
+    );
+    assert_eq!(
+        h.milestone
+            .try_set_arbitration_config(&h.contractor, &arbitrators, &1, &100),
+        Err(Ok(MilestoneError::Unauthorized))
+    );
+
+    h.milestone
+        .set_arbitration_config(&h.admin, &arbitrators, &1, &100);
+    assert_eq!(h.milestone.get_arbitration_config().window_ledgers, 100);
+}
+
+#[test]
+fn test_raise_dispute_requires_config_and_borrower_or_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, _, borrower) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+
+    assert_eq!(
+        h.milestone.try_raise_dispute(&h.contractor, &pid),
+        Err(Ok(MilestoneError::Unauthorized))
+    );
+
+    h.milestone.raise_dispute(&borrower, &pid);
+    assert_eq!(last_dispute_event(&env), symbol_short!("raised"));
+    assert_eq!(
+        h.milestone.get_milestone(&pid).status,
+        MilestoneStatus::Disputed
+    );
+
+    let dispute = h.milestone.get_dispute(&pid);
+    assert_eq!(
+        dispute.deadline_ledger,
+        dispute.raised_ledger + ARBITRATION_WINDOW
+    );
+    assert_eq!(dispute.outcome, DisputeOutcome::Pending);
+
+    assert_eq!(
+        h.milestone.try_raise_dispute(&h.admin, &pid),
+        Err(Ok(MilestoneError::AlreadyDisputed))
+    );
+
+    let fresh = setup(&env, 1, 1, 5_000, 10_000);
+    assert_eq!(
+        fresh.milestone.try_raise_dispute(&fresh.admin, &pid),
+        Err(Ok(MilestoneError::ArbitrationNotConfigured))
+    );
+}
+
+#[test]
+fn test_disputed_milestone_cannot_be_released() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, _, _) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+
+    h.milestone.raise_dispute(&h.admin, &pid);
+    advance_ledger(&env, 200);
+
+    assert_eq!(
+        h.milestone.try_release_milestone(&pid),
+        Err(Ok(MilestoneError::InvalidStatus))
+    );
+}
+
+#[test]
+fn test_arbitrator_rejects_dispute_within_window() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, arbitrators, borrower) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+
+    h.milestone.raise_dispute(&borrower, &pid);
+    advance_ledger(&env, ARBITRATION_WINDOW);
+    h.milestone
+        .vote_dispute(&arbitrators.get(0).unwrap(), &pid, &false);
+    assert_eq!(last_dispute_event(&env), symbol_short!("resolved"));
+
+    assert_eq!(
+        h.milestone.get_dispute(&pid).outcome,
+        DisputeOutcome::Rejected
+    );
+    assert_eq!(
+        h.milestone.get_milestone(&pid).status,
+        MilestoneStatus::Approved
+    );
+
+    h.milestone.release_milestone(&pid);
+    assert_eq!(h.pool.total_disbursed(), 1_000);
+    assert_eq!(
+        h.milestone.try_resolve_expired_dispute(&pid),
+        Err(Ok(MilestoneError::DisputeAlreadyResolved))
+    );
+}
+
+#[test]
+fn test_arbitrator_upholds_dispute_within_window() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, arbitrators, _) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+
+    h.milestone.raise_dispute(&h.admin, &pid);
+    h.milestone
+        .vote_dispute(&arbitrators.get(0).unwrap(), &pid, &true);
+
+    assert_eq!(
+        h.milestone.get_dispute(&pid).outcome,
+        DisputeOutcome::Upheld
+    );
+    assert_eq!(
+        h.milestone.get_milestone(&pid).status,
+        MilestoneStatus::Refunded
+    );
+
+    advance_ledger(&env, 200);
+    assert_eq!(
+        h.milestone.try_release_milestone(&pid),
+        Err(Ok(MilestoneError::InvalidStatus))
+    );
+}
+
+#[test]
+fn test_vote_by_non_arbitrator_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, _, _) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+
+    h.milestone.raise_dispute(&h.admin, &pid);
+    assert_eq!(
+        h.milestone.try_vote_dispute(&h.admin, &pid, &true),
+        Err(Ok(MilestoneError::Unauthorized))
+    );
+}
+
+#[test]
+fn test_window_elapses_with_no_decision_auto_resolves() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, arbitrators, borrower) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+    let approved_ledger = h.milestone.get_milestone(&pid).approved_ledger;
+
+    h.milestone.raise_dispute(&borrower, &pid);
+
+    // Still inside the window: nothing to auto-resolve yet.
+    advance_ledger(&env, ARBITRATION_WINDOW);
+    assert_eq!(
+        h.milestone.try_resolve_expired_dispute(&pid),
+        Err(Ok(MilestoneError::ArbitrationWindowOpen))
+    );
+
+    advance_ledger(&env, 1);
+    assert_eq!(
+        h.milestone
+            .try_vote_dispute(&arbitrators.get(0).unwrap(), &pid, &true),
+        Err(Ok(MilestoneError::ArbitrationWindowElapsed))
+    );
+
+    h.milestone.resolve_expired_dispute(&pid);
+    assert_eq!(last_dispute_event(&env), symbol_short!("timeout"));
+
+    let record = h.milestone.get_milestone(&pid);
+    assert_eq!(record.status, MilestoneStatus::Approved);
+    assert_eq!(record.approved_ledger, approved_ledger);
+    assert_eq!(
+        h.milestone.get_dispute(&pid).outcome,
+        DisputeOutcome::TimedOut
+    );
+
+    h.milestone.release_milestone(&pid);
+    assert_eq!(h.pool.total_disbursed(), 1_000);
+}
+
+#[test]
+fn test_window_elapses_mid_partial_resolution() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, arbitrators, _) = setup_arbitration(&env, 3, 2);
+    let pid = proposal_id(&env);
+
+    h.milestone.raise_dispute(&h.admin, &pid);
+    h.milestone
+        .vote_dispute(&arbitrators.get(0).unwrap(), &pid, &true);
+    assert_eq!(
+        h.milestone.get_milestone(&pid).status,
+        MilestoneStatus::Disputed
+    );
+
+    advance_ledger(&env, ARBITRATION_WINDOW + 1);
+    assert_eq!(
+        h.milestone
+            .try_vote_dispute(&arbitrators.get(1).unwrap(), &pid, &true),
+        Err(Ok(MilestoneError::ArbitrationWindowElapsed))
+    );
+
+    h.milestone.resolve_expired_dispute(&pid);
+
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
+        symbol_short!("timeout")
+    );
+    let (_, uphold, reject): (BytesN<32>, u32, u32) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!((uphold, reject), (1, 0));
+
+    // The lone uphold vote is discarded; the release schedule is restored.
+    let dispute = h.milestone.get_dispute(&pid);
+    assert_eq!(dispute.outcome, DisputeOutcome::TimedOut);
+    assert_eq!(dispute.uphold_votes, 1);
+    assert_eq!(
+        h.milestone.get_milestone(&pid).status,
+        MilestoneStatus::Approved
+    );
+}
+
+#[test]
+fn test_config_change_does_not_move_open_dispute_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, arbitrators, _) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+
+    h.milestone.raise_dispute(&h.admin, &pid);
+    let deadline = h.milestone.get_dispute(&pid).deadline_ledger;
+
+    h.milestone
+        .set_arbitration_config(&h.admin, &arbitrators, &1, &(ARBITRATION_WINDOW * 10));
+    assert_eq!(h.milestone.get_dispute(&pid).deadline_ledger, deadline);
 }

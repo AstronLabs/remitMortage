@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 //! Boundary tests for the early-exit penalty calculation in [`EscrowContract::withdraw`].
 //!
 //! The escrow contract deducts an early-exit penalty using tiered basis-point
@@ -71,6 +74,8 @@ fn setup(
         grace_period_ledgers: 10,
         default_penalty_bps: 1000,
         yield_vault: None,
+        match_bps: 0,
+        match_cap: 0,
     });
 
     let goal_id = Symbol::new(env, "land");

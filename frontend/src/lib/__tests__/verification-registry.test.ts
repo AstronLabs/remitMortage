@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import {
   VERIFICATION_DATA_KEY,
   VERIFICATION_CACHE_TTL_MS,

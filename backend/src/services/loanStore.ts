@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { StrKey } from "@stellar/stellar-sdk";
 import { prisma } from "./db.js";
 import {
@@ -6,6 +9,7 @@ import {
   recordLoanCreation,
   type LoanSnapshot,
 } from "./loanHistory.js";
+import { autoAssignApplicationReviewer } from "./assignmentQueue.js";
 
 // lightweight id generator to avoid adding dependencies
 function makeId() {
@@ -37,6 +41,11 @@ export interface LoanApplication {
   guarantorAddress?: string;
   /** Present only when a guarantor was attached to this loan. */
   guarantorStatus?: GuarantorStatus;
+  /** Why the application is held for a reviewer, e.g. DUPLICATE_TAX_ID. */
+  manualReviewReason?: string;
+  /** Current servicer of record; absent while the originator services the loan. */
+  servicer?: string;
+  servicerContact?: string;
 }
 
 /** Options for attaching a guarantor at application creation time. */
@@ -59,6 +68,9 @@ function mapLoanApplication(record: any): LoanApplication {
     amount: String(record.principal),
     status: record.status,
     reason: record.reason ?? undefined,
+    manualReviewReason: record.manualReviewReason ?? undefined,
+    servicer: record.servicer ?? undefined,
+    servicerContact: record.servicerContact ?? undefined,
     createdAt: record.createdAt.toISOString(),
     // updatedAt is not on the schema model; fall back to createdAt
     updatedAt: (record.updatedAt ?? record.createdAt).toISOString(),
@@ -123,6 +135,10 @@ export async function createApplication(
   // Seed the audit trail with the creation snapshot so later point-in-time
   // reconstructions have a base state to replay changes onto.
   await recordLoanCreation(application.id, snapshotOf(application));
+
+  // Issue #621: distribute the new application round-robin across active
+  // reviewers. Best-effort — a queue failure never blocks submission.
+  await autoAssignApplicationReviewer(application.id);
 
   return application;
 }

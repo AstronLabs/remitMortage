@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 use soroban_sdk::{contracttype, Address, BytesN, Symbol};
 
 /// Pending upgrade proposal (used when upgrade_delay_ledgers > 0).
@@ -104,6 +107,9 @@ pub struct InvestorRecord {
     pub accrued_yield: i128,
     /// Total losses absorbed by this investor (only non-zero for junior tranche).
     pub absorbed_loss: i128,
+    /// Optional first-loss cap in basis points for junior deposits (e.g. 1000 = 10% max loss exposure).
+    /// None or 10000 means 100% (full exposure).
+    pub first_loss_cap_bps: Option<u32>,
 }
 
 /// Per-tranche aggregate metrics stored in instance storage.
@@ -240,6 +246,18 @@ pub struct BatchDisburseItem {
     pub loan_id: BytesN<32>,
     pub recipient: Address,
     pub amount: i128,
+}
+
+/// Self-contained representation of a loan moved between compatible pools.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoanPortabilitySnapshot {
+    pub source_pool: Address,
+    pub loan_id: BytesN<32>,
+    pub loan: LoanRecord,
+    pub schedule: RepaymentSchedule,
+    pub schedule_present: bool,
+    pub exported_at_ledger: u32,
 }
 
 /// Storage keys for the lending pool contract.

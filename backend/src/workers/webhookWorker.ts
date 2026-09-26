@@ -1,9 +1,12 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import crypto from "crypto";
 import { Worker, WorkerOptions } from "bullmq";
 import { getClusterClient } from "../services/redisCluster.js";
 import { WebhookJobData } from "../services/queueService.js";
 import { decrypt } from "../utils/crypto.js";
-import { signPayload } from "../services/webhook.js";
+import { signPayload, shapeWebhookPayload } from "../services/webhook.js";
 import { prisma } from "../services/db.js";
 import logger from "../utils/logger.js";
 
@@ -63,7 +66,7 @@ export async function startWebhookWorker(): Promise<void> {
   worker = new Worker<WebhookJobData>(
     "remitmortgage-webhooks",
     async (job) => {
-      const { subscriptionId, url, encryptedSecret, topic, data } = job.data;
+      const { subscriptionId, url, encryptedSecret, topic, data, webhookSchemaVersion } = job.data;
       const attempt = job.attemptsMade;
 
       logger.info("[webhook-worker] processing delivery", {
@@ -83,7 +86,7 @@ export async function startWebhookWorker(): Promise<void> {
         data,
       };
 
-      const body = JSON.stringify(payload);
+      const body = JSON.stringify(shapeWebhookPayload(payload, webhookSchemaVersion));
       const signature = signPayload(plaintextSecret, timestamp, body);
 
       const headers: Record<string, string> = {
@@ -95,11 +98,14 @@ export async function startWebhookWorker(): Promise<void> {
 
       const result = await attemptPost(url, headers, body);
 
+      const completedAt = new Date();
+
       const success =
         "statusCode" in result &&
         result.statusCode !== undefined &&
         result.statusCode >= 200 &&
         result.statusCode < 300;
+      const isLastAttempt = job.attemptsMade >= (job.opts?.attempts || 5) - 1;
 
       await prisma.webhookDelivery.create({
         data: {
@@ -114,6 +120,11 @@ export async function startWebhookWorker(): Promise<void> {
           success,
           attempt,
           nextRetryAt: null,
+          // job.timestamp is when the dispatch enqueued the job, so retries
+          // count toward the delivery latency.
+          dispatchedAt: new Date(job.timestamp),
+          completedAt,
+          outcome: success ? "success" : isLastAttempt ? "dlq" : "retry",
         },
       });
 
@@ -141,7 +152,7 @@ export async function startWebhookWorker(): Promise<void> {
         error: errorMsg,
       });
 
-      if (job.attemptsMade >= (job.opts?.attempts || 5) - 1) {
+      if (isLastAttempt) {
         // last attempt - write to DLQ
         await prisma.webhookDLQ.create({
           data: {

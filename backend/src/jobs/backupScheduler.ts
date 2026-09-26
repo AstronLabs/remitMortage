@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import cron from "node-cron";
 import { createBackupService } from "../services/databaseBackup.js";
 import logger from "../utils/logger.js";

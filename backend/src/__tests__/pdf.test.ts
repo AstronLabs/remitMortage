@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { hashReportContent, streamVerificationPdf, VerificationReport } from "../services/pdf";
 import { RemittanceAnalysis } from "../services/stellar";
 import { Writable } from "stream";

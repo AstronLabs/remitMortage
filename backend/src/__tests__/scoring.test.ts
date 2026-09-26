@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { calculateCreditScore } from "../services/scoring";
 import { RemittanceAnalysis } from "../services/stellar";
 

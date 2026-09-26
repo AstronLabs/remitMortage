@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Keypair, StrKey } from "@stellar/stellar-sdk";
 import { consumeChallenge } from "./challengeStore.js";
 

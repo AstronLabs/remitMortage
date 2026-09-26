@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 import { SecretProvider } from "../services/secretsManager.js";
 

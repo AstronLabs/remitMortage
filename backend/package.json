@@ -26,7 +26,8 @@
     "load-test:loans": "tsx load-tests/scenarios/loan-status-read.ts",
     "load-test:verify": "tsx load-tests/scenarios/verification-write.ts",
     "load-test:mixed": "tsx load-tests/scenarios/mixed-workload.ts",
-    "load-test:month-end": "tsx load-tests/scenarios/month-end-payment-spike.ts"
+    "load-test:month-end": "tsx load-tests/scenarios/month-end-payment-spike.ts",
+    "load-test:bulk-approval": "tsx load-tests/scenarios/bulk-approval.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.709.0",

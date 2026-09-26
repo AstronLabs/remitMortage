@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { type Response, type NextFunction } from "express";
 import { type AuthenticatedRequest } from "./auth.js";
 import { prisma } from "../services/db.js";

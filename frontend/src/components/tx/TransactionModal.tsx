@@ -1,6 +1,8 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -19,6 +21,7 @@ import {
   type TransactionModalPhase,
   type TransactionType,
 } from "../../lib/transaction-status";
+import { useFocusTrap } from "../../hooks/useFocusTrap";
 
 interface TransactionModalProps {
   isOpen: boolean;
@@ -96,6 +99,12 @@ export default function TransactionModal({
   recoveryHint,
   onClose,
 }: TransactionModalProps) {
+  const canClose = phase === "success" || phase === "error";
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, isOpen && phase !== "idle", {
+    onEscape: canClose ? onClose : undefined,
+  });
+
   useEffect(() => {
     if (!isOpen) return;
 
@@ -109,7 +118,6 @@ export default function TransactionModal({
 
   if (!isOpen || phase === "idle") return null;
 
-  const canClose = phase === "success" || phase === "error";
   const copy = PHASE_COPY[phase];
   const activeStep = phaseToStepIndex(phase);
   const displayError = errorMessage ? formatTransactionErrorMessage(errorMessage) : null;
@@ -130,6 +138,8 @@ export default function TransactionModal({
       />
 
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="transaction-modal-title"

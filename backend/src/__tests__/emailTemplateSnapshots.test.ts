@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { type Locale, SUPPORTED_LOCALES } from "../i18n/index.js";
 import {
   renderDepositReceipt,
@@ -187,6 +190,28 @@ describe("Email Template Snapshots", () => {
         expect(result.html).not.toMatch(/email\.\w+\.\w+/);
         expect(result.html).not.toContain("{amount}");
         expect(result.html).not.toContain("{milestoneId}");
+      });
+    });
+
+    describe("Edge Cases", () => {
+      it("renders correctly with extremely long fields, missing optional, and multi-currency formats", () => {
+        const result1 = renderDepositReceipt(locale, {
+          amount: "1,234,567.89",
+          transactionId: "tx_" + "long_".repeat(20) + "end",
+        });
+        expect(normalizeHtml(result1.html)).toMatchSnapshot("edge-deposit");
+
+        const result2 = renderLockoutNotification(locale, {
+          lockoutMinutes: 999999,
+          // IP Address missing
+        });
+        expect(normalizeHtml(result2.html)).toMatchSnapshot("edge-lockout");
+
+        const result3 = renderLoanStatusUpdate(locale, {
+          loanId: "L" + "OAN".repeat(50),
+          status: "Pending Investigation",
+        });
+        expect(normalizeHtml(result3.html)).toMatchSnapshot("edge-loan-status");
       });
     });
   });

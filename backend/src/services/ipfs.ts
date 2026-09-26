@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import axios from "axios";
 import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";

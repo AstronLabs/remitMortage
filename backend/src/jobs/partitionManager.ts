@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import cron from "node-cron";
 import logger from "../utils/logger.js";
 import { prisma } from "../services/db.js";

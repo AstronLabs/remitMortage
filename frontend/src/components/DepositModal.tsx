@@ -1,9 +1,12 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X, Loader2, AlertCircle, CheckCircle2, WalletMinimal } from "lucide-react";
 import { useWallet } from "../context/WalletContext";
 import { useTransactionMonitor } from "../hooks/useTransactionMonitor";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import {
   buildDepositTx,
   peekCachedEstimate,
@@ -52,6 +55,9 @@ export default function DepositModal({ isOpen, onClose }: Props) {
   const [canRetry, setCanRetry] = useState(false);
   const txMonitor = useTransactionMonitor(txHash ?? undefined);
   const xlmPrice = useXlmPrice();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const amountInputRef = useRef<HTMLInputElement>(null);
+  useFocusTrap(dialogRef, isOpen, { onEscape: onClose, initialFocusRef: amountInputRef });
 
   const balanceNum = parseFloat(usdcBalance || "0");
   const amountNum = parseFloat(debouncedAmount) || 0;
@@ -219,7 +225,11 @@ export default function DepositModal({ isOpen, onClose }: Props) {
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
     >
       <div className="absolute inset-0" onClick={onClose} aria-hidden="true" />
-      <div className="relative w-full max-w-md bg-[var(--bg-card)] border border-[var(--border-color)] shadow-2xl rounded-2xl overflow-hidden">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="relative w-full max-w-md bg-[var(--bg-card)] border border-[var(--border-color)] shadow-2xl rounded-2xl overflow-hidden"
+      >
         <div className="flex items-center justify-between p-5 border-b border-[var(--border-color)]">
           <h2 id="deposit-modal-title" className="text-lg font-bold text-[var(--text-primary)]">Deposit USDC</h2>
           <button
@@ -265,6 +275,7 @@ export default function DepositModal({ isOpen, onClose }: Props) {
             </label>
             <div className="relative">
               <input
+                ref={amountInputRef}
                 id="deposit-amount"
                 type="number"
                 min="0"
