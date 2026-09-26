@@ -1,0 +1,73 @@
+name: E2E Milestone Lifecycle & Disbursement
+
+on:
+  pull_request:
+    branches: [main, development]
+    paths:
+      - "frontend/src/app/contractor/**"
+      - "frontend/src/app/multisig/**"
+      - "frontend/src/app/api/milestone/**"
+      - "frontend/src/app/api/contractor/**"
+      - "frontend/src/components/EvidenceUpload.tsx"
+      - "frontend/src/components/MilestoneCard.tsx"
+      - "frontend/src/components/MilestoneSigningProgressPanel.tsx"
+      - "frontend/src/components/SignatureQueueManager.tsx"
+      - "frontend/src/components/MilestoneTracker.tsx"
+      - "frontend/src/lib/milestoneSigning.ts"
+      - "frontend/src/lib/milestoneSigningStore.ts"
+      - "frontend/src/lib/signatureQueueStore.ts"
+      - "frontend/e2e/milestone-lifecycle.spec.ts"
+      - ".github/workflows/e2e-milestone-disbursement.yml"
+  push:
+    branches: [main]
+    paths:
+      - "frontend/src/app/contractor/**"
+      - "frontend/src/app/multisig/**"
+      - "frontend/src/app/api/milestone/**"
+      - "frontend/src/app/api/contractor/**"
+      - "frontend/src/components/EvidenceUpload.tsx"
+      - "frontend/src/components/MilestoneCard.tsx"
+      - "frontend/src/components/MilestoneSigningProgressPanel.tsx"
+      - "frontend/src/components/SignatureQueueManager.tsx"
+      - "frontend/src/components/MilestoneTracker.tsx"
+      - "frontend/src/lib/milestoneSigning.ts"
+      - "frontend/src/lib/milestoneSigningStore.ts"
+      - "frontend/src/lib/signatureQueueStore.ts"
+      - "frontend/e2e/milestone-lifecycle.spec.ts"
+      - ".github/workflows/e2e-milestone-disbursement.yml"
+
+concurrency:
+  group: e2e-milestone-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  milestone-disbursement-e2e:
+    name: Milestone Lifecycle & Disbursement E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Run Milestone Lifecycle E2E Scenario
+        run: npm run test:e2e -- e2e/milestone-lifecycle.spec.ts --project=chromium
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_ADMIN_ADDRESS: GAXI4LZGQ7F3CKOBU7S6MFYKZRCNFRQVXJXKOMZ7GM7MIFST5W54AAAA
+          NEXT_PUBLIC_HORIZON_URL: https://horizon-testnet.stellar.org
+      - name: Upload Playwright Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-milestone-report
+          path: frontend/playwright-report/
+          retention-days: 14

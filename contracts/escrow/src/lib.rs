@@ -26,15 +26,16 @@ mod test_auto_rollover;
 #[cfg(test)]
 mod test_auto_deposit;
 
+#[cfg(test)]
+mod test_goal_consolidation;
+
 pub use crate::errors::EscrowError;
 use crate::token_utils::get_token_client;
 use crate::types::DataKey;
 pub use crate::types::{
     AutoDepositSchedule, BorrowerRecord, EscrowConfig, PendingPenaltyProposal, PendingUpgradeRecord,
 };
-use soroban_sdk::{
-    contract, contractimpl, symbol_short, Address, Env, IntoVal, Symbol,
-};
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, IntoVal, Symbol};
 
 // Fallback TTL values, used only before `initialize` has stored a config.
 // Live values come from EscrowConfig so each network can be tuned separately.
@@ -78,6 +79,7 @@ impl EscrowContract {
                 withdrawn: false,
                 seized: false,
                 yield_shares: 0,
+                matched_amount: 0,
                 auto_rollover: false,
             })
     }
@@ -167,6 +169,7 @@ impl EscrowContract {
             .ok_or(EscrowError::InvalidAttestation)
     }
 
+    #[allow(dead_code)]
     fn is_defaulting(record: &BorrowerRecord, config: &EscrowConfig, current_ledger: u32) -> bool {
         if record.deposited == 0 || record.released || record.withdrawn {
             return false;
@@ -244,13 +247,7 @@ impl EscrowContract {
             .unwrap_or(0i128)
     }
 
-    fn read_total_yield_shares(env: &Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::TotalYieldShares)
-            .unwrap_or(0i128)
-    }
-
+    #[allow(dead_code)]
     fn read_lending_pool(env: &Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::LendingPool)
     }
@@ -279,28 +276,6 @@ impl EscrowContract {
         } else {
             Ok(())
         }
-    }
-
-    fn non_reentrant<F, R>(env: &Env, f: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
-        let guard: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::ReentrancyGuard)
-            .unwrap_or(false);
-        if guard {
-            panic!("reentrancy");
-        }
-        env.storage()
-            .instance()
-            .set(&DataKey::ReentrancyGuard, &true);
-        let result = f();
-        env.storage()
-            .instance()
-            .set(&DataKey::ReentrancyGuard, &false);
-        result
     }
 }
 #[contractimpl]
@@ -340,6 +315,9 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::TotalYieldShares, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::MatchingReserve, &config.match_cap);
         env.storage().instance().set(&DataKey::Version, &1u32);
         Self::extend_instance_ttl(&env);
 
@@ -383,6 +361,29 @@ impl EscrowContract {
             let token = get_token_client(&env, &config.token);
             token.transfer(&borrower, &env.current_contract_address(), &amount);
 
+            // Matching is limited to the first deposit and the configured
+            // reserve. A depleted reserve never changes the deposit result.
+            let mut matched = 0i128;
+            if !record.released && !record.withdrawn && config.match_bps > 0 && config.match_cap > 0 {
+                let reserve = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::MatchingReserve)
+                    .unwrap_or(0i128);
+                let requested = amount
+                    .checked_mul(config.match_bps as i128)
+                    .and_then(|value| value.checked_div(10_000))
+                    .unwrap_or(0);
+                let remaining_cap = (config.match_cap - record.matched_amount).max(0);
+                matched = requested.min(remaining_cap).min(reserve).max(0);
+                if matched > 0 {
+                    env.storage()
+                        .instance()
+                        .set(&DataKey::MatchingReserve, &(reserve - matched));
+                }
+                record.matched_amount += matched;
+            }
+
             // Route to yield vault if configured.
             if let Some(vault) = &config.yield_vault {
                 let invoke_args = soroban_sdk::vec![
@@ -412,19 +413,19 @@ impl EscrowContract {
 
             // Always update last contribution ledger so the default timer resets.
             record.last_contribution_ledger = current_ledger;
-            record.deposited += amount;
+            record.deposited += amount + matched;
             Self::set_borrower(&env, &borrower, &goal_id, &record);
             Self::owner_activity(&env, &borrower, &goal_id);
 
             // Update total pooled.
-            let total = Self::read_total_pooled(&env) + amount;
+            let total = Self::read_total_pooled(&env) + amount + matched;
             env.storage().instance().set(&DataKey::TotalPooled, &total);
 
             Self::extend_instance_ttl(&env);
 
             env.events().publish(
                 (symbol_short!("deposit"), goal_id.clone()),
-                (borrower.clone(), amount, record.deposited),
+                (borrower.clone(), amount + matched, record.deposited),
             );
 
             Ok(())
@@ -437,63 +438,176 @@ impl EscrowContract {
     /// `last_contribution_ledger`, so the maturity/lockup timer remains
     /// anchored to the original deposit. This lets savers accelerate
     /// reaching their down-payment target without extending the lockup.
-    pub fn top_up(env: Env, borrower: Address, goal_id: Symbol, amount: i128) -> Result<(), EscrowError> {
+    pub fn top_up(
+        env: Env,
+        borrower: Address,
+        goal_id: Symbol,
+        amount: i128,
+    ) -> Result<(), EscrowError> {
         borrower.require_auth();
         Self::check_not_paused(&env)?;
         Self::non_reentrant(&env, || {
+            if amount <= 0 {
+                return Err(EscrowError::InvalidAmount);
+            }
 
-        if amount <= 0 {
-            return Err(EscrowError::InvalidAmount);
-        }
+            let config = Self::get_config(&env)?;
+            let mut record = Self::get_borrower(&env, &borrower, &goal_id);
 
-        let config = Self::get_config(&env)?;
-        let mut record = Self::get_borrower(&env, &borrower, &goal_id);
+            // Cannot top up if no deposits exist, or if already released/withdrawn/seized.
+            if record.deposited == 0 {
+                return Err(EscrowError::EscrowGoalNotFound);
+            }
+            if record.released {
+                return Err(EscrowError::AlreadyReleased);
+            }
+            if record.withdrawn {
+                return Err(EscrowError::AlreadyWithdrawn);
+            }
+            if record.seized {
+                return Err(EscrowError::AlreadySeized);
+            }
 
-        // Cannot top up if no deposits exist, or if already released/withdrawn/seized.
-        if record.deposited == 0 {
-            return Err(EscrowError::EscrowGoalNotFound);
-        }
-        if record.released {
-            return Err(EscrowError::AlreadyReleased);
-        }
-        if record.withdrawn {
-            return Err(EscrowError::AlreadyWithdrawn);
-        }
-        if record.seized {
-            return Err(EscrowError::AlreadySeized);
-        }
+            // Transfer USDC from borrower to this contract.
+            let token = get_token_client(&env, &config.token);
+            token.transfer(&borrower, &env.current_contract_address(), &amount);
 
-        // Transfer USDC from borrower to this contract.
-        let token = get_token_client(&env, &config.token);
-        token.transfer(&borrower, &env.current_contract_address(), &amount);
+            // Route to yield vault if configured.
+            if let Some(vault) = &config.yield_vault {
+                let invoke_args = soroban_sdk::vec![
+                    &env,
+                    env.current_contract_address().into_val(&env),
+                    amount.into_val(&env)
+                ];
+                let shares: i128 =
+                    env.invoke_contract(vault, &Symbol::new(&env, "deposit"), invoke_args);
 
-        // Route to yield vault if configured.
-        if let Some(vault) = &config.yield_vault {
-            let invoke_args = soroban_sdk::vec![&env, env.current_contract_address().into_val(&env), amount.into_val(&env)];
-            let shares: i128 = env.invoke_contract(vault, &Symbol::new(&env, "deposit"), invoke_args);
+                record.yield_shares += shares;
+                let total_shares = Self::read_total_yield_shares(&env) + shares;
+                env.storage()
+                    .instance()
+                    .set(&DataKey::TotalYieldShares, &total_shares);
+            }
 
-            record.yield_shares += shares;
-            let total_shares = Self::read_total_yield_shares(&env) + shares;
-            env.storage().instance().set(&DataKey::TotalYieldShares, &total_shares);
-        }
+            // Only update deposited amount — do NOT touch start_ledger or
+            // last_contribution_ledger so the lockup timer stays anchored.
+            record.deposited += amount;
+            Self::set_borrower(&env, &borrower, &goal_id, &record);
 
-        // Only update deposited amount — do NOT touch start_ledger or
-        // last_contribution_ledger so the lockup timer stays anchored.
-        record.deposited += amount;
-        Self::set_borrower(&env, &borrower, &goal_id, &record);
+            // Update total pooled.
+            let total = Self::read_total_pooled(&env) + amount;
+            env.storage().instance().set(&DataKey::TotalPooled, &total);
 
-        // Update total pooled.
-        let total = Self::read_total_pooled(&env) + amount;
-        env.storage().instance().set(&DataKey::TotalPooled, &total);
+            Self::extend_instance_ttl(&env);
 
-        Self::extend_instance_ttl(&env);
+            env.events().publish(
+                (symbol_short!("top_up"), goal_id.clone()),
+                (borrower.clone(), amount, record.deposited),
+            );
 
-        env.events().publish(
-            (symbol_short!("top_up"), goal_id.clone()),
-            (borrower.clone(), amount, record.deposited),
-        );
+            Ok(())
+        }) // non_reentrant
+    }
 
-        Ok(())
+    /// Consolidate savings by moving balance directly between two of the
+    /// caller's own escrow goals (issue #617).
+    ///
+    /// No tokens leave the contract and no intermediate withdrawal occurs, so
+    /// consolidation cannot trigger the early-exit penalty or an external
+    /// transfer. Escrow records are keyed by `(borrower, goal_id)`, so both
+    /// goals must already belong to `borrower`; a goal owned by another
+    /// borrower has no record under this caller and is rejected with
+    /// `EscrowGoalNotFound` (cross-borrower transfers are impossible).
+    ///
+    /// The destination inherits the *earliest* lockup start ledger of the two
+    /// goals, so consolidation can never reset (extend) the lockup timer to
+    /// game the maturity gate.
+    pub fn transfer_between_goals(
+        env: Env,
+        borrower: Address,
+        from_goal_id: Symbol,
+        to_goal_id: Symbol,
+        amount: i128,
+    ) -> Result<(), EscrowError> {
+        borrower.require_auth();
+        Self::check_not_paused(&env)?;
+        Self::check_whitelist(&env, &borrower)?;
+
+        Self::non_reentrant(&env, || {
+            if amount <= 0 {
+                return Err(EscrowError::InvalidAmount);
+            }
+            if from_goal_id == to_goal_id {
+                return Err(EscrowError::InvalidAmount);
+            }
+
+            let mut from = Self::get_borrower(&env, &borrower, &from_goal_id);
+            if from.deposited == 0 {
+                return Err(EscrowError::EscrowGoalNotFound);
+            }
+            if from.released {
+                return Err(EscrowError::AlreadyReleased);
+            }
+            if from.withdrawn {
+                return Err(EscrowError::AlreadyWithdrawn);
+            }
+            if from.seized {
+                return Err(EscrowError::AlreadySeized);
+            }
+            if amount > from.deposited {
+                return Err(EscrowError::InsufficientBalance);
+            }
+
+            // The destination must already be one of the caller's own goals —
+            // a goal held by another borrower is not visible under this
+            // borrower's key and is therefore rejected here.
+            let mut to = Self::get_borrower(&env, &borrower, &to_goal_id);
+            if to.deposited == 0 {
+                return Err(EscrowError::EscrowGoalNotFound);
+            }
+            if to.released {
+                return Err(EscrowError::AlreadyReleased);
+            }
+            if to.withdrawn {
+                return Err(EscrowError::AlreadyWithdrawn);
+            }
+            if to.seized {
+                return Err(EscrowError::AlreadySeized);
+            }
+
+            // Preserve the earliest lockup start of the two goals on the
+            // destination so the transfer cannot reset the lockup timer. Both
+            // goals already hold deposits, so both start ledgers are meaningful.
+            let preserved_start = from.start_ledger.min(to.start_ledger);
+
+            // Move the balance internally: no external token transfer and the
+            // total pooled balance is unchanged.
+            from.deposited -= amount;
+            to.deposited += amount;
+            to.start_ledger = preserved_start;
+
+            // Keep the contribution clock anchored to the earlier of the two as
+            // well, so default detection cannot be reset by consolidating.
+            to.last_contribution_ledger = to
+                .last_contribution_ledger
+                .min(from.last_contribution_ledger);
+
+            Self::set_borrower(&env, &borrower, &from_goal_id, &from);
+            Self::set_borrower(&env, &borrower, &to_goal_id, &to);
+            Self::owner_activity(&env, &borrower, &from_goal_id);
+            Self::owner_activity(&env, &borrower, &to_goal_id);
+            Self::extend_instance_ttl(&env);
+
+            env.events().publish(
+                (
+                    symbol_short!("goal_xfer"),
+                    from_goal_id.clone(),
+                    to_goal_id.clone(),
+                ),
+                (borrower.clone(), amount, preserved_start),
+            );
+
+            Ok(())
         }) // non_reentrant
     }
 
@@ -650,10 +764,10 @@ impl EscrowContract {
                 return Err(EscrowError::AlreadySeized);
             }
 
-        // Verify savings target is met.
-        if record.deposited < config.savings_target {
-            return Err(EscrowError::TargetNotReached);
-        }
+            // Verify savings target is met.
+            if record.deposited < config.savings_target {
+                return Err(EscrowError::TargetNotReached);
+            }
 
             // Enforce minimum lockup duration.
             if config.min_duration_ledgers > 0 {
@@ -686,32 +800,37 @@ impl EscrowContract {
                 }
             }
 
-        let current_ledger = env.ledger().sequence();
+            let current_ledger = env.ledger().sequence();
 
-        if record.auto_rollover {
-            // Auto-rollover: seed new cycle with matured balance
-            record.start_ledger = current_ledger;
-            record.last_contribution_ledger = current_ledger;
-            record.deposited = amount_withdrawn;
-            record.released = false;
-            Self::set_borrower(&env, &borrower, &goal_id, &record);
+            if record.auto_rollover {
+                // Auto-rollover: seed new cycle with matured balance
+                record.start_ledger = current_ledger;
+                record.last_contribution_ledger = current_ledger;
+                record.deposited = amount_withdrawn;
+                record.matched_amount = 0;
+                record.released = false;
+                Self::set_borrower(&env, &borrower, &goal_id, &record);
 
-            env.events().publish(
-                (symbol_short!("rollover"), goal_id.clone()),
-                (borrower.clone(), amount_withdrawn),
-            );
-        } else {
-            // Standard release: transfer to recipient
-            let token = get_token_client(&env, &config.token);
-            token.transfer(&env.current_contract_address(), &recipient, &amount_withdrawn);
+                env.events().publish(
+                    (symbol_short!("rollover"), goal_id.clone()),
+                    (borrower.clone(), amount_withdrawn),
+                );
+            } else {
+                // Standard release: transfer to recipient
+                let token = get_token_client(&env, &config.token);
+                token.transfer(
+                    &env.current_contract_address(),
+                    &recipient,
+                    &amount_withdrawn,
+                );
 
-            let total = Self::read_total_pooled(&env) - record.deposited;
-            env.storage().instance().set(&DataKey::TotalPooled, &total);
+                let total = Self::read_total_pooled(&env) - record.deposited;
+                env.storage().instance().set(&DataKey::TotalPooled, &total);
 
-            record.released = true;
-            record.deposited = 0;
-            Self::set_borrower(&env, &borrower, &goal_id, &record);
-        }
+                record.released = true;
+                record.deposited = 0;
+                Self::set_borrower(&env, &borrower, &goal_id, &record);
+            }
 
             Self::extend_instance_ttl(&env);
 
@@ -818,10 +937,8 @@ impl EscrowContract {
             None => env.storage().persistent().remove(&key),
         }
         Self::owner_activity(&env, &borrower, &goal_id);
-        env.events().publish(
-            (symbol_short!("benefic"), goal_id),
-            (borrower, beneficiary),
-        );
+        env.events()
+            .publish((symbol_short!("benefic"), goal_id), (borrower, beneficiary));
         Self::extend_instance_ttl(&env);
         Ok(())
     }
@@ -864,10 +981,7 @@ impl EscrowContract {
     /// Configure inactivity in ledger-sequence units. Only the escrow admin
     /// can change this value; zero is rejected because it would permit an
     /// immediate beneficiary takeover.
-    pub fn set_beneficiary_inactivity(
-        env: Env,
-        period_ledgers: u32,
-    ) -> Result<(), EscrowError> {
+    pub fn set_beneficiary_inactivity(env: Env, period_ledgers: u32) -> Result<(), EscrowError> {
         let config = Self::get_config(&env)?;
         config.admin.require_auth();
         // The inactivity window must fit within the configured storage
@@ -1053,8 +1167,7 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Config, &config);
         Self::extend_instance_ttl(&env);
 
-        env.events()
-            .publish((symbol_short!("perm_mode"),), enabled);
+        env.events().publish((symbol_short!("perm_mode"),), enabled);
 
         Ok(())
     }
@@ -1069,8 +1182,7 @@ impl EscrowContract {
             .set(&DataKey::Whitelist(address.clone()), &true);
         Self::extend_instance_ttl(&env);
 
-        env.events()
-            .publish((symbol_short!("wl_add"),), (address,));
+        env.events().publish((symbol_short!("wl_add"),), (address,));
 
         Ok(())
     }
@@ -1085,8 +1197,7 @@ impl EscrowContract {
             .remove(&DataKey::Whitelist(address.clone()));
         Self::extend_instance_ttl(&env);
 
-        env.events()
-            .publish((symbol_short!("wl_rm"),), (address,));
+        env.events().publish((symbol_short!("wl_rm"),), (address,));
 
         Ok(())
     }
@@ -1193,6 +1304,8 @@ mod test {
             grace_period_ledgers: 10u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         let goal_id = Symbol::new(env, "land");
@@ -1239,6 +1352,8 @@ mod test {
             grace_period_ledgers: 120_960u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         // Verify config was stored by reading from the contract's context.
@@ -1294,6 +1409,8 @@ mod test {
             grace_period_ledgers: 120_960u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         };
         client.initialize(&test_config);
         let result = client.try_initialize(&test_config);
@@ -1331,6 +1448,8 @@ mod test {
             grace_period_ledgers: 120_960u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         let token = soroban_sdk::token::Client::new(&env, &token_address);
@@ -1958,6 +2077,8 @@ mod test {
             grace_period_ledgers: 10u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         let recipient = Address::generate(&env);
@@ -2008,6 +2129,10 @@ mod test {
             grace_period_ledgers: 10u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         let recipient = Address::generate(&env);
@@ -2062,6 +2187,8 @@ mod test {
             grace_period_ledgers: 10u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         client.deposit(&borrower, &goal_id, &10_000_0000000i128);
@@ -2107,6 +2234,8 @@ mod test {
             grace_period_ledgers: 10u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         client.deposit(&borrower, &goal_id, &5_000_0000000i128);
@@ -2335,6 +2464,8 @@ mod test {
             grace_period_ledgers: 10u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         // Register and initialize lending pool.

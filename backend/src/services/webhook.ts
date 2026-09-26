@@ -48,6 +48,8 @@ import { correlationHeaders } from "../middleware/correlationId.js";
 
 /** Maximum delivery attempts before a delivery is moved to the DLQ. */
 export const MAX_ATTEMPTS = 5;
+export const CURRENT_WEBHOOK_SCHEMA_VERSION = 2;
+export const DEPRECATED_WEBHOOK_SCHEMA_VERSION = 1;
 
 /** How often a subscription's HMAC signing key is auto-rotated. */
 export const ROTATION_INTERVAL_DAYS = 90;
@@ -112,6 +114,18 @@ export interface CreateSubscriptionInput {
   /** Defaults to ["all"] when omitted. */
   topics?: EventTopic[];
   ownerAddress?: string;
+  webhookSchemaVersion?: number;
+}
+
+export function shapeWebhookPayload(
+  payload: WebhookPayload,
+  version: number
+): Record<string, unknown> {
+  if (version === 1) {
+    const { deliveryId, topic, timestamp, data } = payload;
+    return { deliveryId, topic, timestamp, data };
+  }
+  return { schemaVersion: CURRENT_WEBHOOK_SCHEMA_VERSION, ...payload };
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +264,7 @@ export async function createSubscription(
       secret: encryptedSecret,
       topics,
       ownerAddress: input.ownerAddress ?? null,
+      webhookSchemaVersion: input.webhookSchemaVersion ?? CURRENT_WEBHOOK_SCHEMA_VERSION,
     },
   });
 
@@ -276,6 +291,8 @@ export async function listSubscriptions(ownerAddress?: string): Promise<any[]> {
       // lets admin tooling confirm rotations are landing on schedule.
       secretRotatedAt: true,
       previousSecretExpiresAt: true,
+      webhookSchemaVersion: true,
+      deprecationNotifiedAt: true,
     },
   });
   return rows;
@@ -298,6 +315,8 @@ export async function getSubscription(id: string): Promise<any | null> {
       // lets admin tooling confirm rotations are landing on schedule.
       secretRotatedAt: true,
       previousSecretExpiresAt: true,
+      webhookSchemaVersion: true,
+      deprecationNotifiedAt: true,
     },
   });
 }
@@ -487,6 +506,7 @@ async function _dispatchEventAsync(
         encryptedSecret: sub.secret,
         topic,
         data,
+        webhookSchemaVersion: sub.webhookSchemaVersion,
       } as WebhookJobData, {
         attempts: MAX_ATTEMPTS,
         backoff: { type: "exponential", delay: BASE_BACKOFF_MS },
@@ -515,6 +535,7 @@ async function _deliverToSubscription(
   data: WebhookPayload["data"]
 ): Promise<void> {
   const plaintextSecret = decrypt(subscription.secret);
+  const dispatchedAt = new Date();
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const timestamp = String(Date.now());
@@ -563,6 +584,9 @@ async function _deliverToSubscription(
         success,
         attempt,
         nextRetryAt,
+        dispatchedAt,
+        completedAt: new Date(),
+        outcome: success ? "success" : isTerminal ? "dlq" : "retry",
       },
     });
 

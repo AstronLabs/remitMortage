@@ -1,2 +1,3 @@
 /
 /dashboard
+/internal/email-preview

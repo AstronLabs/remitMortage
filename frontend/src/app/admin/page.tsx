@@ -2,11 +2,12 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import toast, { Toaster } from "react-hot-toast";
 import { useWallet, OptionalWalletProvider } from "../../context/WalletContext";
 import { EmptyState } from "../../components/EmptyState";
+import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { ClipboardList, Hammer, History } from "lucide-react";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
@@ -132,6 +133,7 @@ function AdminShell({ children }: { children: React.ReactNode }) {
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
 type Tab = "loans" | "milestones" | "audit";
+const TAB_ORDER: Tab[] = ["loans", "milestones", "audit"];
 
 function AdminDashboard() {
   const [tab, setTab] = useState<Tab>("loans");
@@ -183,6 +185,24 @@ function AdminDashboard() {
     loadData();
   }, [loadData]);
 
+  function handleTabKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const index = TAB_ORDER.indexOf(tab);
+    const next =
+      event.key === "ArrowRight"
+        ? (index + 1) % TAB_ORDER.length
+        : event.key === "ArrowLeft"
+          ? (index - 1 + TAB_ORDER.length) % TAB_ORDER.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? TAB_ORDER.length - 1
+              : null;
+    if (next === null) return;
+    event.preventDefault();
+    setTab(TAB_ORDER[next]);
+    document.getElementById(`admin-tab-${TAB_ORDER[next]}`)?.focus();
+  }
+
   async function confirmAction() {
     if (!pendingAction) return;
     setSubmitting(true);
@@ -220,37 +240,49 @@ function AdminDashboard() {
 
       <ActiveLoansMapView />
 
-      <div className="flex gap-2 border-b border-[var(--border-color)]">
-        <TabButton active={tab === "loans"} onClick={() => setTab("loans")}>
+      <div
+        role="tablist"
+        aria-label="Admin sections"
+        onKeyDown={handleTabKeyDown}
+        className="flex gap-2 border-b border-[var(--border-color)]"
+      >
+        <TabButton id="loans" active={tab === "loans"} onClick={() => setTab("loans")}>
           Pending Loans
           {loans.length > 0 && <Count value={loans.length} />}
         </TabButton>
-        <TabButton active={tab === "milestones"} onClick={() => setTab("milestones")}>
+        <TabButton
+          id="milestones"
+          active={tab === "milestones"}
+          onClick={() => setTab("milestones")}
+        >
           Milestone Reviews
           {milestones.length > 0 && <Count value={milestones.length} />}
         </TabButton>
-        <TabButton active={tab === "audit"} onClick={() => setTab("audit")}>
-          <History className="h-3.5 w-3.5 mr-1.5" />
+        <TabButton id="audit" active={tab === "audit"} onClick={() => setTab("audit")}>
+          <History className="h-3.5 w-3.5 mr-1.5" aria-hidden="true" />
           Audit Log
         </TabButton>
       </div>
 
-      {tab === "loans" ? (
-        <PendingLoansTab
-          loans={loans}
-          loading={loading}
-          onApprove={(loan) => setPendingAction({ kind: "approve-loan", loan })}
-          onReject={(loan) => setPendingAction({ kind: "reject-loan", loan })}
-        />
-      ) : tab === "milestones" ? (
-        <MilestoneReviewsTab
-          milestones={milestones}
-          loading={loading}
-          onApprove={(milestone) => setPendingAction({ kind: "approve-milestone", milestone })}
-        />
-      ) : (
-        <AuditLogViewer />
-      )}
+      <div id="admin-tabpanel" role="tabpanel" aria-labelledby={`admin-tab-${tab}`} tabIndex={0}>
+        {tab === "loans" ? (
+          <PendingLoansTab
+            loans={loans}
+            loading={loading}
+            onApprove={(loan) => setPendingAction({ kind: "approve-loan", loan })}
+            onReject={(loan) => setPendingAction({ kind: "reject-loan", loan })}
+            onRefresh={loadData}
+          />
+        ) : tab === "milestones" ? (
+          <MilestoneReviewsTab
+            milestones={milestones}
+            loading={loading}
+            onApprove={(milestone) => setPendingAction({ kind: "approve-milestone", milestone })}
+          />
+        ) : (
+          <AuditLogViewer />
+        )}
+      </div>
 
       {pendingAction && (
         <ConfirmationModal
@@ -273,16 +305,24 @@ function Count({ value }: { value: number }) {
 }
 
 function TabButton({
+  id,
   active,
   onClick,
   children,
 }: {
+  id: Tab;
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
   return (
     <button
+      type="button"
+      id={`admin-tab-${id}`}
+      role="tab"
+      aria-selected={active}
+      aria-controls="admin-tabpanel"
+      tabIndex={active ? 0 : -1}
       onClick={onClick}
       className={`px-4 py-2.5 text-sm font-medium -mb-px border-b-2 transition-colors ${
         active
@@ -329,19 +369,33 @@ function PoolOverviewCard({
 
 // ── Pending Loans ────────────────────────────────────────────────────────────
 
+interface BulkResultItem {
+  applicationId: string;
+  status: "SUCCESS" | "FAILED";
+  message: string;
+}
+
 function PendingLoansTab({
   loans,
   loading,
   onApprove,
   onReject,
+  onRefresh,
 }: {
   loans: PendingLoan[];
   loading: boolean;
   onApprove: (loan: PendingLoan) => void;
   onReject: (loan: PendingLoan) => void;
+  onRefresh: () => void;
 }) {
   const { publicKey } = useWallet();
   const [expandedLoanId, setExpandedLoanId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [summaryItems, setSummaryItems] = useState<BulkResultItem[] | null>(null);
+  const [reassignModalOpen, setReassignModalOpen] = useState(false);
+  const [assigneeAddress, setAssigneeAddress] = useState("");
+
   if (loading) return <EmptyRow text="Loading pending loans…" />;
   if (loans.length === 0) {
     return (
@@ -354,57 +408,315 @@ function PendingLoansTab({
     );
   }
 
+  const allSelected = loans.length > 0 && loans.every((l) => selectedIds.has(l.id));
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(loans.map((l) => l.id)));
+    }
+  };
+
+  const toggleSelectLoan = (id: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelectedIds(next);
+  };
+
+  const handleBulkAction = async (decision: "APPROVED" | "REJECTED") => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    setBulkProcessing(true);
+
+    try {
+      const res = await fetch("/api/admin/loans/bulk-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          applicationIds: ids,
+          decision,
+          reason: `Bulk ${decision.toLowerCase()} by admin ${publicKey || "system"}`,
+        }),
+      });
+
+      const data = await res.json();
+
+      const resultsMap: BulkResultItem[] = [];
+      if (data.results && Array.isArray(data.results)) {
+        for (const item of data.results) {
+          resultsMap.push({
+            applicationId: item.applicationId,
+            status: "SUCCESS",
+            message: `Successfully ${decision.toLowerCase()}`,
+          });
+        }
+      }
+      if (data.failures && Array.isArray(data.failures)) {
+        for (const fail of data.failures) {
+          resultsMap.push({
+            applicationId: fail.applicationId,
+            status: "FAILED",
+            message: fail.error || "Review failed for this item",
+          });
+        }
+      }
+
+      setSummaryItems(resultsMap);
+      setSelectedIds(new Set());
+      onRefresh();
+    } catch (err: any) {
+      toast.error(err.message || "Bulk action failed");
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
+  const handleBulkReassignSubmit = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0 || !assigneeAddress.trim()) return;
+    setBulkProcessing(true);
+
+    try {
+      const res = await fetch("/api/admin/loans/reassign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          applicationIds: ids,
+          assigneeAddress: assigneeAddress.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      const resultsMap: BulkResultItem[] = [];
+
+      if (data.results && Array.isArray(data.results)) {
+        for (const item of data.results) {
+          resultsMap.push({
+            applicationId: item.applicationId,
+            status: "SUCCESS",
+            message: `Reassigned to ${assigneeAddress.slice(0, 8)}...`,
+          });
+        }
+      }
+      if (data.failures && Array.isArray(data.failures)) {
+        for (const fail of data.failures) {
+          resultsMap.push({
+            applicationId: fail.applicationId,
+            status: "FAILED",
+            message: fail.error || "Reassignment failed",
+          });
+        }
+      }
+
+      setSummaryItems(resultsMap);
+      setSelectedIds(new Set());
+      setReassignModalOpen(false);
+      setAssigneeAddress("");
+      onRefresh();
+    } catch (err: any) {
+      toast.error(err.message || "Bulk reassign failed");
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
   return (
-    <div className="space-y-3">
-      {loans.map((loan) => (
-        <div
-          key={loan.id}
-          className="p-4 bg-[var(--bg-card)] rounded-lg border border-[var(--border-color)]"
-        >
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
-              <div>
-                <p className="text-xs text-[var(--text-muted)]">Borrower</p>
-                <p className="text-sm font-mono">{shortenAddress(loan.borrower)}</p>
+    <div className="space-y-3 relative pb-20">
+      <div className="flex items-center justify-between p-3 bg-[var(--bg-card)] rounded-lg border border-[var(--border-color)]">
+        <label className="flex items-center gap-3 cursor-pointer text-sm font-medium">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={toggleSelectAll}
+            className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-sky-500 focus:ring-sky-500"
+          />
+          <span>Select All ({loans.length} loans)</span>
+        </label>
+        {selectedIds.size > 0 && (
+          <span className="text-xs text-[var(--accent-primary)] font-semibold">
+            {selectedIds.size} selected
+          </span>
+        )}
+      </div>
+
+      {loans.map((loan) => {
+        const isSelected = selectedIds.has(loan.id);
+        return (
+          <div
+            key={loan.id}
+            className={`p-4 bg-[var(--bg-card)] rounded-lg border transition-colors ${
+              isSelected ? "border-[var(--accent-primary)] bg-[var(--accent-primary)]/5" : "border-[var(--border-color)]"
+            }`}
+          >
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+                <input
+                  type="checkbox"
+                  id={`select-loan-${loan.id}`}
+                  checked={isSelected}
+                  onChange={() => toggleSelectLoan(loan.id)}
+                  className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-sky-500 focus:ring-sky-500 mr-2"
+                />
+                <div>
+                  <p className="text-xs text-[var(--text-muted)]">Borrower</p>
+                  <p className="text-sm font-mono">{shortenAddress(loan.borrower)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-[var(--text-muted)]">Principal</p>
+                  <p className="text-sm font-semibold">{formatUsdc(loan.principal)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-[var(--text-muted)]">Verification Score</p>
+                  <p className="text-sm font-semibold">
+                    <ScoreBadge score={loan.verificationScore} />
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-xs text-[var(--text-muted)]">Principal</p>
-                <p className="text-sm font-semibold">{formatUsdc(loan.principal)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-[var(--text-muted)]">Verification Score</p>
-                <p className="text-sm font-semibold">
-                  <ScoreBadge score={loan.verificationScore} />
-                </p>
+              <div className="flex gap-2 shrink-0">
+                <button
+                  onClick={() => setExpandedLoanId(expandedLoanId === loan.id ? null : loan.id)}
+                  className="px-3 py-2 rounded-lg text-sm font-medium bg-sky-500/10 text-sky-400 border border-sky-500/30 hover:bg-sky-500/20 transition-colors"
+                >
+                  {expandedLoanId === loan.id ? "Hide Discussion" : "Discuss"}
+                </button>
+                <button
+                  data-testid={`admin-approve-${loan.id}`}
+                  onClick={() => onApprove(loan)}
+                  className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors"
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={() => onReject(loan)}
+                  className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors"
+                >
+                  Reject
+                </button>
               </div>
             </div>
-            <div className="flex gap-2 shrink-0">
+            {expandedLoanId === loan.id && publicKey && (
+              <LoanCommentsPanel loanApplicationId={loan.id} currentUserAddress={publicKey} />
+            )}
+          </div>
+        );
+      })}
+
+      {/* Sticky Bulk Action Toolbar */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-[var(--bg-card)] border border-[var(--border-color)] shadow-2xl rounded-xl px-6 py-3.5 flex items-center gap-4 backdrop-blur-md">
+          <span className="text-sm font-semibold text-white">
+            {selectedIds.size} loan{selectedIds.size > 1 ? "s" : ""} selected
+          </span>
+          <div className="h-4 w-px bg-gray-700" />
+          <button
+            onClick={() => handleBulkAction("APPROVED")}
+            disabled={bulkProcessing}
+            className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors disabled:opacity-50"
+          >
+            {bulkProcessing ? "Processing..." : "Bulk Approve"}
+          </button>
+          <button
+            onClick={() => handleBulkAction("REJECTED")}
+            disabled={bulkProcessing}
+            className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-50"
+          >
+            {bulkProcessing ? "Processing..." : "Bulk Reject"}
+          </button>
+          <button
+            onClick={() => setReassignModalOpen(true)}
+            disabled={bulkProcessing}
+            className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-sky-500 text-white hover:bg-sky-600 transition-colors disabled:opacity-50"
+          >
+            Bulk Reassign
+          </button>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="text-xs text-gray-400 hover:text-white transition-colors"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
+      {/* Reassign Modal */}
+      {reassignModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl p-6 max-w-md w-full space-y-4">
+            <h3 className="text-lg font-bold text-white">Bulk Reassign Loans</h3>
+            <p className="text-xs text-[var(--text-muted)]">
+              Enter the reviewer wallet or address to assign the selected {selectedIds.size} loan application(s) to:
+            </p>
+            <input
+              type="text"
+              placeholder="e.g. G..."
+              value={assigneeAddress}
+              onChange={(e) => setAssigneeAddress(e.target.value)}
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white focus:outline-none focus:border-sky-500"
+            />
+            <div className="flex justify-end gap-3 pt-2">
               <button
-                onClick={() => setExpandedLoanId(expandedLoanId === loan.id ? null : loan.id)}
-                className="px-3 py-2 rounded-lg text-sm font-medium bg-sky-500/10 text-sky-400 border border-sky-500/30 hover:bg-sky-500/20 transition-colors"
+                onClick={() => setReassignModalOpen(false)}
+                className="px-4 py-2 rounded-lg text-xs font-medium text-gray-400 hover:text-white"
               >
-                {expandedLoanId === loan.id ? "Hide Discussion" : "Discuss"}
+                Cancel
               </button>
               <button
-                data-testid={`admin-approve-${loan.id}`}
-                onClick={() => onApprove(loan)}
-                className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors"
+                onClick={handleBulkReassignSubmit}
+                disabled={!assigneeAddress.trim() || bulkProcessing}
+                className="px-4 py-2 rounded-lg text-xs font-semibold bg-sky-500 text-white hover:bg-sky-600 disabled:opacity-50"
               >
-                Approve
-              </button>
-              <button
-                onClick={() => onReject(loan)}
-                className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors"
-              >
-                Reject
+                Confirm Reassignment
               </button>
             </div>
           </div>
-          {expandedLoanId === loan.id && publicKey && (
-            <LoanCommentsPanel loanApplicationId={loan.id} currentUserAddress={publicKey} />
-          )}
         </div>
-      ))}
+      )}
+
+      {/* Per-item Bulk Summary Result Modal */}
+      {summaryItems && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl p-6 max-w-lg w-full space-y-4 max-h-[80vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-white">Bulk Action Per-Item Summary</h3>
+              <span className="text-xs text-[var(--text-muted)]">
+                {summaryItems.filter((s) => s.status === "SUCCESS").length} succeeded,{" "}
+                {summaryItems.filter((s) => s.status === "FAILED").length} failed
+              </span>
+            </div>
+            <div className="space-y-2">
+              {summaryItems.map((item) => (
+                <div
+                  key={item.applicationId}
+                  className={`p-3 rounded-lg text-xs border flex items-center justify-between ${
+                    item.status === "SUCCESS"
+                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                      : "bg-red-500/10 border-red-500/30 text-red-300"
+                  }`}
+                >
+                  <span className="font-mono font-medium">App ID: {item.applicationId.slice(0, 12)}...</span>
+                  <div className="text-right">
+                    <span className="font-bold block">{item.status}</span>
+                    <span className="opacity-80 text-[11px]">{item.message}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setSummaryItems(null)}
+                className="px-5 py-2 rounded-lg text-xs font-semibold bg-sky-500 text-white hover:bg-sky-600"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -501,6 +813,9 @@ function ConfirmationModal({
   onCancel: () => void;
 }) {
   const details = describeAction(action);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, true, { onEscape: onCancel });
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
@@ -510,6 +825,8 @@ function ConfirmationModal({
       onClick={onCancel}
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="w-full max-w-md rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] p-6"
         style={{ animation: "modal-pop 0.2s ease-out" }}
         onClick={(event) => event.stopPropagation()}

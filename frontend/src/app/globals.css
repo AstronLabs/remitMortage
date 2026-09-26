@@ -28,7 +28,7 @@
   /* Text & Neutral tokens */
   --color-text: #f8fafc;
   --color-text-2: #94a3b8;
-  --color-text-3: #64748b;
+  --color-text-3: #8190a5; /* muted text; >= 4.5:1 on every dark surface (WCAG AA) */
   --color-border: rgba(255, 255, 255, 0.08);
   --color-border-glow: rgba(56, 189, 248, 0.3);
 
@@ -37,6 +37,17 @@
   --color-green: #10b981;
   --color-amber: #f59e0b;
   --color-cyan: #06b6d4;
+
+  /* ── Color-Blind-Friendly Status Tokens ────────────────────────────────── */
+  /* Default palette (uses the standard colors above) */
+  --status-success: var(--color-green);
+  --status-warning: var(--color-amber);
+  --status-error: var(--color-red);
+  --status-info: var(--color-cyan);
+  --status-pending: var(--color-amber);
+  --status-overdue: var(--color-red);
+  --status-healthy: var(--color-green);
+  --status-neutral: var(--color-text-2);
 
   /* Border Radii */
   --r-sm: 8px;
@@ -160,7 +171,7 @@
 .rm-invest-page .grid.grid-cols-1.md\:grid-cols-2 > div,
 .rm-invest-page .grid.grid-cols-1.lg\:grid-cols-2 > div { border-radius: 8px !important; }
 .rm-invest-page input, .rm-invest-page select { min-height: 47px; color: var(--workflow-text); background: #0e1815 !important; border: 1px solid #3a4b45 !important; border-radius: 6px !important; }
-.rm-invest-page input:focus, .rm-invest-page select:focus { border-color: var(--workflow-accent) !important; box-shadow: 0 0 0 3px rgba(85,195,157,.12); outline: none; }
+.rm-invest-page input:focus, .rm-invest-page select:focus { border-color: var(--workflow-accent) !important; box-shadow: 0 0 0 3px rgba(85,195,157,.12); }
 .rm-invest-page button { min-height: 40px; }
 .rm-invest-page .font-mono { font-family: inherit !important; }
 .rm-invest-page .bg-gradient-to-r { background-image: none !important; background-color: var(--workflow-accent) !important; }
@@ -336,7 +347,7 @@
   --color-navy-mid: #1e293b;
   --color-text: #0f172a;
   --color-text-2: #475569;
-  --color-text-3: #94a3b8;
+  --color-text-3: #5b6b82;
   --color-border: rgba(0, 0, 0, 0.08);
   --color-border-glow: rgba(2, 132, 199, 0.3);
   --bg-primary: #f8fafc;
@@ -345,7 +356,19 @@
   --bg-glass: rgba(255, 255, 255, 0.85);
   --text-primary: #0f172a;
   --text-secondary: #475569;
-  --text-muted: #94a3b8;
+  --text-muted: #5b6b82;
+
+  /* The dark-theme accents are too light to read as text on light surfaces;
+     these darker shades of the same hues keep every text pairing at WCAG AA
+     (checked by __tests__/contrastAudit.test.ts). */
+  --color-blue: #0369a1;
+  --color-lime: #047857;
+  --color-green: #047857;
+  --color-red: #b91c1c;
+  --color-amber: #b45309;
+  --color-cyan: #0e7490;
+  --accent-primary: #0369a1;
+  --accent-secondary: #047857;
 
   --glass-card-bg: rgba(255, 255, 255, 0.7);
   --glass-card-border: rgba(0, 0, 0, 0.08);
@@ -355,6 +378,53 @@
   --glass-modal-bg: rgba(255, 255, 255, 0.95);
   --glass-modal-border: rgba(0, 0, 0, 0.12);
   --glass-overlay-bg: rgba(15, 23, 42, 0.4);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   COLOR-BLIND-FRIENDLY PALETTE SYSTEM
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Color-blind-friendly palette overrides (validated against common deficiency simulations) */
+[data-palette="colorblind"] {
+  /* High-contrast, distinguishable colors for all status meanings */
+  /* Shades are tuned to read at WCAG AA (4.5:1) on the dark surfaces. */
+  --status-success: #4da3ff;     /* Strong blue (replaces green) */
+  --status-warning: #ff8800;     /* Vivid orange (replaces yellow/amber) */
+  --status-error: #ff6666;       /* Bright red (enhanced contrast) */
+  --status-info: #b388ff;        /* Purple (replaces cyan) */
+  --status-pending: #ff8800;     /* Orange (same as warning for consistency) */
+  --status-overdue: #ff6666;     /* Bright red (same as error) */
+  --status-healthy: #4da3ff;     /* Blue (same as success) */
+  --status-neutral: var(--color-text-2); /* Unchanged */
+
+  /* Update primary accents to be more distinguishable */
+  --color-blue: #4da3ff;
+  --color-lime: #4da3ff;         /* Use blue instead of green */
+  --color-amber: #ff8800;        /* Enhanced orange */
+  --color-red: #ff6666;          /* Enhanced red */
+  --color-cyan: #b388ff;         /* Use purple instead of cyan */
+  
+  /* Update gradient colors for better contrast */
+  --accent-gradient: linear-gradient(135deg, #0066cc, #6600cc, #ff8800);
+  --accent-gradient-warm: linear-gradient(135deg, #ff8800, #cc0000, #6600cc);
+}
+
+/* Combined light + colorblind palette */
+[data-theme="light"][data-palette="colorblind"] {
+  --status-success: #004499;     /* Darker blue for light theme */
+  --status-warning: #a85300;     /* Darker orange for light theme */
+  --status-error: #990000;       /* Darker red for light theme */
+  --status-info: #4d0099;        /* Darker purple for light theme */
+  --status-pending: #a85300;
+  --status-overdue: #990000;
+  --status-healthy: #004499;
+
+  /* The dark colorblind accents above are too light for light surfaces. */
+  --color-blue: #004499;
+  --color-lime: #004499;
+  --color-amber: #a85300;
+  --color-red: #990000;
+  --color-cyan: #4d0099;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -379,6 +449,89 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   STATUS COLORS WITH SHAPE/ICON INDICATORS (ACCESSIBILITY)
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Status color utilities that use semantic tokens */
+.status-success { color: var(--status-success); }
+.status-warning { color: var(--status-warning); }
+.status-error { color: var(--status-error); }
+.status-info { color: var(--status-info); }
+.status-pending { color: var(--status-pending); }
+.status-overdue { color: var(--status-overdue); }
+.status-healthy { color: var(--status-healthy); }
+.status-neutral { color: var(--status-neutral); }
+
+.bg-status-success { background-color: var(--status-success); }
+.bg-status-warning { background-color: var(--status-warning); }
+.bg-status-error { background-color: var(--status-error); }
+.bg-status-info { background-color: var(--status-info); }
+.bg-status-pending { background-color: var(--status-pending); }
+.bg-status-overdue { background-color: var(--status-overdue); }
+.bg-status-healthy { background-color: var(--status-healthy); }
+
+/* Status indicators with shapes for accessibility */
+.status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.status-indicator::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+}
+
+/* Success: Blue circle (colorblind) / Green circle (default) */
+.status-indicator.success::before {
+  background-color: var(--status-success);
+  border-radius: 50%;
+}
+
+/* Warning/Pending: Orange triangle */
+.status-indicator.warning::before,
+.status-indicator.pending::before {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 7px solid var(--status-warning);
+  background: transparent;
+}
+
+/* Error/Overdue: Red square with rounded corners */
+.status-indicator.error::before,
+.status-indicator.overdue::before {
+  background-color: var(--status-error);
+  border-radius: 2px;
+}
+
+/* Info: Purple diamond */
+.status-indicator.info::before {
+  width: 8px;
+  height: 8px;
+  background-color: var(--status-info);
+  transform: rotate(45deg);
+}
+
+/* Healthy: Same as success but with checkmark context */
+.status-indicator.healthy::before {
+  background-color: var(--status-healthy);
+  border-radius: 50%;
+}
+
+/* Neutral: Gray circle */
+.status-indicator.neutral::before {
+  background-color: var(--status-neutral);
+  border-radius: 50%;
 }
 
 /* RemitMortgage product homepage */
@@ -1350,4 +1503,11 @@ body {
   [data-dnd-kit], .dnd-overlay, [role="status"] {
     display: none !important;
   }
+}
+
+/* Keyboard focus indicator for every interactive element. Left unlayered so
+   utilities such as `outline-none` cannot hide it from keyboard users. */
+:where(a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--color-blue);
+  outline-offset: 2px;
 }

@@ -9,6 +9,7 @@ import { sendEmail, sendDepositReceipt, sendRepaymentReminder, sendLoanStatusUpd
 import { sendWebhook } from "../services/webhook.js";
 import { prisma } from "../services/db.js";
 import logger from "../utils/logger.js";
+import { runWithTenant } from "../services/tenant.js";
 
 function buildConnection(): WorkerOptions["connection"] {
   const client = getClusterClient();
@@ -64,7 +65,7 @@ export async function startNotificationWorker(): Promise<void> {
 
   worker = new Worker<NotificationJobData>(
     "remitmortgage-notifications",
-    async (job) => {
+    (job) => runWithTenant(job.data.tenantId, async () => {
       const { notificationId, recipient, type, content } = job.data;
 
       logger.info("[notification-worker] processing notification", {
@@ -127,7 +128,7 @@ export async function startNotificationWorker(): Promise<void> {
 
         throw err;
       }
-    },
+    }),
     workerOptions
   );
 

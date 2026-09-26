@@ -74,6 +74,8 @@ fn setup(
         grace_period_ledgers: 10,
         default_penalty_bps: 1000,
         yield_vault: None,
+        match_bps: 0,
+        match_cap: 0,
     });
 
     let goal_id = Symbol::new(env, "land");

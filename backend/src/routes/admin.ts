@@ -11,7 +11,21 @@ import { bulkReviewApplications, type BulkReviewDecision } from "../services/loa
 import { mergeApplicants, MergeValidationError } from "../services/applicantMerge.js";
 import { promoteWaitlistBatch } from "../services/inviteCode.js";
 import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
+import { getTaxIdMatchesForApplication } from "../services/taxIdDedup.js";
+import {
+  initiateServicingTransfer,
+  getServicingHistory,
+  ServicingTransferError,
+} from "../services/loanServicing.js";
 import { listAutoRejectionRules, createAutoRejectionRule, updateAutoRejectionRule } from "../services/autoRejectionRuleStore.js";
+import {
+  getWebhookLatencyReport,
+  DEFAULT_LATENCY_SLA_MS,
+  DEFAULT_LATENCY_WINDOW_MINUTES,
+  MAX_LATENCY_WINDOW_MINUTES,
+} from "../services/webhookLatency.js";
+import { listSuppressedApplicants } from "../services/emailSuppression.js";
+import { loadConfig } from "../config.js";
 
 export const adminRouter = Router();
 
@@ -140,6 +154,60 @@ adminRouter.post("/loans/bulk-review", requireAdmin, async (req: AuthenticatedRe
   }
 });
 
+// Reviewer context for applications held with DUPLICATE_TAX_ID: the other
+// applicants sharing the tax ID and their applications. The tax ID itself is
+// never returned.
+adminRouter.get("/loans/:id/tax-id-matches", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const result = await getTaxIdMatchesForApplication(String(req.params.id));
+    if (!result) {
+      return res.status(404).json({ error: "not_found", message: "Loan application not found" });
+    }
+    return res.json(result);
+  } catch (error) {
+    logger.error("Tax ID match lookup error", { error });
+    return res.status(500).json({ error: "failed_to_load_tax_id_matches" });
+  }
+});
+
+// ── Loan servicing transfer ──────────────────────────────────────────────
+
+adminRouter.post("/loans/:id/servicing-transfer", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const body = req.body ?? {};
+  try {
+    const transfer = await initiateServicingTransfer({
+      loanId: String(req.params.id),
+      toServicer: body.toServicer,
+      toServicerContact: body.toServicerContact,
+      effectiveDate: body.effectiveDate,
+      reason: body.reason,
+      investorAddresses: body.investorAddresses,
+      initiatedBy: req.user?.walletAddress ?? "admin-api-key",
+      ipAddress: req.ip,
+    });
+    return res.status(201).json(transfer);
+  } catch (error) {
+    if (error instanceof ServicingTransferError) {
+      return res.status(error.httpStatus).json({ error: error.code, message: error.message });
+    }
+    logger.error("Loan servicing transfer error", { error });
+    return res.status(500).json({ error: "servicing_transfer_failed" });
+  }
+});
+
+adminRouter.get("/loans/:id/servicing-history", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const history = await getServicingHistory(String(req.params.id));
+    if (!history) {
+      return res.status(404).json({ error: "not_found", message: "Loan application not found" });
+    }
+    return res.json(history);
+  } catch (error) {
+    logger.error("Loan servicing history error", { error });
+    return res.status(500).json({ error: "failed_to_load_servicing_history" });
+  }
+});
+
 // ── Auto-rejection rules (configurable without redeploy) ─────────────────
 
 adminRouter.get("/auto-rejection-rules", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
@@ -191,6 +259,74 @@ adminRouter.patch("/auto-rejection-rules/:id", requireAdmin, async (req: Authent
   } catch (error) {
     logger.error("Update auto-rejection rule error", { error });
     return res.status(404).json({ error: "rule_not_found" });
+  }
+});
+
+function positiveIntParam(raw: unknown, fallback: number): number | null {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/**
+ * @openapi
+ * /api/admin/webhooks/latency:
+ *   get:
+ *     summary: Webhook delivery latency percentiles per endpoint
+ *     description: >-
+ *       Returns p50/p95/p99 dispatch-to-delivery latency for each subscriber
+ *       endpoint over a rolling window, with retry and DLQ counts. Endpoints
+ *       whose p95 exceeds the SLA threshold, or that only dead-lettered in the
+ *       window, are flagged with slaBreached.
+ *     tags:
+ *       - Admin
+ *     parameters:
+ *       - in: query
+ *         name: windowMinutes
+ *         schema: { type: integer, minimum: 1, maximum: 10080 }
+ *       - in: query
+ *         name: slaMs
+ *         schema: { type: integer, minimum: 1 }
+ *     responses:
+ *       200:
+ *         description: Latency report.
+ *       400:
+ *         description: Invalid windowMinutes or slaMs.
+ */
+/**
+ * Applicants whose notification email is on the suppression list (hard bounce,
+ * spam complaint, or inside a soft-bounce backoff window), so staff can prompt
+ * them to update their contact details.
+ */
+adminRouter.get("/email-suppressions", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    return res.json({ suppressions: await listSuppressedApplicants() });
+  } catch (error) {
+    logger.error("List email suppressions error", { error });
+    return res.status(500).json({ error: "failed_to_list_email_suppressions" });
+  }
+});
+
+adminRouter.get("/webhooks/latency", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const config = loadConfig();
+  const windowMinutes = positiveIntParam(
+    req.query.windowMinutes,
+    config.webhookLatencyWindowMinutes || DEFAULT_LATENCY_WINDOW_MINUTES
+  );
+  const slaMs = positiveIntParam(req.query.slaMs, config.webhookLatencySlaMs || DEFAULT_LATENCY_SLA_MS);
+
+  if (windowMinutes === null || windowMinutes > MAX_LATENCY_WINDOW_MINUTES) {
+    return res.status(400).json({ error: "invalid_window_minutes" });
+  }
+  if (slaMs === null) {
+    return res.status(400).json({ error: "invalid_sla_ms" });
+  }
+
+  try {
+    return res.json(await getWebhookLatencyReport({ windowMinutes, slaMs }));
+  } catch (error) {
+    logger.error("Webhook latency report error", { error });
+    return res.status(500).json({ error: "webhook_latency_report_failed" });
   }
 });
 
@@ -318,5 +454,63 @@ adminRouter.post("/waitlist/promote", requireAdmin, async (req: AuthenticatedReq
   } catch (err) {
     logger.error("[AdminRouter] waitlist promote failed", { err });
     return res.status(500).json({ error: "waitlist_promote_failed" });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/scoring/models:
+ *   get:
+ *     summary: Retrieve active risk scoring model configuration and shadow mode evaluation metrics
+ *     tags:
+ *       - Admin
+ *     security:
+ *       - bearerAuth: []
+ */
+adminRouter.get("/scoring/models", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const config = getModelConfig();
+    const metrics = getShadowMetrics();
+    const shadowEvaluations = getShadowEvaluations();
+    return res.json({
+      config,
+      metrics,
+      recentShadowEvaluations: shadowEvaluations.slice(-20),
+    });
+  } catch (error) {
+    logger.error("Failed to fetch scoring model configuration", { error });
+    return res.status(500).json({ error: "failed_to_fetch_scoring_models" });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/scoring/models:
+ *   post:
+ *     summary: Update active or shadow model version and toggle shadow mode
+ *     tags:
+ *       - Admin
+ *     security:
+ *       - bearerAuth: []
+ */
+adminRouter.post("/scoring/models", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const body = req.body ?? {};
+  const { activeVersion, shadowVersion, shadowModeEnabled } = body;
+
+  if (activeVersion !== undefined && (typeof activeVersion !== "string" || !activeVersion.trim())) {
+    return res.status(400).json({ error: "invalid_request", message: "activeVersion must be a non-empty string" });
+  }
+
+  try {
+    const updated = updateModelConfig({
+      ...(activeVersion ? { activeVersion: activeVersion.trim() } : {}),
+      ...(shadowVersion !== undefined ? { shadowVersion: typeof shadowVersion === "string" ? shadowVersion.trim() : undefined } : {}),
+      ...(shadowModeEnabled !== undefined ? { shadowModeEnabled: Boolean(shadowModeEnabled) } : {}),
+    });
+    logger.info("Scoring model configuration updated by admin", { config: updated });
+    return res.json(updated);
+  } catch (error) {
+    logger.error("Failed to update scoring model configuration", { error });
+    return res.status(500).json({ error: "failed_to_update_scoring_models" });
   }
 });
