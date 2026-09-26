@@ -79,6 +79,7 @@ impl EscrowContract {
                 withdrawn: false,
                 seized: false,
                 yield_shares: 0,
+                matched_amount: 0,
                 auto_rollover: false,
             })
     }
@@ -314,6 +315,9 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::TotalYieldShares, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::MatchingReserve, &config.match_cap);
         env.storage().instance().set(&DataKey::Version, &1u32);
         Self::extend_instance_ttl(&env);
 
@@ -357,6 +361,29 @@ impl EscrowContract {
             let token = get_token_client(&env, &config.token);
             token.transfer(&borrower, &env.current_contract_address(), &amount);
 
+            // Matching is limited to the first deposit and the configured
+            // reserve. A depleted reserve never changes the deposit result.
+            let mut matched = 0i128;
+            if !record.released && !record.withdrawn && config.match_bps > 0 && config.match_cap > 0 {
+                let reserve = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::MatchingReserve)
+                    .unwrap_or(0i128);
+                let requested = amount
+                    .checked_mul(config.match_bps as i128)
+                    .and_then(|value| value.checked_div(10_000))
+                    .unwrap_or(0);
+                let remaining_cap = (config.match_cap - record.matched_amount).max(0);
+                matched = requested.min(remaining_cap).min(reserve).max(0);
+                if matched > 0 {
+                    env.storage()
+                        .instance()
+                        .set(&DataKey::MatchingReserve, &(reserve - matched));
+                }
+                record.matched_amount += matched;
+            }
+
             // Route to yield vault if configured.
             if let Some(vault) = &config.yield_vault {
                 let invoke_args = soroban_sdk::vec![
@@ -386,19 +413,19 @@ impl EscrowContract {
 
             // Always update last contribution ledger so the default timer resets.
             record.last_contribution_ledger = current_ledger;
-            record.deposited += amount;
+            record.deposited += amount + matched;
             Self::set_borrower(&env, &borrower, &goal_id, &record);
             Self::owner_activity(&env, &borrower, &goal_id);
 
             // Update total pooled.
-            let total = Self::read_total_pooled(&env) + amount;
+            let total = Self::read_total_pooled(&env) + amount + matched;
             env.storage().instance().set(&DataKey::TotalPooled, &total);
 
             Self::extend_instance_ttl(&env);
 
             env.events().publish(
                 (symbol_short!("deposit"), goal_id.clone()),
-                (borrower.clone(), amount, record.deposited),
+                (borrower.clone(), amount + matched, record.deposited),
             );
 
             Ok(())
@@ -780,6 +807,7 @@ impl EscrowContract {
                 record.start_ledger = current_ledger;
                 record.last_contribution_ledger = current_ledger;
                 record.deposited = amount_withdrawn;
+                record.matched_amount = 0;
                 record.released = false;
                 Self::set_borrower(&env, &borrower, &goal_id, &record);
 
@@ -1276,6 +1304,8 @@ mod test {
             grace_period_ledgers: 10u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         let goal_id = Symbol::new(env, "land");
@@ -1322,6 +1352,8 @@ mod test {
             grace_period_ledgers: 120_960u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         // Verify config was stored by reading from the contract's context.
@@ -1377,6 +1409,8 @@ mod test {
             grace_period_ledgers: 120_960u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         };
         client.initialize(&test_config);
         let result = client.try_initialize(&test_config);
@@ -1414,6 +1448,8 @@ mod test {
             grace_period_ledgers: 120_960u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         let token = soroban_sdk::token::Client::new(&env, &token_address);
@@ -2041,6 +2077,8 @@ mod test {
             grace_period_ledgers: 10u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         let recipient = Address::generate(&env);
@@ -2091,6 +2129,10 @@ mod test {
             grace_period_ledgers: 10u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         let recipient = Address::generate(&env);
@@ -2145,6 +2187,8 @@ mod test {
             grace_period_ledgers: 10u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         client.deposit(&borrower, &goal_id, &10_000_0000000i128);
@@ -2190,6 +2234,8 @@ mod test {
             grace_period_ledgers: 10u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         client.deposit(&borrower, &goal_id, &5_000_0000000i128);
@@ -2418,6 +2464,8 @@ mod test {
             grace_period_ledgers: 10u32,
             default_penalty_bps: 1000u32,
             yield_vault: None,
+            match_bps: 0,
+            match_cap: 0,
         });
 
         // Register and initialize lending pool.

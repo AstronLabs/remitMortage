@@ -47,6 +47,8 @@ fn base_config(admin: Address, token: Address, lending_pool: Address) -> EscrowC
         persistent_bump_amount: TESTNET_PERSISTENT_BUMP,
         persistent_lifetime_threshold: TESTNET_PERSISTENT_THRESHOLD,
         yield_vault: None,
+        match_bps: 0,
+        match_cap: 0,
         permissioned_mode: false,
     }
 }
@@ -218,4 +220,37 @@ fn test_two_deployments_can_use_different_ttl_profiles() {
         let stored: EscrowConfig = env.storage().instance().get(&DataKey::Config).unwrap();
         assert_eq!(stored.instance_bump_amount, 518_400u32);
     });
+}
+
+#[test]
+fn first_deposit_receives_match_within_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, borrower, token, lending_pool) = setup(&env);
+    let mut config = base_config(admin, token, lending_pool);
+    config.match_bps = 1_000;
+    config.match_cap = 100;
+    client.initialize(&config);
+
+    let goal = Symbol::new(&env, "match");
+    client.deposit(&borrower, &goal, &500);
+    assert_eq!(client.get_borrower_balance(&borrower, &goal), 550);
+}
+
+#[test]
+fn exhausted_matching_reserve_does_not_revert_deposit() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, borrower, token, lending_pool) = setup(&env);
+    let mut config = base_config(admin, token, lending_pool);
+    config.match_bps = 1_000;
+    config.match_cap = 100;
+    client.initialize(&config);
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&DataKey::MatchingReserve, &0i128);
+    });
+
+    let goal = Symbol::new(&env, "empty");
+    client.deposit(&borrower, &goal, &500);
+    assert_eq!(client.get_borrower_balance(&borrower, &goal), 500);
 }

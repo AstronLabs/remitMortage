@@ -39,6 +39,8 @@ fn setup(env: &Env) -> (Address, Address, Address, EscrowContractClient<'_>, Sym
         persistent_bump_amount: 1_000,
         persistent_lifetime_threshold: 100,
         yield_vault: None,
+        match_bps: 0,
+        match_cap: 0,
     });
     client.set_beneficiary_inactivity(&10);
     client.configure_beneficiary_attestors(&Vec::from_array(env, [attestor.clone()]), &1);

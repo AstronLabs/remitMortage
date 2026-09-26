@@ -70,6 +70,8 @@ fn setup_protocol<'a>(env: &'a Env, apy_bps: u32) -> TestSetup<'a> {
         grace_period_ledgers: 120_960,
         default_penalty_bps: 1_000,
         yield_vault: Some(vault_id.clone()),
+        match_bps: 0,
+        match_cap: 0,
     };
     escrow.initialize(&config);
 

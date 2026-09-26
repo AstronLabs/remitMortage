@@ -38,6 +38,8 @@ fn base_config(
         persistent_bump_amount: 518_400u32,
         persistent_lifetime_threshold: 129_600u32,
         yield_vault: None,
+        match_bps: 0,
+        match_cap: 0,
         permissioned_mode: false,
     }
 }

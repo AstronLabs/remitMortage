@@ -55,6 +55,10 @@ pub struct EscrowConfig {
     pub persistent_lifetime_threshold: u32,
     /// Optional lending protocol vault address for yield routing.
     pub yield_vault: Option<Address>,
+    /// Percentage of a first-cycle deposit matched from the dedicated reserve.
+    pub match_bps: u32,
+    /// Maximum matched amount per first-cycle goal, in token units.
+    pub match_cap: i128,
     /// When true, only whitelisted addresses may deposit. Toggleable by admin
     /// for regulated or pilot deployments. `false` — the deployment default —
     /// preserves existing permissionless behaviour.
@@ -79,6 +83,8 @@ pub struct BorrowerRecord {
     pub seized: bool,
     /// Yield shares allocated from yield vault routing.
     pub yield_shares: i128,
+    /// Total reserve amount matched during the current savings cycle.
+    pub matched_amount: i128,
     /// Configurable opt-in flag to automatically roll over matured balance into a new savings cycle.
     pub auto_rollover: bool,
 }
@@ -127,6 +133,8 @@ pub enum DataKey {
     Borrower(Address, Symbol),
     /// Total pooled balance across all borrowers.
     TotalPooled,
+    /// Remaining token-denominated balance available for deposit matching.
+    MatchingReserve,
     /// Total yield shares issued.
     TotalYieldShares,
     /// Current contract version (incremented on each upgrade).

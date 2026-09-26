@@ -35,6 +35,7 @@ export interface WebhookJobData {
     ledger: number;
   };
   attempt: number;
+  webhookSchemaVersion: number;
 }
 
 export interface EmailJobData {
