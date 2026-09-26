@@ -44,4 +44,12 @@ pub enum MilestoneError {
     BudgetChangeAlreadyExecuted = 19,
     /// New budget exceeds the available loan allotment.
     BudgetChangeExceedsAllotment = 20,
+    /// Milestone cannot be rejected in its current status (only Proposed).
+    CannotReject = 21,
+    /// Milestone cannot be resubmitted in its current status (only Rejected).
+    CannotResubmit = 22,
+    /// Performance bonus basis points must be within 0..=10000.
+    InvalidBonusConfig = 23,
+    /// A milestone deadline must be a future ledger sequence.
+    InvalidDeadline = 24,
 }
