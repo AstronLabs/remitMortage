@@ -1,0 +1,7 @@
+[
+  {
+    "name": "listApplicationsByBorrower",
+    "expectedNodeTypes": ["Index Scan"],
+    "expectedIndexes": ["LoanApplication_applicantId_createdAt_idx"]
+  }
+]

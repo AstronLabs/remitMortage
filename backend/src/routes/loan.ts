@@ -23,6 +23,11 @@ import {
 import { queueNotification } from "../services/notification.js";
 import { hasExpiredKycDocuments } from "../jobs/kycExpiryReminder.js";
 import { prisma } from "../services/db.js";
+import {
+  findTaxIdMatches,
+  recordApplicantTaxIdHash,
+  DUPLICATE_TAX_ID_REVIEW_REASON,
+} from "../services/taxIdDedup.js";
 import { reconstructLoanApplicationAt } from "../services/loanHistory.js";
 import {
   checkDuplicateApplicants,
@@ -98,10 +103,33 @@ loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"
       }
     }
 
+    // Issue #692: exact SSN/tax ID match against other applicants, via a keyed
+    // hash so the raw identifier is never stored or logged.
+    const taxIdMatches = taxId ? await findTaxIdMatches(String(taxId), borrowerAddress) : [];
+
     const app = await createApplication(borrowerAddress, String(amount));
+    if (taxId) {
+      await recordApplicantTaxIdHash(borrowerAddress, String(taxId));
+    }
+    if (taxIdMatches.length > 0) {
+      await prisma.loanApplication.update({
+        where: { id: app.id },
+        data: { manualReviewReason: DUPLICATE_TAX_ID_REVIEW_REASON },
+      });
+      app.manualReviewReason = DUPLICATE_TAX_ID_REVIEW_REASON;
+      logger.warn(
+        `Application ${app.id} held for manual review: tax ID matches ${taxIdMatches.length} other applicant(s)`
+      );
+    }
+
     if (dupStatus === "MANUAL_REVIEW") {
       await updateApplication(app.id, { status: "MANUAL_REVIEW" });
       app.status = "MANUAL_REVIEW";
+      return res.status(201).json({ ...app, duplicateCheck: dupDetails });
+    }
+
+    // Held applications skip auto-rejection so a reviewer makes the call.
+    if (app.manualReviewReason) {
       return res.status(201).json({ ...app, duplicateCheck: dupDetails });
     }
 

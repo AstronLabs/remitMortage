@@ -65,4 +65,22 @@ pub enum EscrowError {
     InsufficientBalance = 37,
     /// Auto-deposit interval must be greater than zero ledgers.
     InvalidAutoDepositInterval = 38,
+    /// Beneficiary has not been configured for this goal.
+    BeneficiaryNotConfigured = 25,
+    /// Caller is not the designated beneficiary for this goal.
+    UnauthorizedBeneficiary = 26,
+    /// The owner-inactivity period has not yet elapsed.
+    BeneficiaryInactivityNotElapsed = 27,
+    /// Not enough valid attestations to satisfy the configured quorum.
+    InsufficientAttestationQuorum = 28,
+    /// One or more attestations were invalid or from unknown signers.
+    InvalidAttestation = 29,
+    /// The beneficiary has already claimed this goal.
+    BeneficiaryAlreadyClaimed = 30,
+    /// There are no funds available to claim.
+    NoClaimableFunds = 31,
+    /// The inactivity period must be greater than zero ledgers.
+    InvalidInactivityPeriod = 32,
+    /// Attestor configuration must have a non-empty signer set and a valid threshold.
+    InvalidAttestorConfig = 33,
 }

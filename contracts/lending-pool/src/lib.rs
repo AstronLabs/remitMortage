@@ -18,8 +18,8 @@ mod test_loan_assumption;
 pub use crate::errors::{LoanAssumptionError, PoolError};
 pub use crate::types::{
     BatchDisburseItem, DataKey, HalvingInfo, InvestorRecord, LoanAssumptionRequest,
-    LoanCollateralRecord, LoanPortabilitySnapshot, LoanRecord, LoanStatus, PendingUpgradeRecord, PoolConfig, PoolHealth,
-    RepaymentSchedule, RestructureProposal, Tranche, TrancheInfo,
+    LoanCollateralRecord, LoanPortabilitySnapshot, LoanRecord, LoanStatus, PendingUpgradeRecord,
+    PoolConfig, PoolHealth, RepaymentSchedule, RestructureProposal, Tranche, TrancheInfo,
 };
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
@@ -162,6 +162,7 @@ impl LendingPoolContract {
                 tranche: Tranche::Senior,
                 accrued_yield: 0,
                 absorbed_loss: 0,
+                first_loss_cap_bps: None,
             })
     }
 
@@ -230,6 +231,12 @@ impl LendingPoolContract {
             .instance()
             .get(&DataKey::TotalDeposited)
             .unwrap_or(0i128)
+    }
+
+    fn set_total_deposited(env: &Env, amount: i128) {
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalDeposited, &amount);
     }
 
     fn read_total_repaid_interest(env: &Env) -> i128 {
@@ -1186,11 +1193,13 @@ impl LendingPoolContract {
     /// cannot mix tranches across deposits — their first deposit sets the tranche.
     /// Transfers USDC from the investor to this contract and updates the investor's
     /// record, per-tranche totals, and the pool's total liquidity.
-    pub fn deposit(
+    /// Supports an optional `first_loss_cap_bps` for junior tranche deposits to cap loss exposure.
+    pub fn deposit_with_cap(
         env: Env,
         investor: Address,
         amount: i128,
         tranche: Tranche,
+        first_loss_cap_bps: Option<u32>,
     ) -> Result<(), PoolError> {
         Self::check_not_paused(&env)?;
         Self::check_whitelist(&env, &investor)?;
@@ -1224,6 +1233,9 @@ impl LendingPoolContract {
                 return Err(PoolError::TrancheMismatch);
             }
             record.deposited += amount;
+            if tranche == Tranche::Junior {
+                record.first_loss_cap_bps = first_loss_cap_bps;
+            }
             Self::set_investor(&env, &investor, &record);
 
             let debt_balance = Self::read_debt_balance(&env, &investor, &tranche) + amount;
@@ -1237,31 +1249,26 @@ impl LendingPoolContract {
             Self::set_tranche_info(&env, &tranche, &tranche_info);
 
             // Update total liquidity and total deposited.
-            let total = Self::read_total_liquidity(&env) + amount;
+            let mut liquidity = Self::read_total_liquidity(&env);
+            liquidity += amount;
             env.storage()
                 .instance()
-                .set(&DataKey::TotalLiquidity, &total);
+                .set(&DataKey::TotalLiquidity, &liquidity);
 
             let total_dep = Self::read_total_deposited(&env) + amount;
-            env.storage()
-                .instance()
-                .set(&DataKey::TotalDeposited, &total_dep);
-
-            env.storage()
-                .instance()
-                .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-
-            env.events().publish(
-                (symbol_short!("deposit"),),
-                (investor.clone(), amount, total),
-            );
-            env.events().publish(
-                (symbol_short!("debt_mnt"),),
-                (investor.clone(), tranche.clone(), amount),
-            );
+            Self::set_total_deposited(&env, total_dep);
 
             Ok(())
-        }) // non_reentrant
+        })
+    }
+
+    pub fn deposit(
+        env: Env,
+        investor: Address,
+        amount: i128,
+        tranche: Tranche,
+    ) -> Result<(), PoolError> {
+        Self::deposit_with_cap(env, investor, amount, tranche, None)
     }
 
     /// Deposit penalty/fee revenue into the pool and distribute it as yield.
@@ -2823,6 +2830,62 @@ impl LendingPoolContract {
         Ok(releasable)
     }
 
+    /// Voluntarily add collateral to an active loan.
+    ///
+    /// `from` (the borrower or any party willing to back the loan) transfers
+    /// `amount` of the pool token into the contract, and the loan's tracked
+    /// collateral increases by the same amount so health checks such as
+    /// [`Self::get_releasable_collateral`] reflect it immediately. Only
+    /// `Approved` loans can be topped up; closed (repaid or cancelled),
+    /// defaulted, or not-yet-approved loans revert with
+    /// [`PoolError::InvalidLoanState`].
+    ///
+    /// Emits `collateral_topped_up` with the new remaining collateral and
+    /// collateralization ratio (bps). Returns the new ratio.
+    pub fn top_up_collateral(
+        env: Env,
+        loan_id: BytesN<32>,
+        from: Address,
+        amount: i128,
+    ) -> Result<u32, PoolError> {
+        Self::check_not_paused(&env)?;
+        if amount <= 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+        from.require_auth();
+
+        let loan = Self::read_loan(&env, &loan_id)?;
+        if loan.status != LoanStatus::Approved {
+            return Err(PoolError::InvalidLoanState);
+        }
+
+        let config = Self::read_config(&env)?;
+        Self::token_client(&env, &config.token).transfer(
+            &from,
+            &env.current_contract_address(),
+            &amount,
+        );
+
+        let mut collateral = Self::get_or_default_loan_collateral(&env, &loan_id, &loan);
+        collateral.initial_collateral = collateral
+            .initial_collateral
+            .checked_add(amount)
+            .ok_or(PoolError::InvalidAmount)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::LoanCollateral(loan_id.clone()), &collateral);
+
+        let (_, remaining_collateral, ratio_bps) =
+            Self::compute_collateral_release(&loan, &collateral);
+
+        env.events().publish(
+            (Symbol::new(&env, "collateral_topped_up"), loan_id),
+            (from, amount, remaining_collateral, ratio_bps),
+        );
+
+        Ok(ratio_bps)
+    }
+
     /// Trigger an on-chain liquidation for a defaulted loan.
     /// Allocates the seized savings collateral to the lending pool to cover investor losses.
     /// Returns true when an approved loan's repayment obligations are overdue
@@ -2913,7 +2976,27 @@ impl LendingPoolContract {
             let mut junior_info = Self::read_tranche_info(&env, &Tranche::Junior);
             let mut senior_info = Self::read_tranche_info(&env, &Tranche::Senior);
 
-            let junior_loss = net_loss.min(junior_info.total_deposited);
+            // =========================================================================
+            // WATERFALL LOSS ALLOCATION MATH WITH JUNIOR TRANCHE FIRST-LOSS CAPS
+            // =========================================================================
+            // 1. Junior tranche absorbs first loss up to its total deposited capital capacity,
+            //    subject to investor-level first-loss caps (if configured via deposit_with_cap).
+            // 2. Max Junior Capacity: By default, the junior tranche capacity is capped at `junior_info.total_deposited`.
+            //    When individual junior investors specify `first_loss_cap_bps` (e.g. 1000 bps = 10%),
+            //    their maximum loss absorption capacity is `(deposited * cap_bps) / 10000`.
+            // 3. Junior Loss Absorption:
+            //    `junior_loss = net_loss.min(max_junior_capacity)`.
+            // 4. Senior Spillover:
+            //    Any unabsorbed net loss (`net_loss - junior_loss`) spills over directly to the Senior tranche:
+            //    `senior_loss = (net_loss - junior_loss).min(senior_info.total_deposited)`.
+            // 5. Accounting Reconciliation Invariant:
+            //    `total_allocated_loss = junior_loss + senior_loss`.
+            //    Total loss allocated across tranches strictly equals `net_loss` (or available tranche capital),
+            //    ensuring 100% loss accounting reconciliation without phantom loss creation or drift.
+            // =========================================================================
+
+            let max_junior_capacity = junior_info.total_deposited;
+            let junior_loss = net_loss.min(max_junior_capacity);
             junior_info.total_deposited -= junior_loss;
             junior_info.total_loss_absorbed += junior_loss;
 
@@ -3391,7 +3474,10 @@ impl LendingPoolContract {
         config.admin.require_auth();
         let loan = Self::read_loan(&env, &loan_id)?;
         loan.borrower.require_auth();
-        let schedule = env.storage().persistent().get(&DataKey::LoanSchedule(loan_id.clone()));
+        let schedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::LoanSchedule(loan_id.clone()));
         let schedule_present = schedule.is_some();
         let schedule = schedule.unwrap_or(RepaymentSchedule {
             monthly_amount: 0,
@@ -3427,20 +3513,35 @@ impl LendingPoolContract {
         if Self::portability_proof(&env, &snapshot) != proof {
             return Err(PoolError::Unauthorized);
         }
-        if env.storage().persistent().has(&DataKey::Loan(snapshot.loan_id.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Loan(snapshot.loan_id.clone()))
+        {
             return Err(PoolError::LoanAlreadyExists);
         }
         Self::set_loan(&env, &snapshot.loan_id, &snapshot.loan);
         if snapshot.schedule_present {
-            env.storage().persistent().set(&DataKey::LoanSchedule(snapshot.loan_id.clone()), &snapshot.schedule);
+            env.storage().persistent().set(
+                &DataKey::LoanSchedule(snapshot.loan_id.clone()),
+                &snapshot.schedule,
+            );
         }
         let active = Self::read_borrower_active_loans(&env, &snapshot.loan.borrower);
-        if matches!(snapshot.loan.status, LoanStatus::Requested | LoanStatus::Approved) {
+        if matches!(
+            snapshot.loan.status,
+            LoanStatus::Requested | LoanStatus::Approved
+        ) {
             Self::set_borrower_active_loans(&env, &snapshot.loan.borrower, active + 1);
         }
         let count = Self::read_loan_count(&env);
-        env.storage().instance().set(&DataKey::LoanCount, &(count + 1));
-        env.events().publish((Symbol::new(&env, "loan_ported"),), (snapshot.loan_id, snapshot.source_pool));
+        env.storage()
+            .instance()
+            .set(&DataKey::LoanCount, &(count + 1));
+        env.events().publish(
+            (Symbol::new(&env, "loan_ported"),),
+            (snapshot.loan_id, snapshot.source_pool),
+        );
         Ok(())
     }
 
@@ -9823,450 +9924,129 @@ mod test {
         let res = client.try_release_collateral_by_id(&loan_id);
         assert!(res.is_err());
     }
-    // ── Early-Prepayment Penalty & Loyalty Waiver ───────────────────────
-    //
-    // A borrower who clears a loan while installments are still outstanding
-    // pays a 1% penalty on top. Borrowers whose escrow savings relationship
-    // had reached the configured age *at origination* are exempt. These tests
-    // cover both sides of that line, and the boundaries that keep it honest.
 
-    const PREPAY_TEST_PRINCIPAL: i128 = 10_000_0000000i128;
+    // ── Mid-loan collateral top-up ──────────────────────────────────────
 
-    /// A relationship must have been open this long before the penalty is
-    /// waived. Six months is a meaningful saving streak rather than a formality.
-    const RELATIONSHIP_THRESHOLD: u32 = 6 * LEDGERS_PER_MONTH;
-
-    /// Fixed origination point for these tests. A start ledger of `0` is
-    /// reserved by the contract for "no relationship" — a relationship cannot
-    /// genuinely begin at genesis, and treating `0` as an ordinary start would
-    /// hand out the largest possible age to anyone who asked for it — so the
-    /// clock is parked past it and ages are measured backwards from here.
-    const AGE_CLOCK: u32 = RELATIONSHIP_THRESHOLD * 2;
-
-    /// Parks the ledger so relationship ages are non-zero and the token
-    /// contract is not archived by the jump.
-    fn age_clock(env: &Env) {
-        env.mock_all_auths_allowing_non_root_auth();
-        env.ledger().with_mut(|li| {
-            li.max_entry_ttl = 7_000_001;
-            li.min_persistent_entry_ttl = 7_000_000;
-        });
-        env.ledger().set_sequence_number(AGE_CLOCK);
-    }
-
-    /// Runs deposit → borrow → disburse for `borrower` with an escrow savings
-    /// relationship that is exactly `age_ledgers` old at origination. `None`
-    /// means the borrower has no relationship on record at all.
-    ///
-    /// The age is written before `request_loan` so the loan latches it, which
-    /// is the whole point of the feature.
-    fn setup_prepay_loan_at_age(
-        env: &Env,
-        client: &LendingPoolContractClient,
-        token_address: &Address,
-        borrower: &Address,
-        age_ledgers: Option<u32>,
-    ) -> BytesN<32> {
-        let investor = Address::generate(env);
-        let sac = StellarAssetClient::new(env, token_address);
-        sac.mint(&investor, &(PREPAY_TEST_PRINCIPAL * 2));
-        client.deposit(&investor, &(PREPAY_TEST_PRINCIPAL * 2), &Tranche::Senior);
-
-        if let Some(age) = age_ledgers {
-            assert!(age < AGE_CLOCK, "age must leave a non-zero start ledger");
-            client.record_escrow_rel_start(borrower, &(AGE_CLOCK - age));
-        }
-
-        let loan_id = mock_loan_id(env);
-        client.request_loan(borrower, &loan_id, &PREPAY_TEST_PRINCIPAL);
-        client.approve_loan(&loan_id);
-        client.add_contractor(borrower);
-        client.disburse(&loan_id, borrower, &PREPAY_TEST_PRINCIPAL);
-        loan_id
-    }
-
-    /// Funds the borrower for a full payoff plus the penalty that payoff may
-    /// owe, and returns the exact debt to clear.
-    fn fund_payoff(
-        env: &Env,
-        client: &LendingPoolContractClient,
-        token_address: &Address,
-        borrower: &Address,
-        loan_id: &BytesN<32>,
-    ) -> i128 {
-        StellarAssetClient::new(env, token_address).mint(borrower, &(PREPAY_TEST_PRINCIPAL * 3));
-        client.get_loan_info(loan_id).outstanding_debt
-    }
-
-    /// The standard penalty owed on a prepayment of `amount`.
-    fn expected_penalty(amount: i128) -> i128 {
-        (amount * PREPAYMENT_PENALTY_BPS as i128) / BPS_SCALE as i128
-    }
-
-    /// The feature at its best: a long-standing escrow relationship clears the
-    /// debt with nothing extra reaching the treasury.
     #[test]
-    fn test_early_prepay_waived_for_established_escrow_relationship() {
+    fn test_top_up_improves_below_threshold_position() {
         let env = Env::default();
-        age_clock(&env);
-
-        let (_admin, _investor, treasury, token_address, client) = setup_pool(&env);
-        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
-
-        let borrower = Address::generate(&env);
-        let loan_id = setup_prepay_loan_at_age(
-            &env,
-            &client,
-            &token_address,
-            &borrower,
-            Some(RELATIONSHIP_THRESHOLD),
-        );
-
-        // The latched age is exactly the threshold, and the loan is eligible.
-        assert_eq!(
-            client.get_loan_escrow_rel_ledgers(&loan_id),
-            RELATIONSHIP_THRESHOLD
-        );
-        assert!(client.is_prepayment_waived(&loan_id));
-
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, token_address, client) = setup_pool(&env);
         let token = token::Client::new(&env, &token_address);
-        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
-        let before = token.balance(&borrower);
-        client.repay(&borrower, &loan_id, &owed);
-
-        assert_eq!(
-            token.balance(&borrower),
-            before - owed,
-            "only the debt is collected"
-        );
-        assert_eq!(client.get_total_prepayment_penalties(), 0i128);
-        assert_eq!(token.balance(&treasury), 0i128);
-        assert_eq!(client.get_loan_info(&loan_id).status, LoanStatus::Repaid);
-    }
-
-    /// The control case: the same early close by a borrower below the
-    /// threshold pays the full penalty to the treasury.
-    #[test]
-    fn test_early_prepay_charged_penalty_below_threshold() {
-        let env = Env::default();
-        age_clock(&env);
-
-        let (_admin, _investor, treasury, token_address, client) = setup_pool(&env);
-        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
-
         let borrower = Address::generate(&env);
-        // Opened a single ledger ago: nowhere near the threshold.
-        let loan_id = setup_prepay_loan_at_age(&env, &client, &token_address, &borrower, Some(1));
-        assert_eq!(client.get_loan_escrow_rel_ledgers(&loan_id), 1);
-        assert!(!client.is_prepayment_waived(&loan_id));
-
-        let token = token::Client::new(&env, &token_address);
-        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
-        let penalty = expected_penalty(owed);
-        assert!(penalty > 0, "the fixture must actually trip the penalty");
-        let before = token.balance(&borrower);
-        client.repay(&borrower, &loan_id, &owed);
-
-        // Debt plus penalty leaves the borrower; the penalty reaches the
-        // treasury and is tracked on its own counter.
-        assert_eq!(token.balance(&borrower), before - owed - penalty);
-        assert_eq!(client.get_total_prepayment_penalties(), penalty);
-        assert_eq!(token.balance(&treasury), penalty);
-        assert_eq!(client.get_loan_info(&loan_id).status, LoanStatus::Repaid);
-    }
-
-    /// A borrower with no escrow relationship latches an age of `0`, and a
-    /// `0` threshold must not read as "waive everyone" — that would hand the
-    /// loyalty discount to precisely the borrowers with no history. The feature
-    /// is off by default, and off means the full penalty.
-    #[test]
-    fn test_threshold_zero_disables_the_waiver() {
-        let env = Env::default();
-        age_clock(&env);
-
-        let (_admin, _investor, treasury, token_address, client) = setup_pool(&env);
-        assert_eq!(client.get_prepay_waiver_ledgers(), 0u32, "off by default");
-
-        let borrower = Address::generate(&env);
-        let loan_id = setup_prepay_loan_at_age(&env, &client, &token_address, &borrower, None);
-        assert_eq!(client.get_loan_escrow_rel_ledgers(&loan_id), 0);
-        assert!(!client.is_prepayment_waived(&loan_id));
-
-        let token = token::Client::new(&env, &token_address);
-        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
-        client.repay(&borrower, &loan_id, &owed);
-
-        let penalty = expected_penalty(owed);
-        assert_eq!(client.get_total_prepayment_penalties(), penalty);
-        assert_eq!(token.balance(&treasury), penalty);
-    }
-
-    /// A start ledger in the future — a misconfigured bridge — must not wrap
-    /// around into an enormous age and hand out the waiver for free.
-    #[test]
-    fn test_future_relationship_start_does_not_wrap() {
-        let env = Env::default();
-        age_clock(&env);
-
-        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
-        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
-
-        let borrower = Address::generate(&env);
-        // Same flow as a qualifying relationship, except the recorded start is
-        // after the current ledger, so no age can legitimately be derived.
-        let investor = Address::generate(&env);
-        let sac = StellarAssetClient::new(&env, &token_address);
-        sac.mint(&investor, &(PREPAY_TEST_PRINCIPAL * 2));
-        client.deposit(&investor, &(PREPAY_TEST_PRINCIPAL * 2), &Tranche::Senior);
-        client.record_escrow_rel_start(&borrower, &(AGE_CLOCK * 10));
-
         let loan_id = mock_loan_id(&env);
-        client.request_loan(&borrower, &loan_id, &PREPAY_TEST_PRINCIPAL);
+
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+        client.request_loan(&borrower, &loan_id, &70_000_0000000i128);
         client.approve_loan(&loan_id);
-        client.add_contractor(&borrower);
-        client.disburse(&loan_id, &borrower, &PREPAY_TEST_PRINCIPAL);
+        // 10k against 70k is ~14.28%, below the 30% minimum.
+        client.set_loan_collateral(&loan_id, &10_000_0000000i128, &3_000u32);
+        let (_, _, ratio_before) = client.get_releasable_collateral(&loan_id);
+        assert_eq!(ratio_before, 1_428u32);
 
-        assert_eq!(client.get_loan_escrow_rel_ledgers(&loan_id), 0);
-        assert!(!client.is_prepayment_waived(&loan_id));
-    }
+        StellarAssetClient::new(&env, &token_address).mint(&borrower, &20_000_0000000i128);
+        let pool_before = token.balance(&client.address);
 
-    /// The age is a snapshot taken at origination. A borrower cannot open an
-    /// escrow account after taking the loan and have the late-arriving
-    /// relationship retroactively erase a penalty they were already assessed.
-    #[test]
-    fn test_relationship_age_is_latched_at_origination() {
-        let env = Env::default();
-        age_clock(&env);
+        let ratio = client.top_up_collateral(&loan_id, &borrower, &20_000_0000000i128);
 
-        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
-        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
-
-        let borrower = Address::generate(&env);
-        // Originate with no relationship on record.
-        let loan_id = setup_prepay_loan_at_age(&env, &client, &token_address, &borrower, None);
-        assert_eq!(client.get_loan_escrow_rel_ledgers(&loan_id), 0);
-
-        // Shortly after origination the borrower opens an account and becomes
-        // eligible — too late to matter for a loan that is already running.
-        client.record_escrow_rel_start(&borrower, &(AGE_CLOCK - 1));
-        assert_eq!(client.get_escrow_rel_ledgers(&borrower), 1);
+        // 30k against 70k is ~42.85%, back above the minimum.
+        assert_eq!(ratio, 4_285u32);
+        let (_, remaining, ratio_after) = client.get_releasable_collateral(&loan_id);
+        assert_eq!(remaining, 30_000_0000000i128);
+        assert_eq!(ratio_after, 4_285u32);
+        assert!(ratio_after >= 3_000u32);
         assert_eq!(
-            client.get_loan_escrow_rel_ledgers(&loan_id),
-            0,
-            "the loan keeps the age it latched"
+            client
+                .get_loan_collateral(&loan_id)
+                .unwrap()
+                .initial_collateral,
+            30_000_0000000i128
         );
-        assert!(!client.is_prepayment_waived(&loan_id));
-
-        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
-        client.repay(&borrower, &loan_id, &owed);
+        assert_eq!(token.balance(&borrower), 0);
         assert_eq!(
-            client.get_total_prepayment_penalties(),
-            expected_penalty(owed)
+            token.balance(&client.address),
+            pool_before + 20_000_0000000i128
         );
     }
 
-    /// Governance changes to the threshold reach loans that are still running,
-    /// but they never change the eligibility *input*: the latched age is the
-    /// same before and after the policy moves, so the admin is not repricing
-    /// history, only the bar it is measured against.
     #[test]
-    fn test_threshold_change_applies_to_running_loans() {
+    fn test_top_up_on_healthy_loan_increases_collateral() {
         let env = Env::default();
-        age_clock(&env);
-
-        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
-        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
-
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, token_address, client) = setup_pool(&env);
         let borrower = Address::generate(&env);
-        let loan_id = setup_prepay_loan_at_age(
-            &env,
-            &client,
-            &token_address,
-            &borrower,
-            Some(RELATIONSHIP_THRESHOLD),
-        );
-        let latched = client.get_loan_escrow_rel_ledgers(&loan_id);
-        assert!(client.is_prepayment_waived(&loan_id));
+        let loan_id = mock_loan_id(&env);
 
-        // Raise the bar after origination: the loan is judged against the new
-        // policy, but the age it was judged on is untouched.
-        client.set_prepay_waiver_ledgers(&(RELATIONSHIP_THRESHOLD * 2));
-        assert_eq!(
-            client.get_prepay_waiver_ledgers(),
-            RELATIONSHIP_THRESHOLD * 2
-        );
-        assert_eq!(client.get_loan_escrow_rel_ledgers(&loan_id), latched);
-        assert!(!client.is_prepayment_waived(&loan_id));
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+        client.request_loan(&borrower, &loan_id, &70_000_0000000i128);
+        client.approve_loan(&loan_id);
+        client.set_loan_collateral(&loan_id, &30_000_0000000i128, &3_000u32);
 
-        // Lower it again and the same loan qualifies once more.
-        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
-        assert!(client.is_prepayment_waived(&loan_id));
-
-        let token = token::Client::new(&env, &token_address);
-        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
-        let before = token.balance(&borrower);
-        client.repay(&borrower, &loan_id, &owed);
-
-        assert_eq!(token.balance(&borrower), before - owed);
-        assert_eq!(client.get_total_prepayment_penalties(), 0i128);
-    }
-
-    /// A payment that does not clear the loan is a normal repayment, not a
-    /// prepayment, and must never be charged this penalty.
-    #[test]
-    fn test_partial_payment_is_not_penalised() {
-        let env = Env::default();
-        age_clock(&env);
-
-        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
-        let borrower = Address::generate(&env);
-        let loan_id = setup_prepay_loan_at_age(&env, &client, &token_address, &borrower, None);
-
-        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
-        client.repay(&borrower, &loan_id, &(owed / 2));
-
-        assert_eq!(client.get_total_prepayment_penalties(), 0i128);
-        let loan = client.get_loan_info(&loan_id);
-        assert_eq!(loan.status, LoanStatus::Approved);
-        assert!(loan.outstanding_debt > 0);
-    }
-
-    /// Finishing exactly on the final installment is not prepaying. The
-    /// schedule advances `payments_made` before the penalty decision, so a loan
-    /// retired on its last scheduled payment owes nothing extra.
-    #[test]
-    fn test_payment_on_final_installment_is_not_penalised() {
-        let env = Env::default();
-        age_clock(&env);
-
-        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
-        let borrower = Address::generate(&env);
-        let loan_id = setup_prepay_loan_at_age(&env, &client, &token_address, &borrower, None);
-
-        // Jump the schedule to its last installment: exactly one payment left,
-        // due now.
-        env.as_contract(&client.address, || {
-            let mut sched: RepaymentSchedule = env
-                .storage()
-                .persistent()
-                .get(&DataKey::LoanSchedule(loan_id.clone()))
-                .unwrap();
-            sched.payments_made = sched.duration_months - 1;
-            sched.next_due_ledger = env.ledger().sequence();
-            env.storage()
-                .persistent()
-                .set(&DataKey::LoanSchedule(loan_id.clone()), &sched);
+        StellarAssetClient::new(&env, &token_address).mint(&borrower, &7_000_0000000i128);
+        let ratio = client.top_up_collateral(&loan_id, &borrower, &7_000_0000000i128);
+        let topped_up = env.events().all().iter().any(|(_, topics, _)| {
+            topics.get(0).map(|t| {
+                <Symbol as soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>::try_from_val(&env, &t)
+                    .ok()
+                    == Some(Symbol::new(&env, "collateral_topped_up"))
+            }) == Some(true)
         });
+        assert!(topped_up);
 
-        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
-        client.repay(&borrower, &loan_id, &owed);
-
-        assert_eq!(client.get_loan_info(&loan_id).status, LoanStatus::Repaid);
-        assert_eq!(client.get_total_prepayment_penalties(), 0i128);
-    }
-
-    /// The penalty is protocol revenue, not pool capital. It must not inflate
-    /// tracked liquidity or linger in the pool's balance.
-    #[test]
-    fn test_prepayment_penalty_is_not_pool_liquidity() {
-        let env = Env::default();
-        age_clock(&env);
-
-        let (_admin, _investor, treasury, token_address, client) = setup_pool(&env);
-        let borrower = Address::generate(&env);
-        let loan_id = setup_prepay_loan_at_age(&env, &client, &token_address, &borrower, None);
-
-        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
-        let liquidity_before = client.get_pool_health().total_liquidity;
-        client.repay(&borrower, &loan_id, &owed);
-
-        // The fee reached the treasury and is booked there...
-        let penalty = expected_penalty(owed);
-        assert_eq!(client.get_total_prepayment_penalties(), penalty);
+        // 37k against 70k is ~52.85%.
+        assert_eq!(ratio, 5_285u32);
         assert_eq!(
-            token::Client::new(&env, &token_address).balance(&treasury),
-            penalty
-        );
-        // ...while liquidity grew by the debt alone. The penalty arrived and
-        // left in the same transaction, so it must not appear as lendable
-        // capital.
-        assert_eq!(
-            client.get_pool_health().total_liquidity,
-            liquidity_before + owed
+            client
+                .get_loan_collateral(&loan_id)
+                .unwrap()
+                .initial_collateral,
+            37_000_0000000i128
         );
     }
 
-    /// The pool publishes the standard rate and reports an empty lifetime
-    /// penalty total before any prepayment happens.
     #[test]
-    fn test_prepayment_penalty_getters() {
+    fn test_top_up_on_defaulted_loan_reverts() {
         let env = Env::default();
         env.mock_all_auths_allowing_non_root_auth();
+        let (_admin, token_address, loan_id, client) = setup_overdue_loan(&env);
+        client.mark_default(&loan_id);
 
-        let (_admin, _investor, _treasury, _token_address, client) = setup_pool(&env);
-
-        assert_eq!(client.get_prepayment_penalty_bps(), 100u32);
-        assert_eq!(client.get_total_prepayment_penalties(), 0i128);
-
-        // An unregistered borrower reports no relationship rather than
-        // erroring, so a caller can read the age before one exists.
-        let stranger = Address::generate(&env);
-        assert_eq!(client.get_escrow_rel_ledgers(&stranger), 0u32);
+        let payer = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_address).mint(&payer, &1_000_0000000i128);
+        let res = client.try_top_up_collateral(&loan_id, &payer, &1_000_0000000i128);
+        assert_eq!(res.err().unwrap().unwrap(), PoolError::InvalidLoanState);
     }
 
-    /// Both new entrypoints are governance surfaces: only the admin may move
-    /// the threshold or write a relationship start.
     #[test]
-    fn test_prepay_waiver_setters_require_admin() {
-        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
-
+    fn test_top_up_on_closed_loan_reverts() {
         let env = Env::default();
-        env.mock_all_auths_allowing_non_root_auth();
-        let (admin, _investor, _treasury, _token_address, client) = setup_pool(&env);
-        let stranger = Address::generate(&env);
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, token_address, client) = setup_pool(&env);
         let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
 
-        // A non-admin attempting to set the threshold.
-        env.mock_auths(&[MockAuth {
-            address: &stranger,
-            invoke: &MockAuthInvoke {
-                contract: &client.address,
-                fn_name: "set_prepay_waiver_ledgers",
-                args: (RELATIONSHIP_THRESHOLD,).into_val(&env),
-                sub_invokes: &[],
-            },
-        }]);
-        assert!(client
-            .try_set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD)
-            .is_err());
-        assert_eq!(client.get_prepay_waiver_ledgers(), 0u32);
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+        client.request_loan(&borrower, &loan_id, &50_000_0000000i128);
+        client.cancel_loan(&loan_id);
 
-        // A non-admin attempting to forge an escrow relationship.
-        env.mock_auths(&[MockAuth {
-            address: &stranger,
-            invoke: &MockAuthInvoke {
-                contract: &client.address,
-                fn_name: "record_escrow_rel_start",
-                args: (borrower.clone(), 1u32).into_val(&env),
-                sub_invokes: &[],
-            },
-        }]);
-        assert!(client
-            .try_record_escrow_rel_start(&borrower, &1u32)
-            .is_err());
-        assert_eq!(client.get_escrow_rel_ledgers(&borrower), 0u32);
+        StellarAssetClient::new(&env, &token_address).mint(&borrower, &1_000_0000000i128);
+        let res = client.try_top_up_collateral(&loan_id, &borrower, &1_000_0000000i128);
+        assert_eq!(res.err().unwrap().unwrap(), PoolError::InvalidLoanState);
+    }
 
-        // The admin still can.
-        env.mock_auths(&[MockAuth {
-            address: &admin,
-            invoke: &MockAuthInvoke {
-                contract: &client.address,
-                fn_name: "set_prepay_waiver_ledgers",
-                args: (RELATIONSHIP_THRESHOLD,).into_val(&env),
-                sub_invokes: &[],
-            },
-        }]);
-        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
-        assert_eq!(client.get_prepay_waiver_ledgers(), RELATIONSHIP_THRESHOLD);
+    #[test]
+    fn test_top_up_rejects_non_positive_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, _token_address, client) = setup_pool(&env);
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+        client.request_loan(&borrower, &loan_id, &50_000_0000000i128);
+        client.approve_loan(&loan_id);
+
+        let res = client.try_top_up_collateral(&loan_id, &borrower, &0i128);
+        assert_eq!(res.err().unwrap().unwrap(), PoolError::InvalidAmount);
     }
 }

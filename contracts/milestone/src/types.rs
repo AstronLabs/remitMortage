@@ -74,6 +74,52 @@ pub struct BudgetChangeProposal {
     pub executed: bool,
 }
 
+/// Arbitration settings for milestone disputes, set by the admin per deployment.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArbitrationConfig {
+    /// Addresses allowed to rule on a dispute.
+    pub arbitrators: Vec<Address>,
+    /// Matching votes (uphold or reject) needed to decide a dispute.
+    pub threshold: u32,
+    /// Ledgers the arbitrators have to decide once a dispute is raised.
+    pub window_ledgers: u32,
+}
+
+/// How a milestone dispute ended.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+#[repr(u32)]
+pub enum DisputeOutcome {
+    /// Waiting for an arbitrator decision.
+    Pending = 0,
+    /// Arbitrators found the milestone was not met; it is refunded.
+    Upheld = 1,
+    /// Arbitrators found the milestone was met; the release schedule resumes.
+    Rejected = 2,
+    /// The window elapsed without a decision; the default resolution applied.
+    TimedOut = 3,
+}
+
+/// An arbitration dispute over whether a milestone was met.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DisputeRecord {
+    /// Borrower or admin who raised the dispute.
+    pub raised_by: Address,
+    /// Milestone status before the dispute, restored if the dispute is rejected or times out.
+    pub prior_status: MilestoneStatus,
+    /// Ledger at which the dispute was raised.
+    pub raised_ledger: u32,
+    /// Last ledger on which arbitrators can still decide. Fixed at raise time.
+    pub deadline_ledger: u32,
+    /// Arbitrator votes to uphold the dispute so far.
+    pub uphold_votes: u32,
+    /// Arbitrator votes to reject the dispute so far.
+    pub reject_votes: u32,
+    pub outcome: DisputeOutcome,
+}
+
 /// Storage keys for the milestone contract.
 #[contracttype]
 #[derive(Clone)]
@@ -92,4 +138,10 @@ pub enum DataKey {
     BudgetChange(Symbol),
     /// Tracks whether an approver has voted on a budget change.
     BudgetChangeVoted(Symbol, Address),
+    /// Arbitration settings for milestone disputes.
+    ArbitrationConfig,
+    /// Arbitration dispute keyed by milestone proposal ID.
+    Dispute(BytesN<32>),
+    /// Tracks whether an arbitrator has voted on a dispute.
+    DisputeVoted(BytesN<32>, Address),
 }

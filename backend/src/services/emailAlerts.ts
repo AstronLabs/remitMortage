@@ -13,6 +13,7 @@ import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
 import { getBrandedHtml } from "./email.js";
 import { sendGridSend } from "./sendgrid.js";
+import { getCurrentTenant } from "./tenant.js";
 
 export type AlertKind = "deposit" | "repay" | "milestone_approved";
 
@@ -50,7 +51,7 @@ function detailsRow(label: string, value: string): string {
 }
 
 function depositTemplate(event: LedgerAlertEvent): RenderedTemplate {
-  const subject = "Deposit Received - RemitMortgage";
+  const subject = `Deposit Received - ${getCurrentTenant().name}`;
   const body = `
     <h2>Deposit Received</h2>
     <p>A deposit of <strong>${event.amount ?? "0"} USDC</strong> was recorded on-chain against your mortgage escrow.</p>
@@ -65,7 +66,7 @@ function depositTemplate(event: LedgerAlertEvent): RenderedTemplate {
 }
 
 function repaymentTemplate(event: LedgerAlertEvent): RenderedTemplate {
-  const subject = "Repayment Recorded - RemitMortgage";
+  const subject = `Repayment Recorded - ${getCurrentTenant().name}`;
   const body = `
     <h2>Repayment Recorded</h2>
     <p>We applied a repayment of <strong>${event.amount ?? "0"} USDC</strong> to your outstanding loan balance.</p>
@@ -80,7 +81,7 @@ function repaymentTemplate(event: LedgerAlertEvent): RenderedTemplate {
 }
 
 function milestoneApprovedTemplate(event: LedgerAlertEvent): RenderedTemplate {
-  const subject = "Milestone Approved - RemitMortgage";
+  const subject = `Milestone Approved - ${getCurrentTenant().name}`;
   const body = `
     <h2>Milestone Approved</h2>
     <p>A construction milestone on your project has been approved and funds are cleared for release.</p>

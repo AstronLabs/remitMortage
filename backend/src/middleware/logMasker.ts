@@ -16,6 +16,7 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /national[_-]?id/i,
   /driver.?licen[cs]e/i,
   /ssn/i,
+  /tax[_-]?id/i,
   /social_security/i,
   /bank_account/i,
   /routing_number/i,

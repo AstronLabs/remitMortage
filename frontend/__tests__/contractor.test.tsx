@@ -3,6 +3,14 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ContractorDashboard from "../src/app/contractor/page";
 import EvidenceUpload from "../src/components/EvidenceUpload";
+import { uploadWithProgress } from "../src/lib/documentUpload";
+
+jest.mock("../src/lib/analytics", () => ({ track: jest.fn() }));
+
+jest.mock("../src/lib/documentUpload", () => ({
+  ...jest.requireActual("../src/lib/documentUpload"),
+  uploadWithProgress: jest.fn(),
+}));
 
 // Mock the Next.js router
 jest.mock("next/navigation", () => ({
@@ -78,9 +86,10 @@ describe("Contractor Portal Tests", () => {
     // we should render MilestoneCard or a mock integration.
     // For simplicity, we test the EvidenceUpload success flow:
     const mockCid = "bafybeigmockcid1234567890";
-    (global.fetch as jest.Mock).mockResolvedValue({
-      ok: true,
-      json: async () => ({ success: true, cid: mockCid, milestoneId: "m1" }),
+    (uploadWithProgress as jest.Mock).mockResolvedValue({
+      success: true,
+      cid: mockCid,
+      milestoneId: "m1",
     });
 
     const handleUploadSuccess = jest.fn();

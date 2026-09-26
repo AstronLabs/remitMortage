@@ -6,6 +6,7 @@ import logger from "../utils/logger.js";
 import { sendEmail, sendDepositReceipt, sendRepaymentReminder, sendLoanStatusUpdate } from "./email.js";
 import { sendWebhook } from "./webhook.js";
 import { queueService } from "./queueService.js";
+import { getCurrentTenant } from "./tenant.js";
 
 export type NotificationType = "EMAIL" | "WEBHOOK" | "SMS";
 
@@ -117,6 +118,7 @@ export async function queueNotification(
     recipient,
     type,
     content,
+    tenantId: getCurrentTenant().id,
   }, {
     attempts: MAX_ATTEMPTS,
     backoff: { type: "exponential", delay: BASE_BACKOFF_MS },

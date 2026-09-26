@@ -1,0 +1,30 @@
+name: Staging Multi-Region Failover Chaos
+
+on:
+  schedule:
+    - cron: '30 3 * * 1'
+  workflow_dispatch:
+
+jobs:
+  failover-chaos:
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run controlled failover scenario
+        env:
+          CHAOS_ENVIRONMENT: staging
+          PRIMARY_CONTROL_URL: ${{ secrets.FAILOVER_PRIMARY_CONTROL_URL }}
+          FAILOVER_HOST: ${{ secrets.FAILOVER_HOST }}
+          FAILOVER_EXPECTED_MARKER: ${{ secrets.FAILOVER_EXPECTED_MARKER }}
+          RTO_TARGET_SECONDS: '120'
+        run: bash scripts/chaos-failover.sh
+      - name: Upload measured recovery time
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failover-recovery-measurement
+          path: failover-result.json
+          if-no-files-found: ignore
