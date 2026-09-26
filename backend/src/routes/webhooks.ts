@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 /**
  * Webhook Subscription Management API
  *
@@ -96,7 +99,7 @@ webhooksRouter.post(
   "/subscriptions",
   requireAdmin,
   async (req: Request, res: Response): Promise<void> => {
-    const { label, url, topics, ownerAddress } = req.body ?? {};
+    const { label, url, topics, ownerAddress, webhookSchemaVersion } = req.body ?? {};
 
     if (!label || typeof label !== "string" || label.trim() === "") {
       res.status(400).json({ error: "validation", message: "`label` is required" });
@@ -118,12 +121,21 @@ webhooksRouter.post(
       }
     }
 
+    if (webhookSchemaVersion !== undefined && ![1, 2].includes(webhookSchemaVersion)) {
+      res.status(400).json({
+        error: "validation",
+        message: "`webhookSchemaVersion` must be 1 or 2",
+      });
+      return;
+    }
+
     try {
       const { subscription, plaintextSecret } = await createSubscription({
         label: label.trim(),
         url: url.trim(),
         topics: topics as EventTopic[] | undefined,
         ownerAddress: ownerAddress ?? undefined,
+        webhookSchemaVersion,
       });
 
       res.status(201).json({

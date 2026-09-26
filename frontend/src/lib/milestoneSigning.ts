@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 export type SignerVoteStatus = "approved" | "pending";
 
 export interface MilestoneSigner {

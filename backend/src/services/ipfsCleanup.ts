@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { unpinFileFromIPFS } from "./ipfs.js";
 import logger from "../utils/logger.js";
 import { logUnpinnedCid } from "./ipfsAudit.js";

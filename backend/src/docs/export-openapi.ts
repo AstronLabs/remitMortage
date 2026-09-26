@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { swaggerSpec } from "./swagger.js";

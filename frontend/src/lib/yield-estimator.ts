@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 // Pure yield / APY estimator math for the dashboard calculator.
 //
 // The estimator models the escrow yield the same way the rest of the app does

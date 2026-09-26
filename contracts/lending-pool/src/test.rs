@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 // Update setup_pool to include treasury:
 fn setup_pool(env: &Env) -> (Address, Address, Address, Address, LendingPoolContractClient<'_>) {
     let admin = Address::generate(env);

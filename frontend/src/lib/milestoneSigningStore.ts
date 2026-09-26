@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 /**
  * Server-side in-memory mock of the milestone governance approver set (a
  * stand-in for reading signer weights/status from a deployed Multisig

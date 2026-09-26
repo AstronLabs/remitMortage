@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Router } from "express";
 import { StrKey } from "@stellar/stellar-sdk";
 import logger from "../utils/logger.js";
@@ -20,15 +23,19 @@ import {
 import { queueNotification } from "../services/notification.js";
 import { hasExpiredKycDocuments } from "../jobs/kycExpiryReminder.js";
 import { prisma } from "../services/db.js";
+import {
+  findTaxIdMatches,
+  recordApplicantTaxIdHash,
+  DUPLICATE_TAX_ID_REVIEW_REASON,
+} from "../services/taxIdDedup.js";
 import { reconstructLoanApplicationAt } from "../services/loanHistory.js";
-
-export const loanRouter = Router();
-
 import {
   checkDuplicateApplicants,
   logReviewerDecision,
   ApplicantFields,
 } from "../utils/fuzzyMatch.js";
+
+export const loanRouter = Router();
 
 // POST /api/loan/apply
 loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"), async (req, res) => {
@@ -96,10 +103,33 @@ loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"
       }
     }
 
+    // Issue #692: exact SSN/tax ID match against other applicants, via a keyed
+    // hash so the raw identifier is never stored or logged.
+    const taxIdMatches = taxId ? await findTaxIdMatches(String(taxId), borrowerAddress) : [];
+
     const app = await createApplication(borrowerAddress, String(amount));
+    if (taxId) {
+      await recordApplicantTaxIdHash(borrowerAddress, String(taxId));
+    }
+    if (taxIdMatches.length > 0) {
+      await prisma.loanApplication.update({
+        where: { id: app.id },
+        data: { manualReviewReason: DUPLICATE_TAX_ID_REVIEW_REASON },
+      });
+      app.manualReviewReason = DUPLICATE_TAX_ID_REVIEW_REASON;
+      logger.warn(
+        `Application ${app.id} held for manual review: tax ID matches ${taxIdMatches.length} other applicant(s)`
+      );
+    }
+
     if (dupStatus === "MANUAL_REVIEW") {
       await updateApplication(app.id, { status: "MANUAL_REVIEW" });
       app.status = "MANUAL_REVIEW";
+      return res.status(201).json({ ...app, duplicateCheck: dupDetails });
+    }
+
+    // Held applications skip auto-rejection so a reviewer makes the call.
+    if (app.manualReviewReason) {
       return res.status(201).json({ ...app, duplicateCheck: dupDetails });
     }
 
@@ -137,7 +167,7 @@ loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"
 // GET /api/loan/borrower/:address
 // ---------------------------------------------------------------------------
 loanRouter.get("/borrower/:address", async (req, res) => {
-  const { address } = req.params ?? {};
+  const address = String(req.params?.address ?? "");
   try {
     StrKey.decodeEd25519PublicKey(address);
   } catch {
@@ -160,7 +190,7 @@ loanRouter.get("/pending", async (req, res) => {
 // ---------------------------------------------------------------------------
 // POST /api/loan/:id/approve
 loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const app = await getApplication(id);
   if (!app) return res.status(404).json({ error: "not_found" });
 
@@ -228,7 +258,7 @@ loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
 // POST /api/loan/:id/reject
 // ---------------------------------------------------------------------------
 loanRouter.post("/:id/reject", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const { reason } = req.body ?? {};
   const app = await getApplication(id);
   if (!app) return res.status(404).json({ error: "not_found" });
@@ -250,7 +280,7 @@ loanRouter.post("/:id/reject", async (req, res) => {
 // POST /api/loan/:id/resume
 // Resumes a Draft application flagged as stale, resetting its inactivity clock.
 loanRouter.post("/:id/resume", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const resumed = await resumeDraftApplication(id);
   if (!resumed) return res.status(404).json({ error: "not_found_or_not_draft" });
   return res.json(resumed);
@@ -259,7 +289,7 @@ loanRouter.post("/:id/resume", async (req, res) => {
 // POST /api/loan/:id/discard
 // Lets an applicant explicitly discard a Draft application before it would otherwise expire.
 loanRouter.post("/:id/discard", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const discarded = await discardDraftApplication(id);
   if (!discarded) return res.status(404).json({ error: "not_found_or_not_draft" });
   return res.json(discarded);
@@ -270,7 +300,7 @@ loanRouter.post("/:id/discard", async (req, res) => {
 // from the audit trail as it stood at that instant. Without `asOf`, the
 // current record is returned unchanged.
 loanRouter.get("/:id", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const asOfRaw = req.query.asOf;
 
   if (asOfRaw !== undefined) {
@@ -310,7 +340,7 @@ loanRouter.get("/:id", async (req, res) => {
 // POST /api/loan/:id/trigger-payment-due
 // ---------------------------------------------------------------------------
 loanRouter.post("/:id/trigger-payment-due", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const { email, webhookUrl, amount, dueDate } = req.body ?? {};
 
   const app = await getApplication(id);
@@ -387,7 +417,7 @@ loanRouter.post("/check-duplicate", async (req, res) => {
 // Logs manual reviewer decision (APPROVED or REJECTED) and updates loan application status.
 loanRouter.post("/:id/review", async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = String(req.params?.id ?? "");
     const { reviewerId, decision, reason } = req.body ?? {};
 
     if (!reviewerId || !decision || (decision !== "APPROVED" && decision !== "REJECTED")) {
@@ -437,7 +467,7 @@ function extractMentions(content: string): string[] {
  * Also serves as the poll endpoint for real-time display.
  */
 loanRouter.get("/:id/comments", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const app = await getApplication(id);
   if (!app) return res.status(404).json({ error: "not_found" });
 
@@ -470,7 +500,7 @@ loanRouter.get("/:id/comments", async (req, res) => {
  * and persists to audit trail.
  */
 loanRouter.post("/:id/comments", async (req, res) => {
-  const { id } = req.params;
+  const id = String(req.params?.id ?? "");
   const { authorAddress, author, content, parentId } = req.body ?? {};
   const authorAddr = authorAddress || author;
 
@@ -556,4 +586,3 @@ loanRouter.post("/:id/comments", async (req, res) => {
     return res.status(500).json({ error: "failed_to_create_comment" });
   }
 });
-

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Keypair } from "@stellar/stellar-sdk";
 import crypto from "crypto";
 import { prisma } from "./db.js";

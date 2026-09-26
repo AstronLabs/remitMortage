@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 #![no_std]
 
 mod errors;
@@ -5,7 +8,8 @@ mod types;
 
 use crate::errors::MilestoneError;
 use crate::types::{
-    BudgetChangeProposal, DataKey, MilestoneConfig, MilestoneRecord, MilestoneStatus,
+    ArbitrationConfig, BudgetChangeProposal, DataKey, DisputeOutcome, DisputeRecord,
+    MilestoneConfig, MilestoneRecord, MilestoneStatus,
 };
 use soroban_sdk::{
     contract, contractimpl, symbol_short, token, vec, Address, Bytes, BytesN, Env, IntoVal,
@@ -102,6 +106,26 @@ impl MilestoneContract {
         let result = f();
         env.storage().instance().set(&DataKey::Reentrant, &false);
         result
+    }
+
+    fn read_arbitration_config(env: &Env) -> Result<ArbitrationConfig, MilestoneError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::ArbitrationConfig)
+            .ok_or(MilestoneError::ArbitrationNotConfigured)
+    }
+
+    fn read_dispute(env: &Env, proposal_id: &BytesN<32>) -> Result<DisputeRecord, MilestoneError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Dispute(proposal_id.clone()))
+            .ok_or(MilestoneError::DisputeNotFound)
+    }
+
+    fn set_dispute(env: &Env, proposal_id: &BytesN<32>, dispute: &DisputeRecord) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(proposal_id.clone()), dispute);
     }
 
     fn read_budget_change_proposal(
@@ -572,6 +596,214 @@ impl MilestoneContract {
         Self::bump_instance(&env);
 
         Ok(())
+    }
+
+    /// Configure the arbitrators, their vote threshold, and the arbitration
+    /// window in ledgers. Admin-only. Open disputes keep the deadline they
+    /// were raised with.
+    pub fn set_arbitration_config(
+        env: Env,
+        admin: Address,
+        arbitrators: Vec<Address>,
+        threshold: u32,
+        window_ledgers: u32,
+    ) -> Result<(), MilestoneError> {
+        let config = Self::read_config(&env)?;
+        admin.require_auth();
+
+        if admin != config.admin {
+            return Err(MilestoneError::Unauthorized);
+        }
+        if threshold == 0 || threshold > arbitrators.len() {
+            return Err(MilestoneError::InvalidThreshold);
+        }
+        if window_ledgers == 0 {
+            return Err(MilestoneError::InvalidArbitrationWindow);
+        }
+
+        let arbitration = ArbitrationConfig {
+            arbitrators,
+            threshold,
+            window_ledgers,
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::ArbitrationConfig, &arbitration);
+        Self::bump_instance(&env);
+
+        Ok(())
+    }
+
+    /// Raise an arbitration dispute over whether an approved milestone was met.
+    ///
+    /// The loan's borrower or the admin may raise it. The milestone moves to
+    /// `Disputed`, which blocks release, and the arbitration window starts.
+    /// A milestone can only be taken to arbitration once.
+    pub fn raise_dispute(
+        env: Env,
+        caller: Address,
+        proposal_id: BytesN<32>,
+    ) -> Result<(), MilestoneError> {
+        caller.require_auth();
+
+        let config = Self::read_config(&env)?;
+        let arbitration = Self::read_arbitration_config(&env)?;
+        let mut record = Self::read_milestone(&env, &proposal_id)?;
+
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Dispute(proposal_id.clone()))
+            || record.status == MilestoneStatus::Disputed
+            || record.status == MilestoneStatus::Refunded
+        {
+            return Err(MilestoneError::AlreadyDisputed);
+        }
+        if record.status != MilestoneStatus::Approved {
+            return Err(MilestoneError::CannotDispute);
+        }
+
+        if caller != config.admin {
+            let borrower: Option<Address> = env.invoke_contract(
+                &config.lending_pool,
+                &Symbol::new(&env, "get_loan_borrower"),
+                vec![&env, record.loan_id.clone().into_val(&env)],
+            );
+            if borrower != Some(caller.clone()) {
+                return Err(MilestoneError::Unauthorized);
+            }
+        }
+
+        let now = env.ledger().sequence();
+        let dispute = DisputeRecord {
+            raised_by: caller.clone(),
+            prior_status: record.status.clone(),
+            raised_ledger: now,
+            deadline_ledger: now.saturating_add(arbitration.window_ledgers),
+            uphold_votes: 0,
+            reject_votes: 0,
+            outcome: DisputeOutcome::Pending,
+        };
+        Self::set_dispute(&env, &proposal_id, &dispute);
+
+        record.status = MilestoneStatus::Disputed;
+        record.disputed_ledger = now.saturating_add(1);
+        Self::set_milestone(&env, &proposal_id, &record);
+
+        env.events().publish(
+            (symbol_short!("dispute"), symbol_short!("raised")),
+            (proposal_id, caller, dispute.deadline_ledger),
+        );
+        Self::bump_instance(&env);
+
+        Ok(())
+    }
+
+    /// Cast an arbitrator vote on an open dispute, before its deadline.
+    ///
+    /// When `threshold` arbitrators agree the dispute is decided: upheld
+    /// refunds the milestone (funds never leave the pool), rejected restores
+    /// its pre-dispute status so the release schedule resumes.
+    pub fn vote_dispute(
+        env: Env,
+        arbitrator: Address,
+        proposal_id: BytesN<32>,
+        uphold: bool,
+    ) -> Result<(), MilestoneError> {
+        arbitrator.require_auth();
+
+        let arbitration = Self::read_arbitration_config(&env)?;
+        if !arbitration.arbitrators.contains(&arbitrator) {
+            return Err(MilestoneError::Unauthorized);
+        }
+
+        let mut dispute = Self::read_dispute(&env, &proposal_id)?;
+        if dispute.outcome != DisputeOutcome::Pending {
+            return Err(MilestoneError::DisputeAlreadyResolved);
+        }
+        if env.ledger().sequence() > dispute.deadline_ledger {
+            return Err(MilestoneError::ArbitrationWindowElapsed);
+        }
+
+        let voted_key = DataKey::DisputeVoted(proposal_id.clone(), arbitrator);
+        if env.storage().persistent().has(&voted_key) {
+            return Err(MilestoneError::AlreadyVoted);
+        }
+        env.storage().persistent().set(&voted_key, &true);
+
+        if uphold {
+            dispute.uphold_votes += 1;
+        } else {
+            dispute.reject_votes += 1;
+        }
+
+        let decision = if dispute.uphold_votes >= arbitration.threshold {
+            Some((DisputeOutcome::Upheld, MilestoneStatus::Refunded))
+        } else if dispute.reject_votes >= arbitration.threshold {
+            Some((DisputeOutcome::Rejected, dispute.prior_status.clone()))
+        } else {
+            None
+        };
+
+        if let Some((outcome, status)) = decision {
+            let mut record = Self::read_milestone(&env, &proposal_id)?;
+            record.status = status;
+            Self::set_milestone(&env, &proposal_id, &record);
+            dispute.outcome = outcome;
+
+            env.events().publish(
+                (symbol_short!("dispute"), symbol_short!("resolved")),
+                (proposal_id.clone(), uphold),
+            );
+        }
+        Self::set_dispute(&env, &proposal_id, &dispute);
+        Self::bump_instance(&env);
+
+        Ok(())
+    }
+
+    /// Apply the default resolution to a dispute whose arbitration window
+    /// elapsed without a decision. Anyone may call this.
+    ///
+    /// Default resolution: the milestone reverts to its pre-dispute status
+    /// with its original approval ledger, so the release schedule continues
+    /// as if the dispute had not been raised. Partial arbitrator votes are
+    /// discarded. The `timeout` event (distinct from `resolved`) carries the
+    /// vote tallies so off-chain systems can flag it for manual review.
+    pub fn resolve_expired_dispute(
+        env: Env,
+        proposal_id: BytesN<32>,
+    ) -> Result<(), MilestoneError> {
+        let mut dispute = Self::read_dispute(&env, &proposal_id)?;
+        if dispute.outcome != DisputeOutcome::Pending {
+            return Err(MilestoneError::DisputeAlreadyResolved);
+        }
+        if env.ledger().sequence() <= dispute.deadline_ledger {
+            return Err(MilestoneError::ArbitrationWindowOpen);
+        }
+
+        let mut record = Self::read_milestone(&env, &proposal_id)?;
+        record.status = dispute.prior_status.clone();
+        Self::set_milestone(&env, &proposal_id, &record);
+
+        dispute.outcome = DisputeOutcome::TimedOut;
+        Self::set_dispute(&env, &proposal_id, &dispute);
+
+        env.events().publish(
+            (symbol_short!("dispute"), symbol_short!("timeout")),
+            (proposal_id, dispute.uphold_votes, dispute.reject_votes),
+        );
+        Self::bump_instance(&env);
+
+        Ok(())
+    }
+
+    pub fn get_arbitration_config(env: Env) -> Result<ArbitrationConfig, MilestoneError> {
+        Self::read_arbitration_config(&env)
+    }
+
+    pub fn get_dispute(env: Env, proposal_id: BytesN<32>) -> Result<DisputeRecord, MilestoneError> {
+        Self::read_dispute(&env, &proposal_id)
     }
 
     pub fn set_min_delay_ledgers(

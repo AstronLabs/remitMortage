@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import cron from "node-cron";
 import logger from "../utils/logger.js";
 import { startPartitionManager } from "./partitionManager.js";
@@ -6,18 +9,30 @@ import { runKycExpiryReminderJob } from "./kycExpiryReminder.js";
 import { runEscrowReconciliation } from "./escrowReconciliation.js";
 import { runApplicationSlaMonitorJob } from "./applicationSlaMonitor.js";
 import { runAdminPortfolioDigestJob } from "./adminPortfolioDigest.js";
+import { runSlowQueryDigestJob } from "./slowQueryDigest.js";
 import { runSessionTokenPurgeJob } from "./sessionTokenPurge.js";
 import { runOrphanedRecordCleanupJob } from "./orphanedRecordCleanup.js";
 import { startAnalyticsRefreshScheduler, stopAnalyticsRefreshScheduler } from "./analyticsRefresh.js";
+import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
+import { runRateLimitAuditJob } from "./rateLimitAudit.js";
+import { runDeadlockDetectionJob } from "./deadlockDetection.js";
+import { applyDueServicingTransfers } from "../services/loanServicing.js";
+import { prisma } from "../services/db.js";
+import { createPrismaSlowQueryStore } from "../services/slowQueryLog.js";
 
 let schedulerTask: ReturnType<typeof cron.schedule> | null = null;
 let kycExpiryTask: ReturnType<typeof cron.schedule> | null = null;
 let escrowReconciliationTask: ReturnType<typeof cron.schedule> | null = null;
 let applicationSlaTask: ReturnType<typeof cron.schedule> | null = null;
 let adminDigestTask: ReturnType<typeof cron.schedule> | null = null;
+let slowQueryDigestTask: ReturnType<typeof cron.schedule> | null = null;
 let sessionTokenPurgeTask: ReturnType<typeof cron.schedule> | null = null;
 let orphanedRecordCleanupTask: ReturnType<typeof cron.schedule> | null = null;
 let staleDraftCleanupTask: ReturnType<typeof cron.schedule> | null = null;
+let suspiciousActivityTask: ReturnType<typeof cron.schedule> | null = null;
+let rateLimitAuditTask: ReturnType<typeof cron.schedule> | null = null;
+let deadlockDetectionTask: ReturnType<typeof cron.schedule> | null = null;
+let servicingTransferTask: ReturnType<typeof cron.schedule> | null = null;
 
 export function startScheduler() {
   if (schedulerTask) {
@@ -77,11 +92,50 @@ export function startScheduler() {
     await runAdminPortfolioDigestJob();
   }, { timezone: "UTC" });
 
+  // Weekly (Mon 09:00 UTC) by default: ranked slow-query digest for the team.
+  // Set SLOW_QUERY_DIGEST_CRON_SCHEDULE to override the cadence.
+  const slowQuerySchedule =
+    process.env.SLOW_QUERY_DIGEST_CRON_SCHEDULE || "0 9 * * 1";
+  slowQueryDigestTask = cron.schedule(slowQuerySchedule, async () => {
+    console.log("[Scheduler] Triggering slow query digest job...");
+    await runSlowQueryDigestJob({ store: createPrismaSlowQueryStore(prisma) });
+  }, { timezone: "UTC" });
+
+  const amlSchedule = process.env.AML_SCAN_CRON_SCHEDULE || "*/15 * * * *";
+  suspiciousActivityTask = cron.schedule(amlSchedule, async () => {
+    try {
+      await runSuspiciousActivityScan();
+    } catch (error) {
+      logger.error("[Scheduler] Suspicious activity scan failed", { error });
+    }
+  }, { timezone: "UTC" });
+
+  const auditSchedule = process.env.RATE_LIMIT_AUDIT_CRON_SCHEDULE || "0 * * * *"; // Hourly by default
+  rateLimitAuditTask = cron.schedule(auditSchedule, async () => {
+    console.log("[Scheduler] Triggering rate limit audit job...");
+    await runRateLimitAuditJob();
+  }, { timezone: "UTC" });
+
+  const deadlockSchedule = process.env.DEADLOCK_DETECTION_CRON_SCHEDULE || "*/5 * * * *"; // Every 5 minutes
+  deadlockDetectionTask = cron.schedule(deadlockSchedule, async () => {
+    await runDeadlockDetectionJob();
+  }, { timezone: "UTC" });
+
+  // Every 15 minutes: apply loan servicing transfers whose effective date has passed
+  const servicingSchedule = process.env.LOAN_SERVICING_TRANSFER_CRON_SCHEDULE || "*/15 * * * *";
+  servicingTransferTask = cron.schedule(servicingSchedule, async () => {
+    try {
+      await applyDueServicingTransfers();
+    } catch (error) {
+      logger.error("[Scheduler] Loan servicing transfer job failed", { error });
+    }
+  }, { timezone: "UTC" });
+
   // Start the materialized view refresh scheduler (every 5 minutes by default)
   startAnalyticsRefreshScheduler();
 
   console.log(
-    "[Scheduler] Started: repayment audit, session token purge, orphaned record cleanup, KYC expiry reminder, escrow reconciliation, application SLA monitor, admin portfolio digest, and analytics refresh jobs scheduled."
+    "[Scheduler] Started: repayment audit, session token purge, orphaned record cleanup, KYC expiry reminder, escrow reconciliation, application SLA monitor, admin portfolio digest, slow query digest, suspicious activity scan, rate limit audit, deadlock detection, loan servicing transfer, and analytics refresh jobs scheduled."
   );
 }
 
@@ -113,6 +167,26 @@ export function stopScheduler() {
   if (adminDigestTask) {
     adminDigestTask.stop();
     adminDigestTask = null;
+  }
+  if (slowQueryDigestTask) {
+    slowQueryDigestTask.stop();
+    slowQueryDigestTask = null;
+  }
+  if (suspiciousActivityTask) {
+    suspiciousActivityTask.stop();
+    suspiciousActivityTask = null;
+  }
+  if (rateLimitAuditTask) {
+    rateLimitAuditTask.stop();
+    rateLimitAuditTask = null;
+  }
+  if (deadlockDetectionTask) {
+    deadlockDetectionTask.stop();
+    deadlockDetectionTask = null;
+  }
+  if (servicingTransferTask) {
+    servicingTransferTask.stop();
+    servicingTransferTask = null;
   }
   stopAnalyticsRefreshScheduler();
   console.log("[Scheduler] Stopped.");

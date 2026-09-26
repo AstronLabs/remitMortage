@@ -1,8 +1,10 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 export const dynamic = "force-dynamic";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import loadDynamic from "next/dynamic";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
@@ -35,6 +37,7 @@ import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSo
 import { useWidgetStore, WidgetId } from '../stores/useWidgetStore';
 import { SortableWidget } from '../../components/dashboard/SortableWidget';
 import { WidgetSettingsModal } from '../../components/dashboard/WidgetSettingsModal';
+import { useAutoRefresh } from '../../hooks/useAutoRefresh';
 import { track } from "../../lib/analytics";
 
 
@@ -58,6 +61,41 @@ const SAMPLE_MILESTONES: MilestoneNode[] = [
     evidence: [
       { label: "Inspection Report (PDF)", url: "ipfs://QmX1...foundation" },
       { label: "Soil Analysis", url: "https://example.com/soil-report" },
+    ],
+    revisions: [
+      {
+        id: "m1-r1",
+        cid: "QmX1...foundation",
+        url: "ipfs://QmX1...foundation",
+        label: "Inspection Report (PDF) v1",
+        description: "Initial foundation inspection — soil report pending.",
+        costEstimate: 12000,
+        sha256: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        uploadedAt: "2026-03-10T10:00:00.000Z",
+        version: 1,
+      },
+      {
+        id: "m1-r2",
+        cid: "QmX1...foundation-v2",
+        url: "ipfs://QmX1...foundation-v2",
+        label: "Inspection Report (PDF) v2",
+        description: "Foundation inspection updated — soil report verified, added drainage notes.",
+        costEstimate: 13500,
+        sha256: "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+        uploadedAt: "2026-03-12T14:30:00.000Z",
+        version: 2,
+      },
+      {
+        id: "m1-r3",
+        cid: "QmX1...foundation-v3",
+        url: "ipfs://QmX1...foundation-v3",
+        label: "Inspection Report (PDF) v3",
+        description: "Foundation inspection updated — soil report verified, added drainage notes.",
+        costEstimate: 14200,
+        sha256: "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
+        uploadedAt: "2026-03-14T09:00:00.000Z",
+        version: 3,
+      },
     ],
     voters: [
       { address: "GABC...1234", vote: "yes", weight: 40 },
@@ -130,7 +168,7 @@ export default function DashboardPage() {
     if (isConnected && publicKey) track("borrower_dashboard_viewed");
   }, [isConnected, publicKey]);
 
-  const { order, visibility, setOrder } = useWidgetStore();
+  const { order, visibility, setOrder, refreshInterval } = useWidgetStore();
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -156,7 +194,7 @@ export default function DashboardPage() {
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
                   Escrow Deposited
                 </span>
-                <div className="text-2xl font-extrabold text-cyan-400 mt-1 font-mono">
+                <div className="text-2xl font-extrabold status-info mt-1 font-mono">
                   ${Number(status?.escrow.deposited).toLocaleString()} USDC
                 </div>
               </div>
@@ -172,7 +210,7 @@ export default function DashboardPage() {
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
                   Escrow Progress
                 </span>
-                <div className="text-2xl font-extrabold text-emerald-400 mt-1 font-mono">
+                <div className="text-2xl font-extrabold status-healthy mt-1 font-mono">
                   {status?.escrow.progress}%
                 </div>
               </div>
@@ -180,7 +218,7 @@ export default function DashboardPage() {
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
                   Loan Principal
                 </span>
-                <div className="text-2xl font-extrabold text-indigo-400 mt-1 font-mono">
+                <div className="text-2xl font-extrabold status-pending mt-1 font-mono">
                   ${Number(status?.loan.principal).toLocaleString()} USDC
                 </div>
               </div>
@@ -345,22 +383,19 @@ export default function DashboardPage() {
     }
   }, []);
 
-  useEffect(() => {
-    if (!isConnected) {
-      router.push("/");
-      return;
-    }
-
-    if (!publicKey) return;
-
-    async function load() {
-      setLoading(true);
-      setError(null);
+  const loadStatus = useCallback(
+    async ({ background = false }: { background?: boolean } = {}) => {
+      if (!publicKey) return;
+      if (!background) {
+        setLoading(true);
+        setError(null);
+      }
       try {
         const res = await fetch(`/api/borrower/${publicKey}/status`);
         if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
         const data = await res.json();
         setStatus(data);
+        setError(null);
         setMilestones(SAMPLE_MILESTONES);
         const missed = data.loan?.missedPayments ?? 0;
         setRecoveryPlan(
@@ -371,14 +406,30 @@ export default function DashboardPage() {
           })
         );
       } catch (e: any) {
-        setError(e?.message || "Failed to load borrower status");
+        // A failed background poll keeps the last good data on screen.
+        if (!background) setError(e?.message || "Failed to load borrower status");
       } finally {
-        setLoading(false);
+        if (!background) setLoading(false);
       }
+    },
+    [publicKey]
+  );
+
+  useEffect(() => {
+    if (!isConnected) {
+      router.push("/");
+      return;
+    }
+
+    async function load() {
+      await loadStatus();
     }
 
     load();
-  }, [isConnected, publicKey, router]);
+  }, [isConnected, loadStatus, router]);
+
+  const backgroundRefresh = useCallback(() => loadStatus({ background: true }), [loadStatus]);
+  useAutoRefresh(backgroundRefresh, refreshInterval, isConnected && !!publicKey);
 
   return (
     <div className="rm-app-page min-h-screen bg-[#060913] text-slate-100 pb-20">

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Queue, QueueOptions, Job, JobsOptions } from "bullmq";
 import { getClusterClient, isClusterMode, getClusterStatus } from "./redisCluster.js";
 import logger from "../utils/logger.js";
@@ -9,6 +12,8 @@ export interface NotificationJobData {
   recipient: string;
   type: NotificationJobType;
   content: string;
+  /** Tenant whose branding the notification is sent with. */
+  tenantId?: string;
 }
 
 export type WebhookJobTopic =
@@ -30,6 +35,7 @@ export interface WebhookJobData {
     ledger: number;
   };
   attempt: number;
+  webhookSchemaVersion: number;
 }
 
 export interface EmailJobData {

@@ -1,7 +1,11 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { PrismaClient, Prisma } from "@prisma/client";
 import { createHash } from "crypto";
 
 import { encrypt, decrypt } from "../utils/crypto.js";
+import { hashTaxId } from "../utils/taxIdHash.js";
 import {
   buildDatabaseUrl,
   resolveReadReplicaSettings,
@@ -10,6 +14,11 @@ import {
   createDbPoolMetricsExtension,
   initDbPoolMetrics,
 } from "./dbPoolMetrics.js";
+import {
+  createPrismaSlowQueryStore,
+  createSlowQueryLoggingExtension,
+  getSlowQueryThresholdMs,
+} from "./slowQueryLog.js";
 import { configuredSecretId, secrets } from "./secretsManager.js";
 
 export type VerificationStatus = "PENDING" | "ELIGIBLE" | "INELIGIBLE";
@@ -30,9 +39,13 @@ const { url: replicaUrl, lagThresholdSeconds } = resolveReadReplicaSettings();
 function createPrismaClient(url: string | undefined): any {
   let baseClient: any;
   try {
-    baseClient = new PrismaClient(
-      url ? { datasources: { db: { url } } } : undefined
-    );
+    // `datasources` is a pre-v7 option; Prisma 7 requires a driver adapter
+    // (or Accelerate) instead. We still pass it when present because older
+    // runtimes read it, and cast because the v7 types no longer accept it.
+    const options = url
+      ? ({ datasources: { db: { url } } } as never)
+      : undefined;
+    baseClient = new PrismaClient(options);
   } catch {
   // Prisma v7 requires a driver adapter; when running in unit tests we
   // prefer a harmless in-process mock so imports don't throw during test
@@ -79,13 +92,33 @@ function createPrismaClient(url: string | undefined): any {
   initDbPoolMetrics();
   if (typeof baseClient.$extends !== "function") return baseClient;
 
+  let client = baseClient;
   try {
-    const rows = (await (readReplicaPrisma as any).$queryRaw`SELECT COALESCE(EXTRACT(EPOCH FROM (NOW() - pg_last_xact_replay_timestamp()))::int, 0) AS lag_seconds`) as Array<{ lag_seconds: number | string | null }>;
-    const lag = Number(rows?.[0]?.lag_seconds ?? 0);
-    return Number.isFinite(lag) ? lag : null;
+    client = client.$extends(createDbPoolMetricsExtension());
   } catch {
-    return null;
+    // Metrics are best-effort; keep the base client if the extension fails.
   }
+
+  // Capture operations that outrun the configurable slow-query threshold and
+  // persist them for the weekly digest (#583). The store writes back through
+  // this same client, so the extension skips its own model to avoid recursion.
+  try {
+    const slowQueryStore = createPrismaSlowQueryStore(client);
+    client = client.$extends(
+      createSlowQueryLoggingExtension({
+        thresholdMs: getSlowQueryThresholdMs(),
+        onSlowQuery: (entry) => {
+          void slowQueryStore.record(entry).catch(() => {
+            // Slow-query capture must never affect request handling.
+          });
+        },
+      })
+    );
+  } catch {
+    // Slow-query logging is best-effort.
+  }
+
+  return client;
 }
 
 export const prisma = createPrismaClient(dbUrl);
@@ -381,7 +414,10 @@ export async function upsertApplicant(
     monthlyIncome?: string;
   }
 ) {
-  const encrypted = encryptFields(data);
+  const encrypted: Record<string, any> = encryptFields(data);
+  if (data.taxId) {
+    encrypted.taxIdHash = hashTaxId(data.taxId);
+  }
   return prisma.applicant.upsert({
     where: { stellarAddress },
     update: { ...encrypted, deletedAt: null, updatedAt: new Date() },
@@ -700,6 +736,7 @@ export async function processUserDataDeletion(stellarAddress: string, reason?: s
       where: { id: applicant.id },
       data: {
         taxId: null,
+        taxIdHash: null,
         monthlyIncome: null,
         creditScore: null,
         verificationStatus: "INELIGIBLE",

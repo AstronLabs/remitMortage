@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 //! Invariant-based property tests for Escrow deposit/withdraw math.
 //!
 //! Each `proptest!` block drives hundreds of randomised inputs through a core
@@ -39,6 +42,14 @@ fn make_config(admin: Address, token: Address) -> EscrowConfig {
         penalty_bps_tier4: 50,   // 0.5% month 7+
         grace_period_ledgers: 10,
         default_penalty_bps: 1_000,
+        instance_bump_amount: 1_000,
+        instance_lifetime_threshold: 100,
+        persistent_bump_amount: 1_000,
+        persistent_lifetime_threshold: 100,
+        yield_vault: None,
+        match_bps: 0,
+        match_cap: 0,
+        permissioned_mode: false,
     }
 }
 

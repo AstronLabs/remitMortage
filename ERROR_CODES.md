@@ -58,6 +58,11 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 31 | `NoClaimableFunds` | Escrow has no deposited balance, or is already released, withdrawn, or seized, so there is nothing for a beneficiary to claim. |
 | 32 | `BeneficiaryInactivityNotElapsed` | The owner inactivity period has not yet elapsed. |
 | 33 | `InsufficientAttestationQuorum` | Fewer approved attestations than the configured quorum threshold. |
+| 34 | `AutoDepositNotConfigured` | No auto-deposit schedule is configured for this borrower/goal escrow. |
+| 35 | `AutoDepositNotDue` | The auto-deposit interval has not elapsed since the last scheduled draw. |
+| 36 | `InsufficientAllowance` | The borrower's token allowance to the escrow is below the scheduled amount. |
+| 37 | `InsufficientBalance` | The borrower's token balance is below the scheduled amount. |
+| 38 | `InvalidAutoDepositInterval` | Auto-deposit interval must be greater than zero ledgers. |
 
 ## lending-pool (`PoolError`)
 

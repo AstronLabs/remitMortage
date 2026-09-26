@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 /** Demo / sandbox mode toggle.
  *  When enabled, certain API routes skip real contract interactions and
  *  return mock data. Useful for frontend development and integration testing

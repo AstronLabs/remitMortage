@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import type { Request, Response, NextFunction } from "express";
 import { getRedisClient } from "../services/redis.js";
 import logger from "../utils/logger.js";

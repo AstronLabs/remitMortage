@@ -1,0 +1,4 @@
+{
+  "_comment": "Additional glob patterns to exclude from license header enforcement. Built-in defaults (node_modules, .next, out, target, dist, build, coverage, .swc, .terraform, storage/kyc-private, next-env.d.ts, *.wasm, *.tsbuildinfo, *.d.ts) are always ignored — see DEFAULT_IGNORE_PATTERNS in scripts/check-license-header.mjs. Add project-specific generated or vendored paths here.",
+  "ignore": []
+}

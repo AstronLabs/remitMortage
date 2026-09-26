@@ -166,6 +166,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "permissioned_mode"
+                      },
+                      "val": {
+                        "bool": false
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "persistent_bump_amount"
                       },
                       "val": {
@@ -488,6 +496,14 @@
                               },
                               "val": {
                                 "u32": 50
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "permissioned_mode"
+                              },
+                              "val": {
+                                "bool": false
                               }
                             },
                             {

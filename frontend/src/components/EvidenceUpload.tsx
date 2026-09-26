@@ -1,7 +1,18 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
-import React, { useState, useRef } from "react";
+import React, { useReducer, useState, useRef } from "react";
 import { track } from "../lib/analytics";
+import {
+  UPLOAD_ERROR_MESSAGES,
+  UploadError,
+  initialUploadState,
+  isRetryable,
+  uploadReducer,
+  uploadWithProgress,
+  type UploadErrorKind,
+} from "../lib/documentUpload";
 
 interface EvidenceUploadProps {
   milestoneId: string;
@@ -25,7 +36,8 @@ export default function EvidenceUpload({ milestoneId, onUploadSuccess }: Evidenc
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
+  const [upload, dispatch] = useReducer(uploadReducer, initialUploadState);
+  const isUploading = upload.status === "uploading";
   const [cid, setCid] = useState<string | null>(null);
   const [sha256Hash, setSha256Hash] = useState<string | null>(null);
 
@@ -35,19 +47,20 @@ export default function EvidenceUpload({ milestoneId, onUploadSuccess }: Evidenc
     setError(null);
     setCid(null);
     setSha256Hash(null);
+    dispatch({ type: "RESET" });
 
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
 
     if (!ALLOWED_TYPES.includes(selectedFile.type)) {
-      setError("Unsupported file type. Please upload JPG, PNG, WEBP, or MP4.");
+      setError(UPLOAD_ERROR_MESSAGES.unsupported_type);
       setFile(null);
       setPreviewUrl(null);
       return;
     }
 
     if (selectedFile.size > MAX_FILE_SIZE) {
-      setError("File size exceeds 10MB limit.");
+      setError(UPLOAD_ERROR_MESSAGES.file_too_large);
       setFile(null);
       setPreviewUrl(null);
       return;
@@ -58,10 +71,12 @@ export default function EvidenceUpload({ milestoneId, onUploadSuccess }: Evidenc
     setPreviewUrl(objectUrl);
   };
 
-  const handleUpload = async () => {
+  // The selected file stays in state after a failure, so retry re-sends it
+  // without the applicant having to pick it again.
+  const handleUpload = async (isRetry = false) => {
     if (!file) return;
 
-    setIsUploading(true);
+    dispatch({ type: isRetry ? "RETRY" : "START" });
     setError(null);
 
     try {
@@ -73,27 +88,23 @@ export default function EvidenceUpload({ milestoneId, onUploadSuccess }: Evidenc
       formData.append("milestoneId", milestoneId);
       formData.append("sha256_hash", hashHex);
 
-      const res = await fetch("/api/milestone/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!res.ok) {
-        throw new Error("Upload failed");
-      }
-
-      const data = await res.json();
+      const data = await uploadWithProgress<{ cid?: string }>(
+        "/api/milestone/upload",
+        formData,
+        (progress) => dispatch({ type: "PROGRESS", progress })
+      );
       if (data.cid) {
+        dispatch({ type: "SUCCESS" });
         setCid(data.cid);
         track("document_uploaded", { documentType: "milestone_evidence" });
         onUploadSuccess(data.cid, hashHex);
       } else {
-        throw new Error("Invalid response from server");
+        throw new UploadError("server");
       }
-    } catch (err: any) {
-      setError(err.message || "An error occurred during upload.");
-    } finally {
-      setIsUploading(false);
+    } catch (err: unknown) {
+      const kind: UploadErrorKind = err instanceof UploadError ? err.kind : "network";
+      dispatch({ type: "FAILURE", error: kind });
+      setError(UPLOAD_ERROR_MESSAGES[kind]);
     }
   };
 
@@ -121,7 +132,11 @@ export default function EvidenceUpload({ milestoneId, onUploadSuccess }: Evidenc
               cursor-pointer"
           />
 
-          {error && <div className="text-[var(--error)] text-sm">{error}</div>}
+          {error && (
+            <div role="alert" className="text-[var(--error)] text-sm">
+              {error}
+            </div>
+          )}
 
           {previewUrl && file && (
             <div className="mt-4">
@@ -142,13 +157,41 @@ export default function EvidenceUpload({ milestoneId, onUploadSuccess }: Evidenc
             </div>
           )}
 
-          <button
-            onClick={handleUpload}
-            disabled={!file || isUploading}
-            className={`w-full py-2 rounded-md font-semibold transition-colors ${!file || isUploading ? "bg-gray-700 text-gray-400 cursor-not-allowed" : "bg-[var(--success)] text-white hover:bg-emerald-400"}`}
-          >
-            {isUploading ? "Uploading to IPFS..." : "Submit Evidence"}
-          </button>
+          {upload.status === "uploading" && (
+            <div className="space-y-1" aria-live="polite">
+              <div
+                role="progressbar"
+                aria-label={`Uploading ${file?.name ?? "document"}`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={upload.progress}
+                className="h-2 w-full rounded-full bg-[var(--border-color)] overflow-hidden"
+              >
+                <div
+                  className="h-full bg-[var(--accent-primary)] transition-all"
+                  style={{ width: `${upload.progress}%` }}
+                />
+              </div>
+              <p className="text-xs text-[var(--text-muted)]">{`Uploading… ${upload.progress}%`}</p>
+            </div>
+          )}
+
+          {upload.status === "failed" && isRetryable(upload.error) ? (
+            <button
+              onClick={() => handleUpload(true)}
+              className="w-full py-2 rounded-md font-semibold transition-colors bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-primary-light)]"
+            >
+              Retry Upload
+            </button>
+          ) : (
+            <button
+              onClick={() => handleUpload()}
+              disabled={!file || isUploading}
+              className={`w-full py-2 rounded-md font-semibold transition-colors ${!file || isUploading ? "bg-gray-700 text-gray-400 cursor-not-allowed" : "bg-[var(--success)] text-white hover:bg-emerald-400"}`}
+            >
+              {isUploading ? "Uploading to IPFS..." : "Submit Evidence"}
+            </button>
+          )}
         </div>
       ) : (
         <div className="bg-[var(--success)]/10 border border-[var(--success)]/30 rounded-md p-4 flex flex-col items-center">

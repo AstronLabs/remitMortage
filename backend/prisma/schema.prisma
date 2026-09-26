@@ -176,6 +176,9 @@ model Applicant {
   verificationStatus VerificationStatus @default(PENDING)
   creditScore        Int?
   taxId              String?
+  /// Keyed HMAC of the normalized tax ID, used for duplicate detection. The
+  /// plaintext value is never stored; `taxId` holds the encrypted copy.
+  taxIdHash          String?
   monthlyIncome      String?
   displayCurrency    String             @default("USD")
   createdAt          DateTime           @default(now())
@@ -189,6 +192,7 @@ model Applicant {
   deletedAt          DateTime?
 
   @@index([deletedAt])
+  @@index([taxIdHash])
 }
 
 model VerificationResult {
@@ -275,6 +279,11 @@ model LoanApplication {
 
   // SLA and reviewer tracking fields
   assignedReviewerEmail String?
+  // Assignment queue (issue #621): the review staff member this application was
+  // automatically (round-robin) or manually assigned to.
+  assignedReviewerId    String?   @map("assigned_reviewer_id")
+  assignedReviewer      Reviewer? @relation("AssignedReviewer", fields: [assignedReviewerId], references: [id])
+  assignedAt            DateTime?
   statusUpdatedAt       DateTime   @default(now())
   slaAlertSentAt        DateTime?
   deletedAt            DateTime?
@@ -291,6 +300,16 @@ model LoanApplication {
   autoRejectedAt         DateTime?
   autoRejectionLogs      LoanAutoRejectionLog[]
 
+  // Set when the application needs a reviewer before it can proceed, e.g.
+  // DUPLICATE_TAX_ID when the tax ID matches another applicant.
+  manualReviewReason     String?
+
+  // Current servicer of record. Null means the originating lender still
+  // services the loan. Changed only through LoanServicingTransfer.
+  servicer               String?
+  servicerContact        String?
+  servicingTransfers     LoanServicingTransfer[]
+
   // Index backing getApplicationsByBorrower(): filter by applicant then sort by createdAt
   @@index([applicantId, createdAt])
   // Index backing getPendingApplications(): WHERE status = 'Pending' — avoids full table scan
@@ -302,6 +321,70 @@ model LoanApplication {
   @@index([deletedAt])
   // Composite index backing the stale draft cleanup scan: WHERE status = 'Draft' AND lastActivityAt < cutoff
   @@index([status, lastActivityAt])
+  // Index backing reviewer workload queries (applications assigned to a reviewer)
+  @@index([assignedReviewerId])
+}
+
+enum ServicingTransferStatus {
+  SCHEDULED
+  COMPLETED
+}
+
+/// Append-only history of servicing rights transfers for a loan. Rows are
+/// never overwritten, so every prior servicer stays queryable.
+model LoanServicingTransfer {
+  id                  String                  @id @default(uuid())
+  loanApplicationId   String
+  loanApplication     LoanApplication         @relation(fields: [loanApplicationId], references: [id], onDelete: Cascade)
+  fromServicer        String?
+  fromServicerContact String?
+  toServicer          String
+  toServicerContact   String
+  effectiveDate       DateTime
+  reason              String
+  status              ServicingTransferStatus @default(SCHEDULED)
+  initiatedBy         String
+  notifiedAt          DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime                @default(now())
+
+  @@index([loanApplicationId, createdAt])
+  // Backs the job that applies due transfers: WHERE status = 'SCHEDULED' AND effectiveDate <= now()
+  @@index([status, effectiveDate])
+}
+
+enum AutoRejectionRuleType {
+  MIN_CREDIT_SCORE
+  MAX_DEBT_TO_INCOME
+  REQUIRES_VERIFICATION
+}
+
+model LoanAutoRejectionRule {
+  id        String              @id @default(uuid())
+  name      String
+  ruleType  AutoRejectionRuleType
+  config    Json
+  active    Boolean             @default(true)
+  priority  Int                 @default(0)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  logs      LoanAutoRejectionLog[]
+
+  @@index([active, priority])
+}
+
+model LoanAutoRejectionLog {
+  id            String                @id @default(uuid())
+  applicationId String
+  application   LoanApplication       @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  ruleId        String
+  rule          LoanAutoRejectionRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  reason        String
+  createdAt     DateTime              @default(now())
+
+  @@index([applicationId])
+  @@index([ruleId])
+  @@index([createdAt])
 }
 
 model LoanComment {
@@ -356,6 +439,7 @@ model Borrower {
   withdrawals     EscrowWithdrawal[]
   disbursements   LoanDisbursement[]
   repayments      LoanRepayment[]
+  suspiciousActivityAlerts SuspiciousActivityAlert[]
 
   @@index([deletedAt])
 }
@@ -386,6 +470,35 @@ model EscrowWithdrawal {
 
   @@index([borrowerId])
   @@index([ledger])
+}
+
+/// A reviewable AML alert generated from the rolling escrow transaction window.
+/// Evidence is deliberately stored as structured JSON so an admin can audit
+/// the exact transactions and thresholds that produced the alert.
+model SuspiciousActivityAlert {
+  id               String   @id @default(uuid())
+  borrowerId       String
+  borrower         Borrower @relation(fields: [borrowerId], references: [id])
+  ruleCode         String
+  ruleName         String
+  status           SuspiciousActivityStatus @default(OPEN)
+  windowStart      DateTime
+  windowEnd        DateTime
+  evidence         Json
+  detectedAt       DateTime @default(now())
+  reviewedAt       DateTime?
+  reviewedBy       String?
+  reviewNotes      String?
+
+  @@unique([borrowerId, ruleCode, windowStart])
+  @@index([status, detectedAt])
+  @@index([borrowerId, detectedAt])
+}
+
+enum SuspiciousActivityStatus {
+  OPEN
+  CLEARED
+  CONFIRMED
 }
 
 model LoanDisbursement {
@@ -523,6 +636,10 @@ model WebhookSubscription {
   status      WebhookSubscriptionStatus @default(active)
   /// Optional owning wallet address — used to scope management API access.
   ownerAddress String?
+  /// Payload contract selected by the subscriber. New subscriptions use v2.
+  webhookSchemaVersion Int                       @default(2)
+  /// Set when the selected version is approaching removal.
+  deprecationNotifiedAt DateTime?
   createdAt   DateTime                  @default(now())
   updatedAt   DateTime                  @updatedAt
 
@@ -531,6 +648,7 @@ model WebhookSubscription {
   @@index([status])
   @@index([ownerAddress])
   @@index([secretRotatedAt])
+  @@index([webhookSchemaVersion])
 }
 
 /// Immutable delivery attempt record — one row per HTTP attempt.
@@ -556,11 +674,18 @@ model WebhookDelivery {
   attempt        Int                 @default(0)
   /// When the next retry should be attempted (null once terminal).
   nextRetryAt    DateTime?
+  /// When the event was originally dispatched (shared by every attempt of one dispatch).
+  dispatchedAt   DateTime?
+  /// When this attempt finished (response received or request failed).
+  completedAt    DateTime?
+  /// Attempt outcome: "success", "retry" (will be retried) or "dlq" (moved to the DLQ).
+  outcome        String?
   createdAt      DateTime            @default(now())
 
   @@index([subscriptionId])
   @@index([success])
   @@index([nextRetryAt])
+  @@index([completedAt])
 }
 
 model ApiKey {
@@ -713,4 +838,84 @@ model WaitlistEntry {
   @@index([email])
   @@index([status])
   @@index([createdAt])
+}
+
+/// Availability of review staff for the assignment queue (issue #621).
+/// Only `ACTIVE` reviewers take part in the round-robin rotation.
+enum ReviewerStatus {
+  ACTIVE
+  INACTIVE
+  ON_LEAVE
+}
+
+/// Review staff that new loan applications are distributed across by the
+/// round-robin assignment queue (issue #621).
+model Reviewer {
+  id             String         @id @default(uuid())
+  email          String         @unique
+  name           String?
+  status         ReviewerStatus @default(ACTIVE)
+  /// Stamped on every assignment so the queue can pick the least-recently
+  /// assigned active reviewer and keep the distribution even.
+  lastAssignedAt DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  assignedApplications LoanApplication[] @relation("AssignedReviewer")
+
+  @@index([status, lastAssignedAt])
+}
+
+/// One captured database operation whose duration exceeded the configurable
+/// slow-query threshold. Rows are rolled up by `fingerprint` into the weekly
+/// digest (issue #583).
+model SlowQueryLog {
+  id          String   @id @default(uuid())
+  /// Normalized query pattern (literals stripped) used for grouping.
+  query       String
+  /// Stable hash of the normalized pattern; groups equivalent statements.
+  fingerprint String
+  /// Prisma model the operation ran against, when applicable.
+  model       String?
+  /// Prisma operation name (e.g. findMany, create), when applicable.
+  operation   String?
+  /// Wall-clock duration of the operation in milliseconds.
+  durationMs  Int
+  occurredAt  DateTime @default(now())
+
+  @@index([occurredAt])
+  @@index([fingerprint])
+  @@index([fingerprint, occurredAt])
+}
+
+enum EmailSuppressionReason {
+  HARD_BOUNCE
+  SOFT_BOUNCE
+  SPAM_COMPLAINT
+}
+
+/// Outbound email suppression list, fed by the email provider's bounce and
+/// complaint webhook. Every send checks this table first. Hard bounces and spam
+/// complaints suppress permanently; soft bounces suppress until
+/// `suppressedUntil` (exponential backoff) and become permanent after repeated
+/// failures.
+model EmailSuppression {
+  id               String                 @id @default(uuid())
+  /// Lower-cased, trimmed recipient address.
+  email            String                 @unique
+  reason           EmailSuppressionReason
+  /// True for hard bounces and complaints; soft bounces rely on `suppressedUntil`.
+  permanent        Boolean                @default(false)
+  /// End of the current soft-bounce backoff window.
+  suppressedUntil  DateTime?
+  softBounceCount  Int                    @default(0)
+  /// Internal flag raised on spam complaints for staff follow-up.
+  flaggedForReview Boolean                @default(false)
+  /// Provider-supplied reason text from the most recent event.
+  lastDetail       String?
+  lastEventAt      DateTime               @default(now())
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@index([permanent])
 }

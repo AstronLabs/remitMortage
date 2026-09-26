@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { EventEmitter } from "events";
 import { tracingMiddleware } from "../middleware/tracingMiddleware.js";
 import { trace } from "@opentelemetry/api";

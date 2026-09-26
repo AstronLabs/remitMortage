@@ -1,13 +1,12 @@
-import { prisma, getNotificationPreference, type NotificationFrequency } from "./db.js";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
+import { prisma, getNotificationPreference } from "./db.js";
 import logger from "../utils/logger.js";
 import { sendEmail, sendDepositReceipt, sendRepaymentReminder, sendLoanStatusUpdate } from "./email.js";
 import { sendWebhook } from "./webhook.js";
 import { queueService } from "./queueService.js";
-import {
-  getCommunicationPreferences,
-  type CommunicationCategory,
-  type CommunicationChannel,
-} from "./communicationPreferences.js";
+import { getCurrentTenant } from "./tenant.js";
 
 export type NotificationType = "EMAIL" | "WEBHOOK" | "SMS" | "PUSH";
 
@@ -174,6 +173,7 @@ export async function queueNotification(
     recipient,
     type,
     content,
+    tenantId: getCurrentTenant().id,
   }, {
     attempts: MAX_ATTEMPTS,
     backoff: { type: "exponential", delay: BASE_BACKOFF_MS },

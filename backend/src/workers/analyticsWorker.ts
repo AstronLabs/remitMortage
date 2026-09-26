@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Worker, type WorkerOptions } from "bullmq";
 import { getClusterClient } from "../services/redisCluster.js";
 import { processAnalyticsJob, type AnalyticsJobData } from "../services/analyticsEvents.js";

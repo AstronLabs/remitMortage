@@ -130,6 +130,31 @@ The frontend is built using Next.js, Tailwind CSS, and Freighter Wallet.
 *   Maintain clean TypeScript interfaces for all components.
 *   Follow our custom design tokens (supporting modern responsive dark mode with glassmorphic visuals).
 
+### License Header
+
+Every source file under `backend/src`, `frontend/src`, and `contracts/*/src` must start with the MIT license header:
+
+```text
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+```
+
+The `License Header` CI job (`.github/workflows/license-header.yml`) scans these paths on every PR and fails with the exact file path when the header is missing. Generated and vendored paths (`node_modules`, `.next`, `target`, `dist`, `build`, `coverage`, etc.) are excluded via the documented ignore list in `scripts/license-header-ignore.json` and the built-in defaults in `scripts/check-license-header.mjs`.
+
+**Check locally:**
+
+```bash
+node scripts/check-license-header.mjs
+```
+
+**Auto-fix locally (inserts the header without touching other content, preserves `"use client"` / `"use server"` and shebang placement):**
+
+```bash
+node scripts/check-license-header.mjs --fix
+```
+
+To exclude a generated or vendored path, add a glob to `scripts/license-header-ignore.json` and document why it is generated/vendored in the PR description.
+
 ---
 
 ## Git Workflow & Commit Standards

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "../config.js";
 import {

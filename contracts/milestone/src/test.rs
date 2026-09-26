@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 #![cfg(test)]
 
 use super::*;
@@ -1408,382 +1411,286 @@ fn test_release_milestone_succeeds_when_flag_is_clear() {
     }
 }
 
-// ── Performance Bonus ────────────────────────────────────────────────────
+// ── Dispute Arbitration Timeout ──────────────────────────────────────────
 
-fn other_proposal_id(env: &Env, tag: u8) -> BytesN<32> {
-    BytesN::from_array(env, &[tag; 32])
-}
+use crate::types::DisputeOutcome;
+use soroban_sdk::testutils::Events;
+use soroban_sdk::TryFromVal;
 
-fn other_evidence(env: &Env, tag: u8) -> BytesN<32> {
-    BytesN::from_array(env, &[tag; 32])
-}
+const ARBITRATION_WINDOW: u32 = 1_000;
 
-/// Mints `amount` to a fresh funder address and funds the bonus pool with it.
-fn fund_pool(env: &Env, h: &Harness<'_>, amount: i128) {
-    let funder = Address::generate(env);
-    StellarAssetClient::new(env, &h.token).mint(&funder, &amount);
-    h.milestone.fund_bonus_pool(&funder, &amount);
-}
-
-#[test]
-fn test_bonus_awarded_on_first_submission_before_deadline() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let amount = 1_000i128;
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    h.milestone.set_performance_bonus_bps(&h.admin, &1_000u32); // 10%
-    fund_pool(&env, &h, 500);
-
-    let pid = proposal_id(&env);
+/// Approved milestone with a configured arbitration panel and a borrower on
+/// the loan. Returns the harness, arbitrators, and borrower.
+fn setup_arbitration(
+    env: &Env,
+    arbitrator_count: u32,
+    threshold: u32,
+) -> (Harness<'_>, Vec<Address>, Address) {
+    let h = setup(env, 1, 1, 5_000, 10_000);
+    let pid = proposal_id(env);
     h.milestone.propose_milestone(
         &h.contractor,
         &pid,
-        &loan_id(&env),
-        &amount,
-        &evidence(&env),
-        &cidv0(&env),
+        &loan_id(env),
+        &1_000i128,
+        &evidence(env),
+        &cidv0(env),
     );
     h.milestone
         .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
-    h.milestone
-        .approve_milestone(&h.approvers.get(1).unwrap(), &pid);
 
-    env.ledger().set_sequence_number(100);
-    h.milestone.release_milestone(&pid);
+    let borrower = Address::generate(env);
+    h.pool.set_loan_borrower(&loan_id(env), &borrower);
 
-    let token = token::Client::new(&env, &h.token);
-    // Base amount (1000) + 10% bonus (100) = 1100.
-    assert_eq!(token.balance(&h.contractor), amount + 100);
-    assert_eq!(h.milestone.get_bonus_pool_balance(), 400);
-
-    let record = h.milestone.get_milestone(&pid);
-    assert!(record.bonus_awarded);
-}
-
-#[test]
-fn test_no_bonus_when_bonus_bps_is_zero() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let amount = 1_000i128;
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    // performance_bonus_bps defaults to 0 — never configured here.
-    fund_pool(&env, &h, 500);
-
-    let pid = proposal_id(&env);
-    h.milestone.propose_milestone(
-        &h.contractor,
-        &pid,
-        &loan_id(&env),
-        &amount,
-        &evidence(&env),
-        &cidv0(&env),
-    );
-    h.milestone
-        .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
-    h.milestone
-        .approve_milestone(&h.approvers.get(1).unwrap(), &pid);
-
-    env.ledger().set_sequence_number(100);
-    h.milestone.release_milestone(&pid);
-
-    let token = token::Client::new(&env, &h.token);
-    assert_eq!(token.balance(&h.contractor), amount);
-    assert_eq!(h.milestone.get_bonus_pool_balance(), 500);
-    assert!(!h.milestone.get_milestone(&pid).bonus_awarded);
-}
-
-#[test]
-fn test_bonus_skipped_when_pool_empty_but_disbursement_still_succeeds() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let amount = 1_000i128;
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    h.milestone.set_performance_bonus_bps(&h.admin, &1_000u32);
-    // No funding at all — the pool is empty.
-
-    let pid = proposal_id(&env);
-    h.milestone.propose_milestone(
-        &h.contractor,
-        &pid,
-        &loan_id(&env),
-        &amount,
-        &evidence(&env),
-        &cidv0(&env),
-    );
-    h.milestone
-        .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
-    h.milestone
-        .approve_milestone(&h.approvers.get(1).unwrap(), &pid);
-
-    env.ledger().set_sequence_number(100);
-    // Must not panic or fail: the underlying disbursement still goes through.
-    h.milestone.release_milestone(&pid);
-
-    let token = token::Client::new(&env, &h.token);
-    assert_eq!(token.balance(&h.contractor), amount);
-    assert_eq!(h.milestone.get_bonus_pool_balance(), 0);
-
-    let record = h.milestone.get_milestone(&pid);
-    assert_eq!(record.status, MilestoneStatus::Disbursed);
-    assert!(!record.bonus_awarded);
-}
-
-#[test]
-fn test_bonus_capped_to_remaining_pool_balance() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let amount = 1_000i128;
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    h.milestone.set_performance_bonus_bps(&h.admin, &5_000u32); // 50% => would be 500
-    fund_pool(&env, &h, 200); // pool can only cover 200 of it
-
-    let pid = proposal_id(&env);
-    h.milestone.propose_milestone(
-        &h.contractor,
-        &pid,
-        &loan_id(&env),
-        &amount,
-        &evidence(&env),
-        &cidv0(&env),
-    );
-    h.milestone
-        .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
-    h.milestone
-        .approve_milestone(&h.approvers.get(1).unwrap(), &pid);
-
-    env.ledger().set_sequence_number(100);
-    h.milestone.release_milestone(&pid);
-
-    let token = token::Client::new(&env, &h.token);
-    // Capped to the 200 the pool actually held, not the full 500.
-    assert_eq!(token.balance(&h.contractor), amount + 200);
-    assert_eq!(h.milestone.get_bonus_pool_balance(), 0);
-    assert!(h.milestone.get_milestone(&pid).bonus_awarded);
-}
-
-#[test]
-fn test_bonus_pool_never_overdrawn_across_multiple_releases() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    h.milestone.set_performance_bonus_bps(&h.admin, &10_000u32); // 100%
-    fund_pool(&env, &h, 150);
-
-    // Three separate milestones, each with a 100-unit bonus at 100% bps.
-    for tag in [10u8, 11u8, 12u8] {
-        let pid = other_proposal_id(&env, tag);
-        h.milestone.propose_milestone(
-            &h.contractor,
-            &pid,
-            &loan_id(&env),
-            &100i128,
-            &other_evidence(&env, tag),
-            &cidv0(&env),
-        );
-        h.milestone
-            .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
-        h.milestone
-            .approve_milestone(&h.approvers.get(1).unwrap(), &pid);
+    let mut arbitrators = Vec::new(env);
+    for _ in 0..arbitrator_count {
+        arbitrators.push_back(Address::generate(env));
     }
+    h.milestone
+        .set_arbitration_config(&h.admin, &arbitrators, &threshold, &ARBITRATION_WINDOW);
 
-    env.ledger().set_sequence_number(100);
+    (h, arbitrators, borrower)
+}
 
-    // First release: pool has 150, bonus wants 100 -> pays 100, pool -> 50.
-    h.milestone.release_milestone(&other_proposal_id(&env, 10));
-    assert_eq!(h.milestone.get_bonus_pool_balance(), 50);
+fn advance_ledger(env: &Env, ledgers: u32) {
+    env.ledger().with_mut(|li| li.sequence_number += ledgers);
+}
 
-    // Second release: pool has 50, bonus wants 100 -> capped to 50, pool -> 0.
-    h.milestone.release_milestone(&other_proposal_id(&env, 11));
-    assert_eq!(h.milestone.get_bonus_pool_balance(), 0);
-
-    // Third release: pool is empty -> no bonus, never goes negative.
-    h.milestone.release_milestone(&other_proposal_id(&env, 12));
-    assert_eq!(h.milestone.get_bonus_pool_balance(), 0);
-
-    let token = token::Client::new(&env, &h.token);
-    // Milestone 1: 100 base + 100 bonus. Milestone 2: 100 base + 50 bonus
-    // (capped). Milestone 3: 100 base + 0 bonus (pool exhausted).
-    assert_eq!(token.balance(&h.contractor), 200 + 150 + 100);
+/// Second topic of the most recent event published by the milestone contract.
+fn last_dispute_event(env: &Env) -> Symbol {
+    let (_, topics, _) = env.events().all().last().unwrap();
+    Symbol::try_from_val(env, &topics.get(1).unwrap()).unwrap()
 }
 
 #[test]
-fn test_bonus_disqualified_after_rejection_and_resubmission() {
+fn test_arbitration_config_validation() {
     let env = Env::default();
     env.mock_all_auths();
-    let amount = 1_000i128;
-    let h = setup(&env, 2, 2, 5_000, 10_000);
+    let h = setup(&env, 1, 1, 5_000, 10_000);
+    let arbitrators = Vec::from_array(&env, [Address::generate(&env)]);
 
-    let pid = proposal_id(&env);
-    h.milestone.propose_milestone(
-        &h.contractor,
-        &pid,
-        &loan_id(&env),
-        &amount,
-        &evidence(&env),
-        &cidv0(&env),
+    assert_eq!(
+        h.milestone
+            .try_set_arbitration_config(&h.admin, &arbitrators, &2, &100),
+        Err(Ok(MilestoneError::InvalidThreshold))
+    );
+    assert_eq!(
+        h.milestone
+            .try_set_arbitration_config(&h.admin, &arbitrators, &1, &0),
+        Err(Ok(MilestoneError::InvalidArbitrationWindow))
+    );
+    assert_eq!(
+        h.milestone
+            .try_set_arbitration_config(&h.contractor, &arbitrators, &1, &100),
+        Err(Ok(MilestoneError::Unauthorized))
     );
 
-    // Rejected before reaching threshold.
     h.milestone
-        .reject_milestone(&h.approvers.get(0).unwrap(), &pid);
+        .set_arbitration_config(&h.admin, &arbitrators, &1, &100);
+    assert_eq!(h.milestone.get_arbitration_config().window_ledgers, 100);
+}
+
+#[test]
+fn test_raise_dispute_requires_config_and_borrower_or_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, _, borrower) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+
+    assert_eq!(
+        h.milestone.try_raise_dispute(&h.contractor, &pid),
+        Err(Ok(MilestoneError::Unauthorized))
+    );
+
+    h.milestone.raise_dispute(&borrower, &pid);
+    assert_eq!(last_dispute_event(&env), symbol_short!("raised"));
     assert_eq!(
         h.milestone.get_milestone(&pid).status,
-        MilestoneStatus::Rejected
+        MilestoneStatus::Disputed
     );
 
-    // Contractor resubmits with fresh evidence.
-    let new_evidence = other_evidence(&env, 200);
+    let dispute = h.milestone.get_dispute(&pid);
+    assert_eq!(
+        dispute.deadline_ledger,
+        dispute.raised_ledger + ARBITRATION_WINDOW
+    );
+    assert_eq!(dispute.outcome, DisputeOutcome::Pending);
+
+    assert_eq!(
+        h.milestone.try_raise_dispute(&h.admin, &pid),
+        Err(Ok(MilestoneError::AlreadyDisputed))
+    );
+
+    let fresh = setup(&env, 1, 1, 5_000, 10_000);
+    assert_eq!(
+        fresh.milestone.try_raise_dispute(&fresh.admin, &pid),
+        Err(Ok(MilestoneError::ArbitrationNotConfigured))
+    );
+}
+
+#[test]
+fn test_disputed_milestone_cannot_be_released() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, _, _) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+
+    h.milestone.raise_dispute(&h.admin, &pid);
+    advance_ledger(&env, 200);
+
+    assert_eq!(
+        h.milestone.try_release_milestone(&pid),
+        Err(Ok(MilestoneError::InvalidStatus))
+    );
+}
+
+#[test]
+fn test_arbitrator_rejects_dispute_within_window() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, arbitrators, borrower) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+
+    h.milestone.raise_dispute(&borrower, &pid);
+    advance_ledger(&env, ARBITRATION_WINDOW);
     h.milestone
-        .resubmit_milestone(&h.contractor, &pid, &new_evidence, &cidv0(&env));
+        .vote_dispute(&arbitrators.get(0).unwrap(), &pid, &false);
+    assert_eq!(last_dispute_event(&env), symbol_short!("resolved"));
+
+    assert_eq!(
+        h.milestone.get_dispute(&pid).outcome,
+        DisputeOutcome::Rejected
+    );
+    assert_eq!(
+        h.milestone.get_milestone(&pid).status,
+        MilestoneStatus::Approved
+    );
+
+    h.milestone.release_milestone(&pid);
+    assert_eq!(h.pool.total_disbursed(), 1_000);
+    assert_eq!(
+        h.milestone.try_resolve_expired_dispute(&pid),
+        Err(Ok(MilestoneError::DisputeAlreadyResolved))
+    );
+}
+
+#[test]
+fn test_arbitrator_upholds_dispute_within_window() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, arbitrators, _) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+
+    h.milestone.raise_dispute(&h.admin, &pid);
+    h.milestone
+        .vote_dispute(&arbitrators.get(0).unwrap(), &pid, &true);
+
+    assert_eq!(
+        h.milestone.get_dispute(&pid).outcome,
+        DisputeOutcome::Upheld
+    );
+    assert_eq!(
+        h.milestone.get_milestone(&pid).status,
+        MilestoneStatus::Refunded
+    );
+
+    advance_ledger(&env, 200);
+    assert_eq!(
+        h.milestone.try_release_milestone(&pid),
+        Err(Ok(MilestoneError::InvalidStatus))
+    );
+}
+
+#[test]
+fn test_vote_by_non_arbitrator_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, _, _) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+
+    h.milestone.raise_dispute(&h.admin, &pid);
+    assert_eq!(
+        h.milestone.try_vote_dispute(&h.admin, &pid, &true),
+        Err(Ok(MilestoneError::Unauthorized))
+    );
+}
+
+#[test]
+fn test_window_elapses_with_no_decision_auto_resolves() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (h, arbitrators, borrower) = setup_arbitration(&env, 1, 1);
+    let pid = proposal_id(&env);
+    let approved_ledger = h.milestone.get_milestone(&pid).approved_ledger;
+
+    h.milestone.raise_dispute(&borrower, &pid);
+
+    // Still inside the window: nothing to auto-resolve yet.
+    advance_ledger(&env, ARBITRATION_WINDOW);
+    assert_eq!(
+        h.milestone.try_resolve_expired_dispute(&pid),
+        Err(Ok(MilestoneError::ArbitrationWindowOpen))
+    );
+
+    advance_ledger(&env, 1);
+    assert_eq!(
+        h.milestone
+            .try_vote_dispute(&arbitrators.get(0).unwrap(), &pid, &true),
+        Err(Ok(MilestoneError::ArbitrationWindowElapsed))
+    );
+
+    h.milestone.resolve_expired_dispute(&pid);
+    assert_eq!(last_dispute_event(&env), symbol_short!("timeout"));
+
     let record = h.milestone.get_milestone(&pid);
-    assert_eq!(record.status, MilestoneStatus::Proposed);
-    assert!(record.was_resubmitted);
+    assert_eq!(record.status, MilestoneStatus::Approved);
+    assert_eq!(record.approved_ledger, approved_ledger);
+    assert_eq!(
+        h.milestone.get_dispute(&pid).outcome,
+        DisputeOutcome::TimedOut
+    );
 
-    // Cleanly approved and released on the resubmission.
-    h.milestone
-        .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
-    h.milestone
-        .approve_milestone(&h.approvers.get(1).unwrap(), &pid);
-
-    h.milestone.set_performance_bonus_bps(&h.admin, &1_000u32);
-    fund_pool(&env, &h, 1_000);
-
-    env.ledger().set_sequence_number(200);
     h.milestone.release_milestone(&pid);
-
-    let token = token::Client::new(&env, &h.token);
-    // Full amount disbursed, but no bonus — the resubmission disqualifies it.
-    assert_eq!(token.balance(&h.contractor), amount);
-    assert_eq!(h.milestone.get_bonus_pool_balance(), 1_000);
-    assert!(!h.milestone.get_milestone(&pid).bonus_awarded);
+    assert_eq!(h.pool.total_disbursed(), 1_000);
 }
 
 #[test]
-fn test_bonus_disqualified_when_deadline_missed() {
+fn test_window_elapses_mid_partial_resolution() {
     let env = Env::default();
     env.mock_all_auths();
-    let amount = 1_000i128;
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
+    let (h, arbitrators, _) = setup_arbitration(&env, 3, 2);
     let pid = proposal_id(&env);
-    h.milestone.propose_milestone(
-        &h.contractor,
-        &pid,
-        &loan_id(&env),
-        &amount,
-        &evidence(&env),
-        &cidv0(&env),
+
+    h.milestone.raise_dispute(&h.admin, &pid);
+    h.milestone
+        .vote_dispute(&arbitrators.get(0).unwrap(), &pid, &true);
+    assert_eq!(
+        h.milestone.get_milestone(&pid).status,
+        MilestoneStatus::Disputed
     );
 
-    let start = env.ledger().sequence();
-    h.milestone
-        .set_milestone_deadline(&h.contractor, &pid, &(start + 5));
-
-    // Advance past the deadline before approval lands.
-    env.ledger().set_sequence_number(start + 10);
-    h.milestone
-        .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
-    h.milestone
-        .approve_milestone(&h.approvers.get(1).unwrap(), &pid);
-
-    h.milestone.set_performance_bonus_bps(&h.admin, &1_000u32);
-    fund_pool(&env, &h, 1_000);
-
-    env.ledger().set_sequence_number(start + 10 + 100); // satisfy the release timelock
-    h.milestone.release_milestone(&pid);
-
-    let token = token::Client::new(&env, &h.token);
-    assert_eq!(token.balance(&h.contractor), amount);
-    assert_eq!(h.milestone.get_bonus_pool_balance(), 1_000);
-    assert!(!h.milestone.get_milestone(&pid).bonus_awarded);
-}
-
-// ── Reject / Resubmit ────────────────────────────────────────────────────
-
-#[test]
-fn test_reject_milestone_requires_approver() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    let pid = proposal_id(&env);
-    h.milestone.propose_milestone(
-        &h.contractor,
-        &pid,
-        &loan_id(&env),
-        &1_000i128,
-        &evidence(&env),
-        &cidv0(&env),
+    advance_ledger(&env, ARBITRATION_WINDOW + 1);
+    assert_eq!(
+        h.milestone
+            .try_vote_dispute(&arbitrators.get(1).unwrap(), &pid, &true),
+        Err(Ok(MilestoneError::ArbitrationWindowElapsed))
     );
 
-    let outsider = Address::generate(&env);
-    let res = h.milestone.try_reject_milestone(&outsider, &pid);
-    assert_eq!(res, Err(Ok(MilestoneError::Unauthorized)));
-}
+    h.milestone.resolve_expired_dispute(&pid);
 
-#[test]
-fn test_reject_milestone_only_from_proposed_status() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    let pid = proposal_id(&env);
-    h.milestone.propose_milestone(
-        &h.contractor,
-        &pid,
-        &loan_id(&env),
-        &1_000i128,
-        &evidence(&env),
-        &cidv0(&env),
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::try_from_val(&env, &topics.get(1).unwrap()).unwrap(),
+        symbol_short!("timeout")
     );
-    h.milestone
-        .approve_milestone(&h.approvers.get(0).unwrap(), &pid);
-    h.milestone
-        .approve_milestone(&h.approvers.get(1).unwrap(), &pid);
+    let (_, uphold, reject): (BytesN<32>, u32, u32) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!((uphold, reject), (1, 0));
 
-    let res = h
-        .milestone
-        .try_reject_milestone(&h.approvers.get(0).unwrap(), &pid);
-    assert_eq!(res, Err(Ok(MilestoneError::CannotReject)));
-}
-
-#[test]
-fn test_reject_clears_prior_votes_so_resubmission_can_be_reapproved() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let h = setup(&env, 3, 2, 5_000, 10_000);
-
-    let pid = proposal_id(&env);
-    h.milestone.propose_milestone(
-        &h.contractor,
-        &pid,
-        &loan_id(&env),
-        &1_000i128,
-        &evidence(&env),
-        &cidv0(&env),
-    );
-
-    let a0 = h.approvers.get(0).unwrap();
-    h.milestone.approve_milestone(&a0, &pid);
-
-    h.milestone
-        .reject_milestone(&h.approvers.get(1).unwrap(), &pid);
-
-    let new_evidence = other_evidence(&env, 201);
-    h.milestone
-        .resubmit_milestone(&h.contractor, &pid, &new_evidence, &cidv0(&env));
-
-    // a0 already voted before the rejection — must be able to vote again.
-    h.milestone.approve_milestone(&a0, &pid);
-    assert_eq!(h.milestone.get_milestone(&pid).votes, 1);
-
-    h.milestone
-        .approve_milestone(&h.approvers.get(2).unwrap(), &pid);
+    // The lone uphold vote is discarded; the release schedule is restored.
+    let dispute = h.milestone.get_dispute(&pid);
+    assert_eq!(dispute.outcome, DisputeOutcome::TimedOut);
+    assert_eq!(dispute.uphold_votes, 1);
     assert_eq!(
         h.milestone.get_milestone(&pid).status,
         MilestoneStatus::Approved
@@ -1791,165 +1698,16 @@ fn test_reject_clears_prior_votes_so_resubmission_can_be_reapproved() {
 }
 
 #[test]
-fn test_resubmit_requires_original_contractor() {
+fn test_config_change_does_not_move_open_dispute_deadline() {
     let env = Env::default();
     env.mock_all_auths();
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
+    let (h, arbitrators, _) = setup_arbitration(&env, 1, 1);
     let pid = proposal_id(&env);
-    h.milestone.propose_milestone(
-        &h.contractor,
-        &pid,
-        &loan_id(&env),
-        &1_000i128,
-        &evidence(&env),
-        &cidv0(&env),
-    );
+
+    h.milestone.raise_dispute(&h.admin, &pid);
+    let deadline = h.milestone.get_dispute(&pid).deadline_ledger;
+
     h.milestone
-        .reject_milestone(&h.approvers.get(0).unwrap(), &pid);
-
-    let stranger = Address::generate(&env);
-    let res =
-        h.milestone
-            .try_resubmit_milestone(&stranger, &pid, &other_evidence(&env, 202), &cidv0(&env));
-    assert_eq!(res, Err(Ok(MilestoneError::Unauthorized)));
-}
-
-#[test]
-fn test_resubmit_only_from_rejected_status() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    let pid = proposal_id(&env);
-    h.milestone.propose_milestone(
-        &h.contractor,
-        &pid,
-        &loan_id(&env),
-        &1_000i128,
-        &evidence(&env),
-        &cidv0(&env),
-    );
-
-    let res = h.milestone.try_resubmit_milestone(
-        &h.contractor,
-        &pid,
-        &other_evidence(&env, 203),
-        &cidv0(&env),
-    );
-    assert_eq!(res, Err(Ok(MilestoneError::CannotResubmit)));
-}
-
-// ── Deadline ─────────────────────────────────────────────────────────────
-
-#[test]
-fn test_set_milestone_deadline_requires_contractor() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    let pid = proposal_id(&env);
-    h.milestone.propose_milestone(
-        &h.contractor,
-        &pid,
-        &loan_id(&env),
-        &1_000i128,
-        &evidence(&env),
-        &cidv0(&env),
-    );
-
-    let stranger = Address::generate(&env);
-    let res = h.milestone.try_set_milestone_deadline(&stranger, &pid, &500u32);
-    assert_eq!(res, Err(Ok(MilestoneError::Unauthorized)));
-}
-
-#[test]
-fn test_set_milestone_deadline_rejects_non_future_ledger() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    let pid = proposal_id(&env);
-    h.milestone.propose_milestone(
-        &h.contractor,
-        &pid,
-        &loan_id(&env),
-        &1_000i128,
-        &evidence(&env),
-        &cidv0(&env),
-    );
-
-    let now = env.ledger().sequence();
-    let res = h.milestone.try_set_milestone_deadline(&h.contractor, &pid, &now);
-    assert_eq!(res, Err(Ok(MilestoneError::InvalidDeadline)));
-}
-
-// ── Bonus Pool Funding & Configuration ───────────────────────────────────
-
-#[test]
-fn test_fund_bonus_pool_increases_balance() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    let funder = Address::generate(&env);
-    StellarAssetClient::new(&env, &h.token).mint(&funder, &500i128);
-
-    h.milestone.fund_bonus_pool(&funder, &300i128);
-    assert_eq!(h.milestone.get_bonus_pool_balance(), 300);
-
-    h.milestone.fund_bonus_pool(&funder, &200i128);
-    assert_eq!(h.milestone.get_bonus_pool_balance(), 500);
-
-    let token = token::Client::new(&env, &h.token);
-    assert_eq!(token.balance(&funder), 0);
-}
-
-#[test]
-fn test_fund_bonus_pool_rejects_non_positive_amount() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    let funder = Address::generate(&env);
-    let res = h.milestone.try_fund_bonus_pool(&funder, &0i128);
-    assert_eq!(res, Err(Ok(MilestoneError::InvalidAmount)));
-}
-
-#[test]
-#[should_panic(expected = "HostError: Error(Auth, InvalidAction)")]
-fn test_fund_bonus_pool_requires_funder_auth() {
-    let env = Env::default();
-    let h = {
-        env.mock_all_auths();
-        setup(&env, 2, 2, 5_000, 10_000)
-    };
-
-    let funder = Address::generate(&env);
-    StellarAssetClient::new(&env, &h.token).mint(&funder, &500i128);
-
-    // No auth mocked for this call — funder never authorized it.
-    h.env.set_auths(&[]);
-    h.milestone.fund_bonus_pool(&funder, &100i128);
-}
-
-#[test]
-fn test_set_performance_bonus_bps_requires_admin() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    let outsider = Address::generate(&env);
-    let res = h.milestone.try_set_performance_bonus_bps(&outsider, &500u32);
-    assert_eq!(res, Err(Ok(MilestoneError::Unauthorized)));
-}
-
-#[test]
-fn test_set_performance_bonus_bps_rejects_over_10000() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let h = setup(&env, 2, 2, 5_000, 10_000);
-
-    let res = h.milestone.try_set_performance_bonus_bps(&h.admin, &10_001u32);
-    assert_eq!(res, Err(Ok(MilestoneError::InvalidBonusConfig)));
+        .set_arbitration_config(&h.admin, &arbitrators, &1, &(ARBITRATION_WINDOW * 10));
+    assert_eq!(h.milestone.get_dispute(&pid).deadline_ledger, deadline);
 }

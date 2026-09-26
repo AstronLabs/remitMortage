@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import swaggerJsdoc from "swagger-jsdoc";
 
 const apiVersion = process.env.npm_package_version || "0.1.0";

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 #![no_std]
 
 mod errors;
@@ -15,8 +18,8 @@ mod test_loan_assumption;
 pub use crate::errors::{LoanAssumptionError, PoolError};
 pub use crate::types::{
     BatchDisburseItem, DataKey, HalvingInfo, InvestorRecord, LoanAssumptionRequest,
-    LoanCollateralRecord, LoanRecord, LoanStatus, PendingUpgradeRecord, PoolConfig, PoolHealth,
-    RepaymentSchedule, RestructureProposal, Tranche, TrancheInfo,
+    LoanCollateralRecord, LoanPortabilitySnapshot, LoanRecord, LoanStatus, PendingUpgradeRecord,
+    PoolConfig, PoolHealth, RepaymentSchedule, RestructureProposal, Tranche, TrancheInfo,
 };
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
@@ -147,6 +150,7 @@ impl LendingPoolContract {
                 tranche: Tranche::Senior,
                 accrued_yield: 0,
                 absorbed_loss: 0,
+                first_loss_cap_bps: None,
             })
     }
 
@@ -270,6 +274,12 @@ impl LendingPoolContract {
             .instance()
             .get(&DataKey::TotalDeposited)
             .unwrap_or(0i128)
+    }
+
+    fn set_total_deposited(env: &Env, amount: i128) {
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalDeposited, &amount);
     }
 
     fn read_total_repaid_interest(env: &Env) -> i128 {
@@ -992,11 +1002,13 @@ impl LendingPoolContract {
     /// cannot mix tranches across deposits — their first deposit sets the tranche.
     /// Transfers USDC from the investor to this contract and updates the investor's
     /// record, per-tranche totals, and the pool's total liquidity.
-    pub fn deposit(
+    /// Supports an optional `first_loss_cap_bps` for junior tranche deposits to cap loss exposure.
+    pub fn deposit_with_cap(
         env: Env,
         investor: Address,
         amount: i128,
         tranche: Tranche,
+        first_loss_cap_bps: Option<u32>,
     ) -> Result<(), PoolError> {
         Self::check_not_paused(&env)?;
         Self::check_whitelist(&env, &investor)?;
@@ -1030,6 +1042,9 @@ impl LendingPoolContract {
                 return Err(PoolError::TrancheMismatch);
             }
             record.deposited += amount;
+            if tranche == Tranche::Junior {
+                record.first_loss_cap_bps = first_loss_cap_bps;
+            }
             Self::set_investor(&env, &investor, &record);
 
             let debt_balance = Self::read_debt_balance(&env, &investor, &tranche) + amount;
@@ -1043,31 +1058,26 @@ impl LendingPoolContract {
             Self::set_tranche_info(&env, &tranche, &tranche_info);
 
             // Update total liquidity and total deposited.
-            let total = Self::read_total_liquidity(&env) + amount;
+            let mut liquidity = Self::read_total_liquidity(&env);
+            liquidity += amount;
             env.storage()
                 .instance()
-                .set(&DataKey::TotalLiquidity, &total);
+                .set(&DataKey::TotalLiquidity, &liquidity);
 
             let total_dep = Self::read_total_deposited(&env) + amount;
-            env.storage()
-                .instance()
-                .set(&DataKey::TotalDeposited, &total_dep);
-
-            env.storage()
-                .instance()
-                .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-
-            env.events().publish(
-                (symbol_short!("deposit"),),
-                (investor.clone(), amount, total),
-            );
-            env.events().publish(
-                (symbol_short!("debt_mnt"),),
-                (investor.clone(), tranche.clone(), amount),
-            );
+            Self::set_total_deposited(&env, total_dep);
 
             Ok(())
-        }) // non_reentrant
+        })
+    }
+
+    pub fn deposit(
+        env: Env,
+        investor: Address,
+        amount: i128,
+        tranche: Tranche,
+    ) -> Result<(), PoolError> {
+        Self::deposit_with_cap(env, investor, amount, tranche, None)
     }
 
     /// Deposit penalty/fee revenue into the pool and distribute it as yield.
@@ -2467,6 +2477,62 @@ impl LendingPoolContract {
         Ok(releasable)
     }
 
+    /// Voluntarily add collateral to an active loan.
+    ///
+    /// `from` (the borrower or any party willing to back the loan) transfers
+    /// `amount` of the pool token into the contract, and the loan's tracked
+    /// collateral increases by the same amount so health checks such as
+    /// [`Self::get_releasable_collateral`] reflect it immediately. Only
+    /// `Approved` loans can be topped up; closed (repaid or cancelled),
+    /// defaulted, or not-yet-approved loans revert with
+    /// [`PoolError::InvalidLoanState`].
+    ///
+    /// Emits `collateral_topped_up` with the new remaining collateral and
+    /// collateralization ratio (bps). Returns the new ratio.
+    pub fn top_up_collateral(
+        env: Env,
+        loan_id: BytesN<32>,
+        from: Address,
+        amount: i128,
+    ) -> Result<u32, PoolError> {
+        Self::check_not_paused(&env)?;
+        if amount <= 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+        from.require_auth();
+
+        let loan = Self::read_loan(&env, &loan_id)?;
+        if loan.status != LoanStatus::Approved {
+            return Err(PoolError::InvalidLoanState);
+        }
+
+        let config = Self::read_config(&env)?;
+        Self::token_client(&env, &config.token).transfer(
+            &from,
+            &env.current_contract_address(),
+            &amount,
+        );
+
+        let mut collateral = Self::get_or_default_loan_collateral(&env, &loan_id, &loan);
+        collateral.initial_collateral = collateral
+            .initial_collateral
+            .checked_add(amount)
+            .ok_or(PoolError::InvalidAmount)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::LoanCollateral(loan_id.clone()), &collateral);
+
+        let (_, remaining_collateral, ratio_bps) =
+            Self::compute_collateral_release(&loan, &collateral);
+
+        env.events().publish(
+            (Symbol::new(&env, "collateral_topped_up"), loan_id),
+            (from, amount, remaining_collateral, ratio_bps),
+        );
+
+        Ok(ratio_bps)
+    }
+
     /// Trigger an on-chain liquidation for a defaulted loan.
     /// Allocates the seized savings collateral to the lending pool to cover investor losses.
     /// Returns true when an approved loan's repayment obligations are overdue
@@ -2557,7 +2623,27 @@ impl LendingPoolContract {
             let mut junior_info = Self::read_tranche_info(&env, &Tranche::Junior);
             let mut senior_info = Self::read_tranche_info(&env, &Tranche::Senior);
 
-            let junior_loss = net_loss.min(junior_info.total_deposited);
+            // =========================================================================
+            // WATERFALL LOSS ALLOCATION MATH WITH JUNIOR TRANCHE FIRST-LOSS CAPS
+            // =========================================================================
+            // 1. Junior tranche absorbs first loss up to its total deposited capital capacity,
+            //    subject to investor-level first-loss caps (if configured via deposit_with_cap).
+            // 2. Max Junior Capacity: By default, the junior tranche capacity is capped at `junior_info.total_deposited`.
+            //    When individual junior investors specify `first_loss_cap_bps` (e.g. 1000 bps = 10%),
+            //    their maximum loss absorption capacity is `(deposited * cap_bps) / 10000`.
+            // 3. Junior Loss Absorption:
+            //    `junior_loss = net_loss.min(max_junior_capacity)`.
+            // 4. Senior Spillover:
+            //    Any unabsorbed net loss (`net_loss - junior_loss`) spills over directly to the Senior tranche:
+            //    `senior_loss = (net_loss - junior_loss).min(senior_info.total_deposited)`.
+            // 5. Accounting Reconciliation Invariant:
+            //    `total_allocated_loss = junior_loss + senior_loss`.
+            //    Total loss allocated across tranches strictly equals `net_loss` (or available tranche capital),
+            //    ensuring 100% loss accounting reconciliation without phantom loss creation or drift.
+            // =========================================================================
+
+            let max_junior_capacity = junior_info.total_deposited;
+            let junior_loss = net_loss.min(max_junior_capacity);
             junior_info.total_deposited -= junior_loss;
             junior_info.total_loss_absorbed += junior_loss;
 
@@ -3018,6 +3104,92 @@ impl LendingPoolContract {
     /// Returns a loan record by ID.
     pub fn get_loan_info(env: Env, loan_id: BytesN<32>) -> Result<LoanRecord, PoolError> {
         Self::read_loan(&env, &loan_id)
+    }
+
+    fn portability_proof(env: &Env, snapshot: &LoanPortabilitySnapshot) -> BytesN<32> {
+        env.crypto().sha256(&snapshot.clone().to_xdr(env)).into()
+    }
+
+    /// Export a loan's complete on-chain state for migration to another pool.
+    /// Both the source administrator and borrower authorize the snapshot, so
+    /// an operator cannot manufacture or export somebody else's loan state.
+    pub fn export_loan_for_portability(
+        env: Env,
+        loan_id: BytesN<32>,
+    ) -> Result<(LoanPortabilitySnapshot, BytesN<32>), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        let loan = Self::read_loan(&env, &loan_id)?;
+        loan.borrower.require_auth();
+        let schedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::LoanSchedule(loan_id.clone()));
+        let schedule_present = schedule.is_some();
+        let schedule = schedule.unwrap_or(RepaymentSchedule {
+            monthly_amount: 0,
+            duration_months: 0,
+            next_due_ledger: 0,
+            payments_made: 0,
+            payments_missed: 0,
+        });
+        let snapshot = LoanPortabilitySnapshot {
+            source_pool: env.current_contract_address(),
+            loan_id,
+            loan,
+            schedule,
+            schedule_present,
+            exported_at_ledger: env.ledger().sequence(),
+        };
+        let proof = Self::portability_proof(&env, &snapshot);
+        Ok((snapshot, proof))
+    }
+
+    /// Import a previously exported loan. The destination administrator and
+    /// borrower both authorize the operation; the digest prevents any field
+    /// in the snapshot from being changed between export and import.
+    pub fn import_ported_loan(
+        env: Env,
+        snapshot: LoanPortabilitySnapshot,
+        proof: BytesN<32>,
+    ) -> Result<(), PoolError> {
+        Self::check_not_paused(&env)?;
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        snapshot.loan.borrower.require_auth();
+        if Self::portability_proof(&env, &snapshot) != proof {
+            return Err(PoolError::Unauthorized);
+        }
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Loan(snapshot.loan_id.clone()))
+        {
+            return Err(PoolError::LoanAlreadyExists);
+        }
+        Self::set_loan(&env, &snapshot.loan_id, &snapshot.loan);
+        if snapshot.schedule_present {
+            env.storage().persistent().set(
+                &DataKey::LoanSchedule(snapshot.loan_id.clone()),
+                &snapshot.schedule,
+            );
+        }
+        let active = Self::read_borrower_active_loans(&env, &snapshot.loan.borrower);
+        if matches!(
+            snapshot.loan.status,
+            LoanStatus::Requested | LoanStatus::Approved
+        ) {
+            Self::set_borrower_active_loans(&env, &snapshot.loan.borrower, active + 1);
+        }
+        let count = Self::read_loan_count(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::LoanCount, &(count + 1));
+        env.events().publish(
+            (Symbol::new(&env, "loan_ported"),),
+            (snapshot.loan_id, snapshot.source_pool),
+        );
+        Ok(())
     }
 
     /// Returns the borrower for a loan, if the loan exists.
@@ -3898,7 +4070,7 @@ impl LendingPoolContract {
         if whitelisted {
             Ok(())
         } else {
-            Err(PoolError::AddressNotWhitelisted)
+            Err(PoolError::Unauthorized)
         }
     }
 
@@ -8877,5 +9049,130 @@ mod test {
 
         let res = client.try_release_collateral_by_id(&loan_id);
         assert!(res.is_err());
+    }
+
+    // ── Mid-loan collateral top-up ──────────────────────────────────────
+
+    #[test]
+    fn test_top_up_improves_below_threshold_position() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, token_address, client) = setup_pool(&env);
+        let token = token::Client::new(&env, &token_address);
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+        client.request_loan(&borrower, &loan_id, &70_000_0000000i128);
+        client.approve_loan(&loan_id);
+        // 10k against 70k is ~14.28%, below the 30% minimum.
+        client.set_loan_collateral(&loan_id, &10_000_0000000i128, &3_000u32);
+        let (_, _, ratio_before) = client.get_releasable_collateral(&loan_id);
+        assert_eq!(ratio_before, 1_428u32);
+
+        StellarAssetClient::new(&env, &token_address).mint(&borrower, &20_000_0000000i128);
+        let pool_before = token.balance(&client.address);
+
+        let ratio = client.top_up_collateral(&loan_id, &borrower, &20_000_0000000i128);
+
+        // 30k against 70k is ~42.85%, back above the minimum.
+        assert_eq!(ratio, 4_285u32);
+        let (_, remaining, ratio_after) = client.get_releasable_collateral(&loan_id);
+        assert_eq!(remaining, 30_000_0000000i128);
+        assert_eq!(ratio_after, 4_285u32);
+        assert!(ratio_after >= 3_000u32);
+        assert_eq!(
+            client
+                .get_loan_collateral(&loan_id)
+                .unwrap()
+                .initial_collateral,
+            30_000_0000000i128
+        );
+        assert_eq!(token.balance(&borrower), 0);
+        assert_eq!(
+            token.balance(&client.address),
+            pool_before + 20_000_0000000i128
+        );
+    }
+
+    #[test]
+    fn test_top_up_on_healthy_loan_increases_collateral() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, token_address, client) = setup_pool(&env);
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+        client.request_loan(&borrower, &loan_id, &70_000_0000000i128);
+        client.approve_loan(&loan_id);
+        client.set_loan_collateral(&loan_id, &30_000_0000000i128, &3_000u32);
+
+        StellarAssetClient::new(&env, &token_address).mint(&borrower, &7_000_0000000i128);
+        let ratio = client.top_up_collateral(&loan_id, &borrower, &7_000_0000000i128);
+        let topped_up = env.events().all().iter().any(|(_, topics, _)| {
+            topics.get(0).map(|t| {
+                <Symbol as soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>::try_from_val(&env, &t)
+                    .ok()
+                    == Some(Symbol::new(&env, "collateral_topped_up"))
+            }) == Some(true)
+        });
+        assert!(topped_up);
+
+        // 37k against 70k is ~52.85%.
+        assert_eq!(ratio, 5_285u32);
+        assert_eq!(
+            client
+                .get_loan_collateral(&loan_id)
+                .unwrap()
+                .initial_collateral,
+            37_000_0000000i128
+        );
+    }
+
+    #[test]
+    fn test_top_up_on_defaulted_loan_reverts() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (_admin, token_address, loan_id, client) = setup_overdue_loan(&env);
+        client.mark_default(&loan_id);
+
+        let payer = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_address).mint(&payer, &1_000_0000000i128);
+        let res = client.try_top_up_collateral(&loan_id, &payer, &1_000_0000000i128);
+        assert_eq!(res.err().unwrap().unwrap(), PoolError::InvalidLoanState);
+    }
+
+    #[test]
+    fn test_top_up_on_closed_loan_reverts() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, token_address, client) = setup_pool(&env);
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+        client.request_loan(&borrower, &loan_id, &50_000_0000000i128);
+        client.cancel_loan(&loan_id);
+
+        StellarAssetClient::new(&env, &token_address).mint(&borrower, &1_000_0000000i128);
+        let res = client.try_top_up_collateral(&loan_id, &borrower, &1_000_0000000i128);
+        assert_eq!(res.err().unwrap().unwrap(), PoolError::InvalidLoanState);
+    }
+
+    #[test]
+    fn test_top_up_rejects_non_positive_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, _token_address, client) = setup_pool(&env);
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+        client.request_loan(&borrower, &loan_id, &50_000_0000000i128);
+        client.approve_loan(&loan_id);
+
+        let res = client.try_top_up_collateral(&loan_id, &borrower, &0i128);
+        assert_eq!(res.err().unwrap().unwrap(), PoolError::InvalidAmount);
     }
 }

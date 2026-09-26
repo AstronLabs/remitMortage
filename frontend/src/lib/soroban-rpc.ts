@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { rpc } from "@stellar/stellar-sdk";
 
 const DEFAULT_RPC_URL = "https://soroban-testnet.stellar.org";

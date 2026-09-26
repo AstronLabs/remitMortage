@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Router, Request, Response } from "express";
 import { incidentBot, PagerDutyEvent } from "../services/incidentBot.js";
 import logger from "../utils/logger.js";

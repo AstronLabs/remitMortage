@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 //! Issue #472: contract storage migration regression tests.
 //!
 //! Verifies that contract storage survives sequential schema-version

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Router } from "express";
 import { validateBorrowerParams } from "../middleware/validate.js";
 import { getApplicant, getBorrowerStatus } from "../services/db.js";

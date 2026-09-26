@@ -1,5 +1,13 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import React from 'react';
-import { useWidgetStore, WidgetId } from '../../app/stores/useWidgetStore';
+import {
+  REFRESH_INTERVAL_OPTIONS,
+  RefreshInterval,
+  useWidgetStore,
+  WidgetId,
+} from '../../app/stores/useWidgetStore';
 
 interface WidgetSettingsModalProps {
   isOpen: boolean;
@@ -14,8 +22,15 @@ const WIDGET_LABELS: Record<WidgetId, string> = {
   'milestones': 'Milestone Timeline',
 };
 
+const REFRESH_INTERVAL_LABELS: Record<RefreshInterval, string> = {
+  0: 'Off',
+  30_000: '30s',
+  60_000: '1m',
+  300_000: '5m',
+};
+
 export function WidgetSettingsModal({ isOpen, onClose }: WidgetSettingsModalProps) {
-  const { visibility, toggleVisibility, resetLayout } = useWidgetStore();
+  const { visibility, toggleVisibility, refreshInterval, setRefreshInterval, resetLayout } = useWidgetStore();
 
   if (!isOpen) return null;
 
@@ -46,6 +61,31 @@ export function WidgetSettingsModal({ isOpen, onClose }: WidgetSettingsModalProp
               </label>
             ))}
           </div>
+        </div>
+
+        <div className="space-y-4 mb-8">
+          <h3 id="auto-refresh-label" className="text-sm font-semibold text-slate-400 uppercase tracking-wider">
+            Auto-Refresh
+          </h3>
+          <div role="radiogroup" aria-labelledby="auto-refresh-label" className="grid grid-cols-4 gap-2">
+            {REFRESH_INTERVAL_OPTIONS.map((interval) => (
+              <button
+                key={interval}
+                type="button"
+                role="radio"
+                aria-checked={refreshInterval === interval}
+                onClick={() => setRefreshInterval(interval)}
+                className={`py-2 rounded-lg text-sm font-medium transition-colors ${
+                  refreshInterval === interval
+                    ? 'bg-cyan-500 text-slate-900'
+                    : 'bg-slate-800/50 text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                {REFRESH_INTERVAL_LABELS[interval]}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-slate-500">Dashboard data refreshes automatically while this tab is open.</p>
         </div>
 
         <div className="flex items-center justify-between border-t border-slate-800 pt-6">

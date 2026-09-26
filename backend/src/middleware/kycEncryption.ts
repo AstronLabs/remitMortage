@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { NextFunction, Request, Response } from "express";
 import { encryptBuffer, EnvelopeEncryptedPayload } from "../services/kmsEncryption.js";
 
