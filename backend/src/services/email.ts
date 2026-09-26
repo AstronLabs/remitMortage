@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
+import { getEmailTranslator } from "../i18n/emailI18n.js";
 
 const config = loadConfig();
 
@@ -22,8 +23,10 @@ export const transporter = nodemailer.createTransport(transporterConfig);
 
 /**
  * Returns a branded HTML email wrapper.
+ * @param locale - Optional BCP-47 locale for footer strings.
  */
-export function getBrandedHtml(title: string, bodyContentHtml: string): string {
+export function getBrandedHtml(title: string, bodyContentHtml: string, locale?: string): string {
+  const t = getEmailTranslator(locale);
   return `
     <!DOCTYPE html>
     <html>
@@ -104,14 +107,14 @@ export function getBrandedHtml(title: string, bodyContentHtml: string): string {
       <body>
         <div class="container">
           <div class="header">
-            <h1>AstronLabs | RemitMortgage</h1>
+            <h1>${t("brand_name")}</h1>
           </div>
           <div class="content">
             ${bodyContentHtml}
           </div>
           <div class="footer">
-            <p>This is an automated notification from RemitMortgage protocol.</p>
-            <p>&copy; ${new Date().getFullYear()} AstronLabs. All rights reserved.</p>
+            <p>${t("automated_footer")}</p>
+            <p>&copy; ${new Date().getFullYear()} ${t("copyright_footer")}</p>
           </div>
         </div>
       </body>
@@ -139,78 +142,99 @@ export async function sendEmail(to: string, subject: string, htmlContent: string
 
 /**
  * Sends a branded Deposit Receipt HTML email.
+ * @param locale - BCP-47 locale tag from the recipient's stored preference.
  */
-export async function sendDepositReceipt(to: string, amount: string, transactionId: string): Promise<boolean> {
-  const subject = "Deposit Receipt - RemitMortgage";
+export async function sendDepositReceipt(
+  to: string,
+  amount: string,
+  transactionId: string,
+  locale?: string
+): Promise<boolean> {
+  const t = getEmailTranslator(locale);
+  const subject = t("deposit_subject");
   const body = `
-    <h2>Deposit Confirmed</h2>
-    <p>We successfully received your deposit of <strong>${amount} USDC</strong>. Your remittance progress has been updated accordingly.</p>
+    <h2>${t("deposit_heading")}</h2>
+    <p>${t("deposit_body", { amount })}</p>
     <table class="details-table">
       <tr>
-        <td class="details-label">Amount</td>
+        <td class="details-label">${t("deposit_label_amount")}</td>
         <td class="details-value">${amount} USDC</td>
       </tr>
       <tr>
-        <td class="details-label">Transaction Hash</td>
+        <td class="details-label">${t("deposit_label_tx")}</td>
         <td class="details-value"><code>${transactionId}</code></td>
       </tr>
       <tr>
-        <td class="details-label">Date</td>
+        <td class="details-label">${t("deposit_label_date")}</td>
         <td class="details-value">${new Date().toLocaleString()}</td>
       </tr>
     </table>
-    <p>Your deposit will be automatically processed into your mortgage escrow account.</p>
+    <p>${t("deposit_footer_note")}</p>
   `;
-  return sendEmail(to, subject, getBrandedHtml(subject, body));
+  return sendEmail(to, subject, getBrandedHtml(subject, body, locale));
 }
 
 /**
  * Sends a branded Repayment Reminder HTML email.
+ * @param locale - BCP-47 locale tag from the recipient's stored preference.
  */
-export async function sendRepaymentReminder(to: string, amount: string, dueDate: string): Promise<boolean> {
-  const subject = "Repayment Reminder - RemitMortgage";
+export async function sendRepaymentReminder(
+  to: string,
+  amount: string,
+  dueDate: string,
+  locale?: string
+): Promise<boolean> {
+  const t = getEmailTranslator(locale);
+  const subject = t("repayment_subject");
   const body = `
-    <h2>Repayment Reminder</h2>
-    <p>This is a reminder that an upcoming repayment is scheduled for your loan.</p>
+    <h2>${t("repayment_heading")}</h2>
+    <p>${t("repayment_body")}</p>
     <table class="details-table">
       <tr>
-        <td class="details-label">Amount Due</td>
+        <td class="details-label">${t("repayment_label_amount")}</td>
         <td class="details-value"><strong>${amount} USDC</strong></td>
       </tr>
       <tr>
-        <td class="details-label">Due Date</td>
+        <td class="details-label">${t("repayment_label_due")}</td>
         <td class="details-value">${new Date(dueDate).toLocaleDateString()}</td>
       </tr>
     </table>
-    <p>Please ensure sufficient funds are available in your wallet or linked account before the due date to avoid grace period penalties.</p>
-    <a href="#" class="cta-button">Make Repayment Now</a>
+    <p>${t("repayment_warning")}</p>
+    <a href="#" class="cta-button">${t("repayment_cta")}</a>
   `;
-  return sendEmail(to, subject, getBrandedHtml(subject, body));
+  return sendEmail(to, subject, getBrandedHtml(subject, body, locale));
 }
 
 /**
  * Sends a branded Loan Status Update HTML email.
+ * @param locale - BCP-47 locale tag from the recipient's stored preference.
  */
-export async function sendLoanStatusUpdate(to: string, loanId: string, status: string): Promise<boolean> {
-  const subject = `Loan Application Status Update: ${status}`;
+export async function sendLoanStatusUpdate(
+  to: string,
+  loanId: string,
+  status: string,
+  locale?: string
+): Promise<boolean> {
+  const t = getEmailTranslator(locale);
+  const subject = t("loan_status_subject", { status });
   const body = `
-    <h2>Loan Status Update</h2>
-    <p>Your loan application has been updated to status: <strong>${status}</strong>.</p>
+    <h2>${t("loan_status_heading")}</h2>
+    <p>${t("loan_status_body", { status })}</p>
     <table class="details-table">
       <tr>
-        <td class="details-label">Loan Application ID</td>
+        <td class="details-label">${t("loan_status_label_id")}</td>
         <td class="details-value"><code>${loanId}</code></td>
       </tr>
       <tr>
-        <td class="details-label">New Status</td>
+        <td class="details-label">${t("loan_status_label_status")}</td>
         <td class="details-value"><span style="color: #3b82f6; font-weight: bold;">${status}</span></td>
       </tr>
       <tr>
-        <td class="details-label">Updated At</td>
+        <td class="details-label">${t("loan_status_label_updated")}</td>
         <td class="details-value">${new Date().toLocaleString()}</td>
       </tr>
     </table>
-    <p>Log in to the dashboard to view more details about your application.</p>
+    <p>${t("loan_status_footer_note")}</p>
   `;
-  return sendEmail(to, subject, getBrandedHtml(subject, body));
+  return sendEmail(to, subject, getBrandedHtml(subject, body, locale));
 }

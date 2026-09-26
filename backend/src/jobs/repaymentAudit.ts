@@ -1,5 +1,6 @@
 import { prisma } from "../services/db.js";
 import { queueNotification } from "../services/notification.js";
+import { getEmailTranslator } from "../i18n/emailI18n.js";
 
 // Hardcoded default late fee if not globally specified elsewhere
 const DEFAULT_LATE_FEE = 50.00;
@@ -77,10 +78,11 @@ async function handleEnterGracePeriod(loanId: string, applicantId: string) {
 
   const applicant = await prisma.applicant.findUnique({ where: { id: applicantId } });
   if (applicant) {
+    const t = getEmailTranslator(applicant.preferredLocale);
     await queueNotification(
       `${applicant.stellarAddress}@example.com`,
       "EMAIL",
-      `Your loan payment is overdue. You have entered a ${GRACE_PERIOD_DAYS}-day grace period.`
+      t("grace_period_body", { days: String(GRACE_PERIOD_DAYS) })
     );
   }
 }
@@ -103,10 +105,11 @@ async function handleMissedPayment(loanId: string, applicantId: string, currentM
 
     const applicant = await prisma.applicant.findUnique({ where: { id: applicantId } });
     if (applicant) {
+      const t = getEmailTranslator(applicant.preferredLocale);
       await queueNotification(
         `${applicant.stellarAddress}@example.com`,
         "EMAIL",
-        `Critical: Your loan has defaulted due to 3 consecutive missed payments.`
+        t("defaulted_body")
       );
     }
   } else {
@@ -126,10 +129,11 @@ async function handleMissedPayment(loanId: string, applicantId: string, currentM
 
     const applicant = await prisma.applicant.findUnique({ where: { id: applicantId } });
     if (applicant) {
+      const t = getEmailTranslator(applicant.preferredLocale);
       await queueNotification(
         `${applicant.stellarAddress}@example.com`,
         "EMAIL",
-        `You have missed a loan payment. A late fee of $${DEFAULT_LATE_FEE} has been applied.`
+        t("missed_payment_body", { fee: String(DEFAULT_LATE_FEE) })
       );
     }
   }
@@ -146,10 +150,11 @@ async function handleDefault(loanId: string, applicantId: string) {
   
   const applicant = await prisma.applicant.findUnique({ where: { id: applicantId } });
   if (applicant) {
+    const t = getEmailTranslator(applicant.preferredLocale);
     await queueNotification(
       `${applicant.stellarAddress}@example.com`,
       "EMAIL",
-      `Critical: Your loan has defaulted due to 3 consecutive missed payments.`
+      t("defaulted_body")
     );
   }
 }

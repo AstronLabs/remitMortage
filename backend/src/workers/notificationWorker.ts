@@ -29,14 +29,15 @@ async function handleEmailDispatch(recipient: string, content: string): Promise<
   if (content.trim().startsWith("{")) {
     try {
       const parsed = JSON.parse(content);
+      const locale: string | undefined = parsed.locale;
       if (parsed.template === "deposit_receipt") {
-        return await sendDepositReceipt(recipient, parsed.amount, parsed.transactionId);
+        return await sendDepositReceipt(recipient, parsed.amount, parsed.transactionId, locale);
       }
       if (parsed.template === "repayment_reminder") {
-        return await sendRepaymentReminder(recipient, parsed.amount, parsed.dueDate);
+        return await sendRepaymentReminder(recipient, parsed.amount, parsed.dueDate, locale);
       }
       if (parsed.template === "loan_status_update") {
-        return await sendLoanStatusUpdate(recipient, parsed.loanId, parsed.status);
+        return await sendLoanStatusUpdate(recipient, parsed.loanId, parsed.status, locale);
       }
     } catch {
       // fallback below

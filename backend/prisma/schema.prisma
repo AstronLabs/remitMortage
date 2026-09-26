@@ -112,6 +112,10 @@ model Applicant {
   creditScore        Int?
   taxId              String?
   monthlyIncome      String?
+  /// BCP-47 locale tag for this applicant (e.g. "en", "es", "pt", "fr", "zh").
+  /// Used to select the language for transactional emails.
+  /// Defaults to "en" when null — callers should treat null as "en".
+  preferredLocale    String?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
   verificationResults VerificationResult[]
