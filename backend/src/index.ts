@@ -60,6 +60,8 @@ import {
   mutationRateLimiter,
 } from "./middleware/rateLimit.js";
 import { issueCsrfToken, csrfProtection, CSRF_COOKIE } from "./middleware/csrf.js";
+import { adminIpAllowlist, resolveTrustProxy } from "./middleware/adminIpAllowlist.js";
+import { notFoundHandler } from "./middleware/notFound.js";
 import { startEventListener } from "./services/eventListener.js";
 import { startNotificationScheduler } from "./services/notification.js";
 import { startScheduler } from "./jobs/scheduler.js";
@@ -82,6 +84,17 @@ import { startAnalyticsWorker, stopAnalyticsWorker } from "./workers/analyticsWo
 const app = express();
 const config = loadConfig();
 const PORT = config.port;
+
+// How many proxies to believe when deriving req.ip. Must be correct for the
+// admin IP allowlist to evaluate the operator rather than the ingress/load
+// balancer. `false` (the default) trusts only the socket peer.
+app.set("trust proxy", resolveTrustProxy());
+if (app.get("trust proxy") === true) {
+  logger.warn(
+    "TRUST_PROXY=true trusts X-Forwarded-For from any caller, which lets a client " +
+      "spoof an allowlisted IP; prefer a hop count or the ingress subnet",
+  );
+}
 
 void initializeRedis();
 
@@ -205,15 +218,21 @@ app.use("/api/loan/import", mutationRateLimiter, authMiddleware, loanImportRoute
 app.use("/api/milestone", mutationRateLimiter, milestoneRouter);
 app.use("/api/analytics", analyticsRouter);
 app.use("/api/did", sensitiveRateLimiter, didRouter);
-app.use("/api/audit-logs", auditRouter);
 // kycRouter applies its own per-route auth (borrower wallet auth on upload,
 // operator API key on token issuance/decryption), so it is mounted bare.
 app.use("/api/kyc", kycRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/referral", referralRouter);
-app.use("/api/admin", authMiddleware, adminRouter);
-app.use("/api/admin", adminAuthRouter);
-app.use("/api/admin/api-keys", apiKeysRouter);
+// Privileged surface. `adminIpAllowlist` runs first, ahead of `authMiddleware`,
+// so a caller from outside ADMIN_IP_ALLOWLIST is answered with the same generic
+// 404 as an unknown path — before any 401/403 could confirm the route exists.
+// Mixed mounts are left alone on purpose: /api/analytics and /api/webhooks also
+// serve non-admin routes, so gating the whole mount would restrict more than
+// the admin surface.
+app.use("/api/admin", adminIpAllowlist, authMiddleware, adminRouter);
+app.use("/api/admin", adminIpAllowlist, adminAuthRouter);
+app.use("/api/admin/api-keys", adminIpAllowlist, apiKeysRouter);
+app.use("/api/audit-logs", adminIpAllowlist, auditRouter);
 app.use("/api/exports", exportsRouter);
 app.use("/api/webhooks/pagerduty", incidentWebhookRouter);
 app.use("/api/webhooks", authMiddleware, webhooksRouter);
@@ -222,6 +241,10 @@ app.use("/api/waitlist", waitlistRouter);
 app.use("/api/auth", authRouter);
 // Swagger UI — excluded from rate limits so developers can inspect freely
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+// Unmatched routes — and, by design, admin requests blocked by the IP
+// allowlist — resolve to one identical 404 body. Must precede errorHandler.
+app.use(notFoundHandler);
 
 // Global error handler (must be after routes)
 Sentry.setupExpressErrorHandler(app);
