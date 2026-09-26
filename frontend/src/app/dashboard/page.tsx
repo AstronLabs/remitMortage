@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { useWallet } from "../../context/WalletContext";
 import SavingsProgressCard from "../../components/SavingsProgressCard";
 import LoanStatusCard from "../../components/LoanStatusCard";
+import LoanTermsNarrationControls from "../../components/LoanTermsNarrationControls";
 import DepositModal from "../../components/DepositModal";
 import WithdrawModal from "../../components/WithdrawModal";
 import MilestoneTimeline, { type MilestoneNode } from "../../components/MilestoneTimeline";
@@ -285,6 +286,7 @@ export default function DashboardPage() {
               </div>
               <div id="tour-loan-status" className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl backdrop-blur-xl flex flex-col justify-between">
                 <LoanStatusCard loan={status.loan} />
+                <LoanTermsNarrationControls className="mt-4" />
                 <div className="mt-6 pt-6 border-t border-slate-800 flex gap-3">
                   <button
                     onClick={() => setShowDeposit(true)}
