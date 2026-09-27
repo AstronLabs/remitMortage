@@ -29,6 +29,7 @@ import { milestoneRouter } from "./routes/milestone.js";
 import { analyticsRouter } from "./routes/analytics.js";
 import { auditRouter } from "./routes/audit.js";
 import { kycRouter } from "./routes/kyc.js";
+import { addressRouter } from "./routes/address.js";
 import { supportChatRouter } from "./routes/supportChat.js";
 import { notificationsRouter } from "./routes/notifications.js";
 import { didRouter } from "./routes/did.js";
@@ -75,6 +76,10 @@ import { startRpcHealthMonitor } from "./services/rpcHealthMonitor.js";
 import { loadConfig } from "./config.js";
 import { getOcrProvider, setOcrProvider } from "./services/ocrService.js";
 import {
+  HttpAddressVerificationProvider,
+  setAddressVerificationProvider,
+} from "./services/addressVerificationProvider.js";
+import {
   FailoverKycProvider,
   HttpKycProvider,
   sendKycFailoverAlert,
@@ -112,6 +117,21 @@ if (config.kycBackupProviderUrl) {
         onAlert: sendKycFailoverAlert,
       }
     )
+  );
+}
+
+// Postal address verification (issue #791). Disabled unless a provider URL
+// is configured — the Null provider stays active otherwise, so every
+// submitted address is saved as-is and flagged UNVERIFIED for review rather
+// than blocked or silently trusted.
+if (config.addressVerificationApiUrl) {
+  setAddressVerificationProvider(
+    new HttpAddressVerificationProvider({
+      url: config.addressVerificationApiUrl,
+      apiKey: config.addressVerificationApiKey,
+      timeoutMs: config.addressVerificationTimeoutMs,
+      providerName: "usps",
+    })
   );
 }
 
@@ -242,6 +262,7 @@ app.use("/api/audit-logs", auditRouter);
 // kycRouter applies its own per-route auth (borrower wallet auth on upload,
 // operator API key on token issuance/decryption), so it is mounted bare.
 app.use("/api/kyc", kycRouter);
+app.use("/api/address", authMiddleware, addressRouter);
 app.use("/api/support-chat", authMiddleware, supportChatRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/referral", referralRouter);

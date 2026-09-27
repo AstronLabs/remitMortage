@@ -49,6 +49,7 @@ credentials.
 | Secondary IPFS (nft.storage / web3.storage) | `SECONDARY_IPFS_API_KEY` | `upload` | These providers issue single-purpose upload tokens by default; no action usually needed |
 | SendGrid (transactional email) | `SENDGRID_API_KEY` | `mail_send` | A key created without "Restricted Access" defaults to Full Access, bundling marketing/stats/suppressions management |
 | KYC backup verification provider | `KYC_BACKUP_PROVIDER_API_KEY` | `verify` | Some verification vendors bundle webhook/callback-URL configuration access by default |
+| Postal address verification provider | `ADDRESS_VERIFICATION_API_KEY` | `verify` | Address-verification vendors commonly bundle bulk/batch-processing and usage-analytics access by default |
 | AWS S3 (database backups) | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `s3:PutObject`, `s3:GetObject`, `s3:ListBucket`, `s3:DeleteObject` | Bucket policies scoped "for backups" commonly also grant `s3:PutBucketPolicy` / `s3:DeleteBucket` |
 | Google Cloud Storage (database backups) | `GCS_KEY_FILE` | `storage.objects.create/get/list/delete` | The "Storage Admin" predefined role is a common provisioning shortcut that also grants bucket delete / IAM-policy control |
 | Arweave (Irys bundler) | `IRYS_PRIVATE_KEY` | n/a — wallet private key | Not scope-auditable: a wallet key is inherently all-or-nothing. Inventoried only. |

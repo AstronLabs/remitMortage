@@ -172,6 +172,25 @@ model Applicant {
   taxIdHash          String?
   monthlyIncome      String?
   displayCurrency    String             @default("USD")
+  /// Mailing address (issue #791). Encrypted at rest like taxId/monthlyIncome
+  /// (see ENCRYPTED_FIELDS in services/db.ts). Holds the postal provider's
+  /// canonical/standardized form once verified; otherwise holds exactly what
+  /// the applicant submitted, pending manual review — see
+  /// addressVerificationStatus.
+  addressLine1              String?
+  addressLine2              String?
+  addressCity               String?
+  addressState              String?
+  addressPostalCode         String?
+  addressCountry            String?
+  /// "STANDARDIZED" | "NEEDS_REVIEW" | "UNVERIFIED" — null means no address
+  /// has ever been submitted. NEEDS_REVIEW = provider reached a verdict and
+  /// could not confirm deliverability; UNVERIFIED = provider was
+  /// unreachable/erroring. Neither silently accepts nor rejects the address.
+  addressVerificationStatus String?
+  addressVerificationDetail String?
+  addressVerifiedAt         DateTime?
+  addressProviderReference  String?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
   verificationResults VerificationResult[]
@@ -183,6 +202,7 @@ model Applicant {
 
   @@index([deletedAt])
   @@index([taxIdHash])
+  @@index([addressVerificationStatus])
 }
 
 model VerificationResult {

@@ -169,7 +169,15 @@ export async function disconnect(): Promise<void> {
 
 // ── Applicant ─────────────────────────────────────────────────────────────
 
-const ENCRYPTED_FIELDS = ["taxId", "monthlyIncome"] as const;
+const ENCRYPTED_FIELDS = [
+  "taxId",
+  "monthlyIncome",
+  "addressLine1",
+  "addressLine2",
+  "addressCity",
+  "addressState",
+  "addressPostalCode",
+] as const;
 
 function encryptFields<T extends Record<string, any>>(data: T): T {
   const result: Record<string, any> = { ...data };
@@ -429,6 +437,16 @@ export async function upsertApplicant(
     creditScore?: number;
     taxId?: string;
     monthlyIncome?: string;
+    addressLine1?: string;
+    addressLine2?: string | null;
+    addressCity?: string;
+    addressState?: string;
+    addressPostalCode?: string;
+    addressCountry?: string;
+    addressVerificationStatus?: string;
+    addressVerificationDetail?: string | null;
+    addressVerifiedAt?: Date | null;
+    addressProviderReference?: string | null;
   }
 ) {
   const encrypted: Record<string, any> = encryptFields(data);
@@ -451,6 +469,27 @@ export async function getApplicant(stellarAddress: string) {
       notificationPreference: true,
     },
   });
+  return decryptApplicant(applicant);
+}
+
+/** Mailing address + verification metadata only, decrypted. Null if the applicant has never submitted one. */
+export async function getApplicantAddress(stellarAddress: string) {
+  const applicant = await prisma.applicant.findFirst({
+    where: { stellarAddress, deletedAt: null },
+    select: {
+      addressLine1: true,
+      addressLine2: true,
+      addressCity: true,
+      addressState: true,
+      addressPostalCode: true,
+      addressCountry: true,
+      addressVerificationStatus: true,
+      addressVerificationDetail: true,
+      addressVerifiedAt: true,
+      addressProviderReference: true,
+    },
+  });
+  if (!applicant || !applicant.addressVerificationStatus) return null;
   return decryptApplicant(applicant);
 }
 

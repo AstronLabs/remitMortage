@@ -97,6 +97,19 @@ export const API_INTEGRATIONS: ApiIntegrationDefinition[] = [
     isConfigured: (env) => Boolean(env.KYC_BACKUP_PROVIDER_URL),
   },
   {
+    integration: "usps_address",
+    displayName: "Postal address verification provider",
+    credentialEnvVars: ["ADDRESS_VERIFICATION_API_KEY"],
+    capabilityScopes: {
+      verify: "verify",
+    },
+    grantedScopesEnvVar: "ADDRESS_VERIFICATION_GRANTED_SCOPES",
+    // Address-verification vendors commonly bundle bulk/batch-processing and
+    // usage-analytics access alongside single-address lookup by default.
+    defaultGrantedScopes: ["verify", "batch_processing", "usage_analytics"],
+    isConfigured: (env) => Boolean(env.ADDRESS_VERIFICATION_API_URL),
+  },
+  {
     integration: "aws_s3_backup",
     displayName: "AWS S3 (database backups)",
     credentialEnvVars: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
