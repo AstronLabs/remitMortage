@@ -23,6 +23,7 @@
 import axios from "axios";
 import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
+import { recordApiCapabilityUsage } from "./apiScopeUsageTracker.js";
 import type { OcrExtractedFields, OcrProvider, OcrResult } from "./ocrService.js";
 
 // ---------------------------------------------------------------------------
@@ -122,6 +123,7 @@ export class HttpKycProvider implements OcrProvider {
       }
     );
     const body = response.data ?? {};
+    void recordApiCapabilityUsage("kyc_backup", "verify").catch(() => {});
     return {
       fields: normalizeProviderFields(body.fields ?? body.data ?? body),
       success: true,

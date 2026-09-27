@@ -26,6 +26,7 @@ import {
 } from "../services/webhookLatency.js";
 import { listSuppressedApplicants } from "../services/emailSuppression.js";
 import { runUnusedIndexAuditJob } from "../jobs/unusedIndexAudit.js";
+import { runApiKeyScopeAuditJob } from "../jobs/apiKeyScopeAudit.js";
 import { loadConfig } from "../config.js";
 
 export const adminRouter = Router();
@@ -331,6 +332,33 @@ adminRouter.get("/db/unused-indexes", requireAdmin, async (_req: AuthenticatedRe
   } catch (error) {
     logger.error("Unused index audit error", { error });
     return res.status(500).json({ error: "unused_index_audit_failed" });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/security/api-key-scopes:
+ *   get:
+ *     summary: Manually trigger the API key least-privilege scope audit
+ *     description: >-
+ *       Report-only (issue #772). Compares each configured third-party
+ *       integration's granted provider scope against capability usage
+ *       actually recorded by the backend, and flags any granted scope never
+ *       exercised. Never revokes or modifies a credential — see
+ *       docs/API_KEY_SCOPE_AUDIT.md.
+ *     tags:
+ *       - Admin
+ *     responses:
+ *       200:
+ *         description: API key scope audit report.
+ */
+adminRouter.get("/security/api-key-scopes", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { report } = await runApiKeyScopeAuditJob();
+    return res.json(report);
+  } catch (error) {
+    logger.error("API key scope audit error", { error });
+    return res.status(500).json({ error: "api_key_scope_audit_failed" });
   }
 });
 

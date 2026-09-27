@@ -691,6 +691,24 @@ model ApiKey {
   @@index([revoked])
 }
 
+// Least-privilege scope audit for outbound third-party credentials (issue
+// #772). One row per (integration, capability) our code is able to exercise
+// against a provider — e.g. ("pinata", "unpin") — incremented on every real
+// call. A granted provider scope with no corresponding row (or a row whose
+// callCount is 0) has never been exercised and is a candidate for scope
+// reduction. See docs/API_KEY_SCOPE_AUDIT.md.
+model ApiCapabilityUsage {
+  id          String    @id @default(uuid())
+  integration String
+  capability  String
+  callCount   Int       @default(0)
+  lastUsedAt  DateTime?
+  firstSeenAt DateTime  @default(now())
+
+  @@unique([integration, capability])
+  @@index([integration])
+}
+
 model NotificationPreference {
   id                String   @id @default(uuid())
   applicantId       String   @unique
