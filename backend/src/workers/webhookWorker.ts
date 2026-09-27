@@ -33,6 +33,48 @@ const BASE_BACKOFF_MS = 1_000;
 
 let worker: Worker<WebhookJobData> | null = null;
 
+/**
+ * Updates a subscriber's consecutive-failure streak after a dispatch reaches
+ * a terminal outcome (all retries exhausted, or a success). Feeds
+ * jobs/webhookAutoDisable.ts, which pauses subscribers that stay in a failing
+ * streak for too long instead of retrying a dead endpoint forever.
+ */
+async function recordDispatchOutcome(
+  subscriptionId: string,
+  outcome: "success" | "dlq",
+  at: Date
+): Promise<void> {
+  try {
+    if (outcome === "success") {
+      await prisma.webhookSubscription.update({
+        where: { id: subscriptionId },
+        data: { consecutiveFailedDispatches: 0, failingSinceAt: null, lastSuccessAt: at },
+      });
+      return;
+    }
+
+    const current = await prisma.webhookSubscription.findUnique({
+      where: { id: subscriptionId },
+      select: { failingSinceAt: true },
+    });
+
+    await prisma.webhookSubscription.update({
+      where: { id: subscriptionId },
+      data: {
+        consecutiveFailedDispatches: { increment: 1 },
+        lastFailureAt: at,
+        failingSinceAt: current?.failingSinceAt ?? at,
+      },
+    });
+  } catch (err) {
+    logger.error("[webhook-worker] failed to record dispatch outcome", {
+      subscriptionId,
+      outcome,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 async function attemptPost(
   url: string,
   headers: Record<string, string>,
@@ -136,6 +178,7 @@ export async function startWebhookWorker(): Promise<void> {
           attempt: attempt + 1,
           statusCode: (result as any).statusCode,
         });
+        await recordDispatchOutcome(subscriptionId, "success", completedAt);
         return { success: true, deliveryId };
       }
 
@@ -170,6 +213,7 @@ export async function startWebhookWorker(): Promise<void> {
           topic,
           url,
         });
+        await recordDispatchOutcome(subscriptionId, "dlq", completedAt);
       }
 
       throw new Error(errorMsg);
