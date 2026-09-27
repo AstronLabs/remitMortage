@@ -179,6 +179,15 @@ export class DatabaseBackupService {
     const fileStream = createReadStream(filePath);
     const stats = require("fs").statSync(filePath);
 
+    // Stamped on every backup so the key rotation verification job
+    // (scripts/verify-backup-key-rotation.sh) can tell which encryption key
+    // produced it and how long that key has been in service, without needing
+    // to decrypt anything. See docs/SECRETS_ROTATION.md, "Backup encryption key".
+    const encryptionMetadata = {
+      encryptionKeyId: process.env.BACKUP_ENCRYPTION_KEY_ID || "unknown",
+      encryptionKeyRotatedAt: process.env.BACKUP_ENCRYPTION_KEY_ROTATED_AT || "",
+    };
+
     if (this.options.provider === "aws" && this.s3Client) {
       const command = new PutObjectCommand({
         Bucket: this.options.bucket,
@@ -188,6 +197,7 @@ export class DatabaseBackupService {
         Metadata: {
           timestamp: new Date().toISOString(),
           service: "remitmortgage-backend",
+          ...encryptionMetadata,
         },
       });
 
@@ -207,6 +217,7 @@ export class DatabaseBackupService {
                 metadata: {
                   timestamp: new Date().toISOString(),
                   service: "remitmortgage-backend",
+                  ...encryptionMetadata,
                 },
               },
             })
