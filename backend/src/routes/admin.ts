@@ -27,6 +27,15 @@ import {
 import { listSuppressedApplicants } from "../services/emailSuppression.js";
 import { runUnusedIndexAuditJob } from "../jobs/unusedIndexAudit.js";
 import { runApiKeyScopeAuditJob } from "../jobs/apiKeyScopeAudit.js";
+import {
+  getConversationById,
+  listMessages as listSupportChatMessages,
+  listOpenConversations,
+  postMessage as postSupportChatMessage,
+  setTypingState as setSupportChatTypingState,
+  SupportChatValidationError,
+} from "../services/supportChat.js";
+import { subscribeToSupportChat } from "../services/supportChatEvents.js";
 import { loadConfig } from "../config.js";
 
 export const adminRouter = Router();
@@ -569,3 +578,121 @@ adminRouter.post("/scoring/models", requireAdmin, async (req: AuthenticatedReque
     return res.status(500).json({ error: "failed_to_update_scoring_models" });
   }
 });
+
+// ── Support chat, agent side (issue #781) ────────────────────────────────
+// This backend has a single admin identity (see requireAdmin in
+// middleware/auth.ts), not a multi-agent support team — every AGENT-side
+// message/typing signal here is attributed to that one wallet.
+
+adminRouter.get("/support-chat/conversations", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const conversations = await listOpenConversations();
+    return res.json({ conversations });
+  } catch (error) {
+    logger.error("List support chat conversations error", { error });
+    return res.status(500).json({ error: "support_chat_unavailable" });
+  }
+});
+
+adminRouter.get(
+  "/support-chat/:conversationId/messages",
+  requireAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const conversation = await getConversationById(req.params.conversationId);
+      if (!conversation) {
+        return res.status(404).json({ error: "conversation_not_found" });
+      }
+      const messages = await listSupportChatMessages(conversation.id);
+      return res.json({ conversation, messages });
+    } catch (error) {
+      logger.error("List support chat messages error", { error });
+      return res.status(500).json({ error: "support_chat_unavailable" });
+    }
+  }
+);
+
+adminRouter.post(
+  "/support-chat/:conversationId/messages",
+  requireAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const conversation = await getConversationById(req.params.conversationId);
+      if (!conversation) {
+        return res.status(404).json({ error: "conversation_not_found" });
+      }
+      const message = await postSupportChatMessage(
+        conversation.id,
+        "AGENT",
+        req.user?.walletAddress ?? null,
+        req.body?.content
+      );
+      return res.status(201).json({ message });
+    } catch (error) {
+      if (error instanceof SupportChatValidationError) {
+        return res.status(400).json({ error: "invalid_message", message: error.message });
+      }
+      logger.error("Post support chat message error", { error });
+      return res.status(500).json({ error: "support_chat_unavailable" });
+    }
+  }
+);
+
+adminRouter.post(
+  "/support-chat/:conversationId/typing",
+  requireAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const conversation = await getConversationById(req.params.conversationId);
+      if (!conversation) {
+        return res.status(404).json({ error: "conversation_not_found" });
+      }
+      setSupportChatTypingState(conversation.id, "AGENT", Boolean(req.body?.isTyping));
+      return res.status(204).end();
+    } catch (error) {
+      logger.error("Set support chat typing state error", { error });
+      return res.status(500).json({ error: "support_chat_unavailable" });
+    }
+  }
+);
+
+adminRouter.get(
+  "/support-chat/:conversationId/stream",
+  requireAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    let conversation;
+    try {
+      conversation = await getConversationById(req.params.conversationId);
+    } catch (error) {
+      logger.error("Open support chat stream error", { error });
+      return res.status(500).json({ error: "support_chat_unavailable" });
+    }
+    if (!conversation) {
+      return res.status(404).json({ error: "conversation_not_found" });
+    }
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders?.();
+
+    const heartbeat = setInterval(() => {
+      res.write(": heartbeat\n\n");
+    }, 25_000);
+
+    const unsubscribe = subscribeToSupportChat(conversation.id, (event) => {
+      // Never echo the agent's own events back to their own stream.
+      if (event.type === "typing" && event.senderRole === "AGENT") return;
+      if (event.type === "message" && event.message.senderRole === "AGENT") return;
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    });
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+  }
+);

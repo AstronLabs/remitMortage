@@ -395,6 +395,33 @@ model LoanComment {
   @@index([authorAddress])
 }
 
+// In-app support chat (issue #781). One conversation per applicant wallet —
+// the counterparty is always the single admin/support identity gated by
+// `requireAdmin` (see middleware/auth.ts), matching this codebase's
+// single-admin model rather than a multi-agent support team.
+model SupportConversation {
+  id            String   @id @default(uuid())
+  walletAddress String   @unique
+  status        String   @default("OPEN")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  messages      SupportChatMessage[]
+
+  @@index([status])
+}
+
+model SupportChatMessage {
+  id             String              @id @default(uuid())
+  conversationId String
+  conversation   SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderRole     String              // "USER" | "AGENT"
+  senderAddress  String?
+  content        String
+  createdAt      DateTime            @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
 model AuditLog {
   id           String   @default(uuid())
   action       String
