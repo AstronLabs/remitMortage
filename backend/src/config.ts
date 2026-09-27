@@ -119,6 +119,18 @@ export interface Config {
   assignmentQueueEnabled: boolean;
   /** Duration (ms) above which a database operation is captured as a slow query (issue #583). */
   slowQueryThresholdMs: number;
+  /**
+   * Age (ms) at which a checked-out database connection is considered a
+   * potential leak and flagged with a WARN log + Prometheus counter increment.
+   * 0 disables the check entirely (not recommended in production).
+   */
+  dbConnectionLeakThresholdMs: number;
+  /**
+   * How often (ms) the background leak-detection sweeper scans active
+   * checkouts.  Shorter intervals catch leaks faster but add minor CPU overhead
+   * in very high-throughput environments.
+   */
+  dbLeakSweepIntervalMs: number;
   /** Backup KYC provider endpoint. Null leaves failover disabled. */
   kycBackupProviderUrl: string | null;
   /** Bearer token sent to the backup KYC provider. */
@@ -301,6 +313,14 @@ export function loadConfig(): Config {
     // Default on: the assignment queue is additive and best-effort.
     assignmentQueueEnabled: process.env.ASSIGNMENT_QUEUE_ENABLED !== "false",
     slowQueryThresholdMs: parseInt(process.env.SLOW_QUERY_THRESHOLD_MS || "200", 10),
+    dbConnectionLeakThresholdMs: parseInt(
+      process.env.DB_CONNECTION_LEAK_THRESHOLD_MS || "30000",
+      10
+    ),
+    dbLeakSweepIntervalMs: parseInt(
+      process.env.DB_LEAK_SWEEP_INTERVAL_MS || "10000",
+      10
+    ),
     kycBackupProviderUrl: process.env.KYC_BACKUP_PROVIDER_URL || null,
     kycBackupProviderApiKey: process.env.KYC_BACKUP_PROVIDER_API_KEY || null,
     kycFailoverThreshold: parseInt(process.env.KYC_FAILOVER_THRESHOLD || "3", 10),
