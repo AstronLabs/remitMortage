@@ -158,6 +158,7 @@ describe("KYC upload/decrypt routes", () => {
     const res = await request(app)
       .post(`/api/kyc/${BORROWER_ADDRESS}/upload`)
       .set("Authorization", `Bearer ${borrowerToken()}`)
+      .field("documentType", "income")
       .attach("document", PDF_BYTES, { filename: "payroll.pdf", contentType: "application/pdf" });
 
     expect(res.status).toBe(201);
@@ -172,6 +173,64 @@ describe("KYC upload/decrypt routes", () => {
     const parsed = JSON.parse(raw);
     expect(parsed.envelope.ciphertext).toBeDefined();
     expect(parsed.envelope.wrappedDataKey).toBeDefined();
+  });
+
+  it("lists safe applicant document metadata and reflects operator review transitions", async () => {
+    const upload = await request(app)
+      .post(`/api/kyc/${BORROWER_ADDRESS}/upload`)
+      .set("Authorization", `Bearer ${borrowerToken()}`)
+      .field("documentType", "income")
+      .attach("document", PDF_BYTES, { filename: "income.pdf", contentType: "application/pdf" });
+    const { documentId } = upload.body;
+
+    const initial = await request(app)
+      .get(`/api/kyc/${BORROWER_ADDRESS}/documents`)
+      .set("Authorization", `Bearer ${borrowerToken()}`);
+    expect(initial.status).toBe(200);
+    expect(initial.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ documentId, documentType: "income", status: "Uploaded" }),
+    ]));
+    expect(JSON.stringify(initial.body)).not.toContain("wrappedDataKey");
+
+    const underReview = await request(app)
+      .patch(`/api/kyc/${documentId}/review`)
+      .set("x-admin-api-key", ADMIN_KEY)
+      .send({ status: "Under Review" });
+    expect(underReview.status).toBe(200);
+    expect(underReview.body.status).toBe("Under Review");
+
+    const accepted = await request(app)
+      .patch(`/api/kyc/${documentId}/review`)
+      .set("x-admin-api-key", ADMIN_KEY)
+      .send({ status: "Accepted" });
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.status).toBe("Accepted");
+
+    const latest = await request(app)
+      .get(`/api/kyc/${BORROWER_ADDRESS}/documents`)
+      .set("Authorization", `Bearer ${borrowerToken()}`);
+    expect(latest.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ documentId, status: "Accepted" }),
+    ]));
+  });
+
+  it("rejects unsupported document review states", async () => {
+    const response = await request(app)
+      .patch("/api/kyc/nonexistent/review")
+      .set("x-admin-api-key", ADMIN_KEY)
+      .send({ status: "Pending" });
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe("invalid_status");
+  });
+
+  it("does not expose one applicant's documents to another wallet", async () => {
+    const response = await request(app)
+      .get(`/api/kyc/${BORROWER_ADDRESS}/documents`)
+      .set("Authorization", `Bearer ${jwt.sign(
+        { walletAddress: "GOTHERXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", network: "stellar" },
+        process.env.JWT_SECRET || "default_jwt_secret"
+      )}`);
+    expect(response.status).toBe(403);
   });
 
   it("blocks decryption without an operator API key (401)", async () => {
@@ -191,6 +250,7 @@ describe("KYC upload/decrypt routes", () => {
     const upload = await request(app)
       .post(`/api/kyc/${BORROWER_ADDRESS}/upload`)
       .set("Authorization", `Bearer ${borrowerToken()}`)
+      .field("documentType", "income")
       .attach("document", PDF_BYTES, { filename: "payroll.pdf", contentType: "application/pdf" });
     expect(upload.status).toBe(201);
     const { documentId } = upload.body;
@@ -221,10 +281,12 @@ describe("KYC upload/decrypt routes", () => {
     const upload1 = await request(app)
       .post(`/api/kyc/${BORROWER_ADDRESS}/upload`)
       .set("Authorization", `Bearer ${borrowerToken()}`)
+      .field("documentType", "income")
       .attach("document", PDF_BYTES, { filename: "a.pdf", contentType: "application/pdf" });
     const upload2 = await request(app)
       .post(`/api/kyc/${BORROWER_ADDRESS}/upload`)
       .set("Authorization", `Bearer ${borrowerToken()}`)
+      .field("documentType", "income")
       .attach("document", Buffer.from("different document"), {
         filename: "b.pdf",
         contentType: "application/pdf",

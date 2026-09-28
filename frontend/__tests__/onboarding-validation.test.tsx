@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import OnboardingWizard from "../src/components/onboarding/OnboardingWizard";
 import { getOnboardingStore } from "../src/hooks/useOnboardingState";
 
@@ -48,13 +48,77 @@ describe("Onboarding wizard – form validation", () => {
     render(<OnboardingWizard />);
 
     const input = screen.getByPlaceholderText("Recipient's G... address");
+    const scrollIntoView = jest.fn();
+    input.scrollIntoView = scrollIntoView;
     fireEvent.change(input, { target: { value: "not-a-stellar-address" } });
 
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
 
     // An inline validation alert is shown and the step does not advance.
-    await waitFor(() => expect(screen.getByText(/Invalid Stellar address/i)).toBeInTheDocument());
+    await waitFor(() => {
+      expect(document.getElementById("recipientAddress-error")).toHaveTextContent(
+        /Invalid Stellar address/i
+      );
+    });
+    const summary = screen.getByRole("region", { name: "Please correct the following errors" });
+    const summaryLink = within(summary).getByRole("link", {
+      name: /Recipient's Stellar wallet address: Invalid Stellar address/i,
+    });
+    expect(summaryLink).toHaveAttribute("href", "#recipientAddress");
+    fireEvent.click(summaryLink);
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    expect(document.activeElement).toBe(input);
     expect(getOnboardingStore().getState().step).toBe(2);
+  });
+
+  it("removes the summary when the invalid field is corrected", async () => {
+    setStep(2);
+    render(<OnboardingWizard />);
+
+    const input = screen.getByPlaceholderText("Recipient's G... address");
+    fireEvent.change(input, { target: { value: "not-a-stellar-address" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    expect(
+      await screen.findByRole("region", { name: "Please correct the following errors" })
+    ).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: `G${"A".repeat(55)}` } });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("region", { name: "Please correct the following errors" })
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("switches steps before scrolling and focusing a summary target", async () => {
+    setStep(2);
+    render(<OnboardingWizard />);
+
+    const recipientAddress = screen.getByPlaceholderText("Recipient's G... address");
+    const scrollIntoView = jest.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    fireEvent.change(recipientAddress, { target: { value: "not-a-stellar-address" } });
+
+    act(() => setStep(3));
+    const savingsTarget = await screen.findByLabelText("Down Payment Goal (USDC)");
+    fireEvent.change(savingsTarget, { target: { value: "100" } });
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+
+    const summary = await screen.findByRole("region", {
+      name: "Please correct the following errors",
+    });
+    expect(within(summary).getAllByRole("link")).toHaveLength(2);
+    fireEvent.click(
+      within(summary).getByRole("link", {
+        name: /Recipient's Stellar wallet address: Invalid Stellar address/i,
+      })
+    );
+
+    await waitFor(() => expect(getOnboardingStore().getState().step).toBe(2));
+    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    expect(document.activeElement).toBe(screen.getByPlaceholderText("Recipient's G... address"));
+    HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
   });
 
   it("blocks navigation past the savings-goal step when the target is below the minimum", async () => {
@@ -66,7 +130,9 @@ describe("Onboarding wizard – form validation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /next/i }));
 
-    await waitFor(() => expect(screen.getByText(/at least \$500/i)).toBeInTheDocument());
+    await waitFor(() => {
+      expect(document.getElementById("savingsTarget-error")).toHaveTextContent(/at least \$500/i);
+    });
     expect(getOnboardingStore().getState().step).toBe(3);
   });
 

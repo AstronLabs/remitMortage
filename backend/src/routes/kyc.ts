@@ -7,7 +7,14 @@ import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
 import { authMiddleware, AuthenticatedRequest } from "../middleware/auth.js";
 import { encryptKycUpload, KycUploadRequest } from "../middleware/kycEncryption.js";
-import { storeEncryptedDocument, getEncryptedDocument } from "../services/kycStorage.js";
+import {
+  storeEncryptedDocument,
+  getEncryptedDocument,
+  listApplicantDocuments,
+  listAllApplicantDocuments,
+  updateDocumentReview,
+  type KycDocumentStatus,
+} from "../services/kycStorage.js";
 import { decryptBuffer } from "../services/kmsEncryption.js";
 import { issueKycAccessToken, verifyKycAccessToken } from "../services/kycAccessToken.js";
 import { extractKycFields } from "../services/ocrService.js";
@@ -20,6 +27,20 @@ import {
 } from "../services/kycOcrStore.js";
 
 export const kycRouter = Router();
+
+const KYC_DOCUMENT_TYPES = new Set([
+  "identity",
+  "income",
+  "bank_statement",
+  "property_contract",
+  "construction_plan",
+]);
+const KYC_REVIEW_STATUSES = new Set<KycDocumentStatus>([
+  "Uploaded",
+  "Under Review",
+  "Accepted",
+  "Rejected",
+]);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -168,6 +189,7 @@ kycRouter.post(
       // Store the encrypted document (existing behaviour — unchanged)
       const record = await storeEncryptedDocument(
         address,
+        documentType,
         req.file.originalname,
         req.file.mimetype,
         req.kycEnvelope

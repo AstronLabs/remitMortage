@@ -19,13 +19,26 @@ import {
   REFERRAL_QUERY_PARAM,
 } from "@/lib/referralApi";
 
-const STEPS = ["Connect Wallet", "Verify History", "Set Goal", "First Deposit"];
+const STEPS = ["Connect Wallet", "Verify History", "Set Goal", "Documents", "Submit Application"];
+const FIELD_STEPS: Record<keyof OnboardingFormValues, number> = {
+  recipientAddress: 2,
+  savingsTarget: 3,
+  savingsDuration: 3,
+  firstDepositAmount: 5,
+};
+
+const FIELD_LABELS: Record<keyof OnboardingFormValues, string> = {
+  recipientAddress: "Recipient's Stellar wallet address",
+  savingsTarget: "Down Payment Goal (USDC)",
+  savingsDuration: "Savings Duration",
+  firstDepositAmount: "Initial Deposit Amount (USDC)",
+};
 
 export default function OnboardingWizard() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const store = getOnboardingStore();
-  const { publicKey, connect } = useWallet();
+  const { publicKey, connect, signMessage } = useWallet();
 
   // State from Zustand store (persisted across reloads).
   const step = useOnboardingState((s) => s.step);
@@ -35,12 +48,18 @@ export default function OnboardingWizard() {
   const [usdcBalance, setUsdcBalance] = useState("0");
   const [isLoading, setIsLoading] = useState(false);
   const [verificationMessage, setVerificationMessage] = useState("");
+  const [loanType, setLoanType] = useState<LoanType>("purchase");
+  const [documentsAccepted, setDocumentsAccepted] = useState(false);
+  const [authenticatedAddress, setAuthenticatedAddress] = useState<string | null>(null);
+  const [errorAnnouncementKey, setErrorAnnouncementKey] = useState(0);
+  const pendingFieldFocus = useRef<keyof OnboardingFormValues | null>(null);
 
   const {
     control,
     trigger,
     getValues,
     setValue,
+    setFocus,
     formState: { errors },
   } = useForm<OnboardingFormValues>({
     resolver: zodResolver(onboardingSchema),
@@ -84,6 +103,29 @@ export default function OnboardingWizard() {
   const HORIZON_URL = process.env.NEXT_PUBLIC_HORIZON_URL!;
   const USDC_TOKEN_ID = process.env.NEXT_PUBLIC_USDC_TOKEN_ID!;
 
+  const fetchUSDCBalance = useCallback(
+    async (pk: string) => {
+      try {
+        const { Horizon } = await import("@stellar/stellar-sdk");
+        const server = new Horizon.Server(HORIZON_URL);
+        const account = await server.accounts().accountId(pk).call();
+        const balances = account.balances as Array<{
+          asset_code?: string;
+          asset_issuer?: string;
+          balance: string;
+        }>;
+        const usdcBalanceLine = balances.find(
+          (balance) => balance.asset_code === "USDC" && balance.asset_issuer === USDC_TOKEN_ID
+        );
+        setUsdcBalance(usdcBalanceLine ? parseFloat(usdcBalanceLine.balance).toFixed(2) : "0.00");
+      } catch (e) {
+        console.warn("Could not fetch USDC balance.", e);
+        setUsdcBalance("0.00");
+      }
+    },
+    [HORIZON_URL, USDC_TOKEN_ID, setUsdcBalance]
+  );
+
   useEffect(() => {
     const refCode = searchParams.get(REFERRAL_QUERY_PARAM);
     if (refCode) {
@@ -102,9 +144,39 @@ export default function OnboardingWizard() {
 
   useEffect(() => {
     if (step === 1 && publicKey) {
-      fetchUSDCBalance(publicKey);
+      const timeout = window.setTimeout(() => void fetchUSDCBalance(publicKey), 0);
+      return () => clearTimeout(timeout);
     }
-  }, [step, publicKey]);
+  }, [step, publicKey, fetchUSDCBalance]);
+
+  useEffect(() => {
+    const fieldName = pendingFieldFocus.current;
+    if (!fieldName || step !== FIELD_STEPS[fieldName]) return;
+    const field = document.getElementById(fieldName);
+    if (!field) return;
+    field.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    setFocus(fieldName);
+    field.focus();
+    pendingFieldFocus.current = null;
+  }, [setFocus, step]);
+
+  const focusErrorField = (fieldName: keyof OnboardingFormValues) => {
+    const field = document.getElementById(fieldName);
+    if (!field) return;
+    field.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    setFocus(fieldName);
+    field.focus();
+  };
+
+  const handleErrorFieldSelect = (fieldName: keyof OnboardingFormValues & string) => {
+    const targetStep = FIELD_STEPS[fieldName];
+    if (step === targetStep) {
+      focusErrorField(fieldName);
+      return;
+    }
+    pendingFieldFocus.current = fieldName;
+    store.getState().setStep(targetStep);
+  };
 
   const handleConnect = async () => {
     setIsLoading(true);
@@ -125,24 +197,12 @@ export default function OnboardingWizard() {
     setIsLoading(false);
   };
 
-  const fetchUSDCBalance = async (pk: string) => {
-    try {
-      const { Horizon } = await import("@stellar/stellar-sdk");
-      const server = new Horizon.Server(HORIZON_URL);
-      const account = await server.accounts().accountId(pk).call();
-      const usdcBalanceLine = (account.balances as any[]).find(
-        (b) => b.asset_code === "USDC" && b.asset_issuer === USDC_TOKEN_ID
-      );
-      setUsdcBalance(usdcBalanceLine ? parseFloat(usdcBalanceLine.balance).toFixed(2) : "0.00");
-    } catch (e) {
-      console.warn("Could not fetch USDC balance.", e);
-      setUsdcBalance("0.00");
-    }
-  };
-
   const handleVerify = async () => {
     const valid = await trigger("recipientAddress");
-    if (!valid) return;
+    if (!valid) {
+      setErrorAnnouncementKey((key) => key + 1);
+      return;
+    }
 
     if (!publicKey) {
       toast.error("Please connect your wallet first.");
@@ -161,7 +221,8 @@ export default function OnboardingWizard() {
         }),
       });
       const data = await response.json();
-      if (response.ok && data.eligible) {
+      if (!response.ok) throw new Error(data.error ?? data.message ?? "Verification failed.");
+      if (data.eligible) {
         store.getState().setIsVerified(true);
         setVerificationMessage(data.message);
         toast.success("Remittance history verified!");
@@ -180,31 +241,124 @@ export default function OnboardingWizard() {
   };
 
   const handleDeposit = async () => {
+    if (!documentsAccepted) {
+      toast.error(
+        "Complete the document checklist: every required document must be accepted before final submission."
+      );
+      store.getState().setStep(4);
+      return;
+    }
     if (!publicKey) {
       toast.error("Wallet not connected.");
       return;
     }
     const valid = await trigger("firstDepositAmount");
-    if (!valid) return;
+    if (!valid) {
+      setErrorAnnouncementKey((key) => key + 1);
+      return;
+    }
 
     setIsLoading(true);
     toast.loading("Preparing transaction...");
 
     try {
+      const submitted = await submitLoanApplication();
+      if (!submitted) {
+        toast.dismiss();
+        return;
+      }
       toast.dismiss();
-      toast.success("Simulated deposit success! Redirecting to Escrow Dashboard...");
+      toast.success("Loan application submitted. Redirecting to Escrow Dashboard...");
       clearDraft(); // Clear autosaved data on successful submission
       store.getState().reset();
       router.push("/dashboard");
     } catch (e) {
       console.error(e);
       toast.dismiss();
-      toast.error("Deposit failed.");
+      toast.error(e instanceof Error ? e.message : "Application submission failed.");
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleDocumentEligibilityChange = useCallback(
+    (eligible: boolean) => {
+      setDocumentsAccepted(eligible);
+    },
+    [setDocumentsAccepted]
+  );
+
+  const submitLoanApplication = async (): Promise<boolean> => {
+    if (!documentsAccepted) {
+      toast.error("Submission is blocked until every required document is accepted.");
+      store.getState().setStep(4);
+      return false;
+    }
+    const authenticated = authenticatedAddress === publicKey || (await authenticateApplicant());
+    if (!authenticated || !publicKey) return false;
+
+    const applicationResponse = await fetch("/api/loan/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getCsrfHeaders() },
+      body: JSON.stringify({
+        borrowerAddress: publicKey,
+        amount: getValues("firstDepositAmount"),
+        loanType,
+      }),
+    });
+    const applicationBody = await applicationResponse.json().catch(() => ({}));
+    if (!applicationResponse.ok) {
+      throw new Error(applicationBody.message ?? "Loan application submission failed.");
+    }
+    return true;
+  };
+
+  const getCsrfHeaders = (): Record<string, string> => {
+    const csrf = document.cookie
+      .split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith("csrfToken="))
+      ?.slice("csrfToken=".length);
+    return csrf ? { "x-csrf-token": decodeURIComponent(csrf) } : {};
+  };
+
+  const authenticateApplicant = async (): Promise<boolean> => {
+    if (!publicKey) {
+      toast.error("Connect your Stellar wallet before continuing.");
+      return false;
+    }
+    const challengeResponse = await fetch("/api/verification/challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getCsrfHeaders() },
+      body: JSON.stringify({ walletAddress: publicKey, network: "stellar" }),
+    });
+    const challengeBody = await challengeResponse.json();
+    if (!challengeResponse.ok || typeof challengeBody.challenge !== "string") {
+      toast.error(challengeBody.message ?? "Could not start wallet verification.");
+      return false;
+    }
+    const signature = await signMessage(challengeBody.challenge);
+    if (!signature) {
+      toast.error("Wallet signature is required to access applicant documents.");
+      return false;
+    }
+    const verifyResponse = await fetch("/api/verification/verify-ownership", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getCsrfHeaders() },
+      body: JSON.stringify({
+        walletAddress: publicKey,
+        network: "stellar",
+        challenge: challengeBody.challenge,
+        signature,
+      }),
+    });
+    if (!verifyResponse.ok) {
+      toast.error("Wallet verification failed. Please try again.");
+      return false;
+    }
+    setAuthenticatedAddress(publicKey);
+    return true;
+  };
 
   const monthlyContribution = useMemo(() => {
     if (watchedDuration > 0 && watchedTarget > 0) {
@@ -255,6 +409,9 @@ export default function OnboardingWizard() {
                 Enter the Stellar wallet address of your remittance recipient.
               </p>
             </div>
+            <label htmlFor="recipientAddress" className="sr-only">
+              {FIELD_LABELS.recipientAddress}
+            </label>
             <Controller
               name="recipientAddress"
               control={control}
@@ -265,6 +422,10 @@ export default function OnboardingWizard() {
                     type="text"
                     placeholder="Recipient's G... address"
                     className="input-field flex-1 font-mono text-xs"
+                    aria-invalid={Boolean(errors.recipientAddress)}
+                    aria-describedby={
+                      errors.recipientAddress ? "recipientAddress-error" : undefined
+                    }
                     value={field.value ?? ""}
                     onChange={(e) => {
                       field.onChange(e.target.value);
@@ -285,7 +446,9 @@ export default function OnboardingWizard() {
               )}
             />
             {errors.recipientAddress && (
-              <p className="text-red-400 text-xs">{errors.recipientAddress.message}</p>
+              <p id="recipientAddress-error" className="text-red-400 text-xs">
+                {errors.recipientAddress.message}
+              </p>
             )}
             {verificationMessage && (
               <div
@@ -307,7 +470,10 @@ export default function OnboardingWizard() {
             </div>
             <div className="space-y-4">
               <div>
-                <label className="text-xs text-slate-300 font-semibold block mb-1">
+                <label
+                  htmlFor="savingsTarget"
+                  className="text-xs text-slate-300 font-semibold block mb-1"
+                >
                   Down Payment Goal (USDC)
                 </label>
                 <Controller
@@ -318,6 +484,8 @@ export default function OnboardingWizard() {
                       data-testid="onboarding-savings-target"
                       type="number"
                       className="input-field w-full font-mono"
+                      aria-invalid={Boolean(errors.savingsTarget)}
+                      aria-describedby={errors.savingsTarget ? "savingsTarget-error" : undefined}
                       value={Number.isNaN(field.value) ? "" : field.value}
                       onChange={(e) => {
                         const value = Number(e.target.value);
@@ -329,11 +497,16 @@ export default function OnboardingWizard() {
                   )}
                 />
                 {errors.savingsTarget && (
-                  <p className="text-red-400 text-xs mt-1">{errors.savingsTarget.message}</p>
+                  <p id="savingsTarget-error" className="text-red-400 text-xs mt-1">
+                    {errors.savingsTarget.message}
+                  </p>
                 )}
               </div>
               <div>
-                <label className="text-xs text-slate-300 font-semibold block mb-1">
+                <label
+                  htmlFor="savingsDuration"
+                  className="text-xs text-slate-300 font-semibold block mb-1"
+                >
                   Savings Duration
                 </label>
                 <Controller
@@ -341,8 +514,14 @@ export default function OnboardingWizard() {
                   control={control}
                   render={({ field }) => (
                     <select
+                      id="savingsDuration"
+                      ref={field.ref}
                       className="input-field w-full"
                       value={field.value}
+                      aria-invalid={Boolean(errors.savingsDuration)}
+                      aria-describedby={
+                        errors.savingsDuration ? "savingsDuration-error" : undefined
+                      }
                       onChange={(e) => {
                         const value = Number(e.target.value) as 6 | 9 | 12;
                         field.onChange(value);
@@ -356,6 +535,11 @@ export default function OnboardingWizard() {
                     </select>
                   )}
                 />
+                {errors.savingsDuration && (
+                  <p id="savingsDuration-error" className="text-red-400 text-xs mt-1">
+                    {errors.savingsDuration.message}
+                  </p>
+                )}
               </div>
 
               <div className="p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 text-xs flex justify-between items-center">
@@ -367,7 +551,30 @@ export default function OnboardingWizard() {
             </div>
           </div>
         );
-      case 4: // First Deposit
+      case 4: // Required loan documents
+        return (
+          <div className="space-y-5">
+            <label className="block text-xs text-slate-300 font-semibold">
+              Loan purpose
+              <select
+                value={loanType}
+                onChange={(event) => setLoanType(event.target.value as LoanType)}
+                className="input-field mt-2 w-full"
+                aria-label="Loan purpose"
+              >
+                <option value="purchase">Purchase an existing property</option>
+                <option value="construction">Construct a property</option>
+              </select>
+            </label>
+            <DocumentChecklist
+              applicantAddress={publicKey}
+              loanType={loanType}
+              onEligibilityChange={handleDocumentEligibilityChange}
+              onAuthenticate={authenticateApplicant}
+            />
+          </div>
+        );
+      case 5: // First Deposit
         return (
           <div className="space-y-5">
             <div>
@@ -377,7 +584,10 @@ export default function OnboardingWizard() {
               </p>
             </div>
             <div>
-              <label className="text-xs text-slate-300 font-semibold block mb-1">
+              <label
+                htmlFor="firstDepositAmount"
+                className="text-xs text-slate-300 font-semibold block mb-1"
+              >
                 Initial Deposit Amount (USDC)
               </label>
               <Controller
@@ -388,6 +598,10 @@ export default function OnboardingWizard() {
                     data-testid="onboarding-first-deposit"
                     type="number"
                     className="input-field w-full font-mono"
+                    aria-invalid={Boolean(errors.firstDepositAmount)}
+                    aria-describedby={
+                      errors.firstDepositAmount ? "firstDepositAmount-error" : undefined
+                    }
                     value={Number.isNaN(field.value) ? "" : field.value}
                     onChange={(e) => {
                       const value = Number(e.target.value);
@@ -399,17 +613,24 @@ export default function OnboardingWizard() {
                 )}
               />
               {errors.firstDepositAmount && (
-                <p className="text-red-400 text-xs mt-1">{errors.firstDepositAmount.message}</p>
+                <p id="firstDepositAmount-error" className="text-red-400 text-xs mt-1">
+                  {errors.firstDepositAmount.message}
+                </p>
               )}
             </div>
             <button
               data-testid="onboarding-deposit"
               onClick={handleDeposit}
               className="btn-cta w-full justify-center py-3.5"
-              disabled={isLoading}
+              disabled={isLoading || !documentsAccepted}
             >
-              {isLoading ? "Signing Transaction..." : "Deposit USDC & Unlock Escrow"}
+              {isLoading ? "Submitting Application..." : "Submit Loan Application"}
             </button>
+            {!documentsAccepted && (
+              <p role="status" className="text-xs text-amber-300">
+                Application submission is blocked until every required document is accepted.
+              </p>
+            )}
           </div>
         );
       default:
@@ -421,7 +642,10 @@ export default function OnboardingWizard() {
     const currentFields = STEP_FIELDS[step];
     if (currentFields.length > 0) {
       const valid = await trigger(currentFields);
-      if (!valid) return;
+      if (!valid) {
+        setErrorAnnouncementKey((key) => key + 1);
+        return;
+      }
     }
 
     if (step === 1 && !publicKey) {
@@ -431,6 +655,15 @@ export default function OnboardingWizard() {
     if (step === 2 && !isVerified) {
       toast.error("Please verify your remittance history to continue.");
       return;
+    }
+
+    if (step === 4 && !documentsAccepted) {
+      toast.error("Submission is blocked until every required document has been accepted.");
+      return;
+    }
+    if (step === 5 && authenticatedAddress !== publicKey) {
+      const authenticated = await authenticateApplicant();
+      if (!authenticated) return;
     }
 
     store.getState().setStep(step + 1);

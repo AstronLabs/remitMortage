@@ -34,6 +34,7 @@ export interface LoanApplication {
   id: string;
   borrowerAddress: string;
   amount: string;
+  loanType?: string;
   status: LoanStatus;
   reason?: string;
   createdAt: string;

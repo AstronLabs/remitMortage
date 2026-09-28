@@ -44,6 +44,11 @@ import type { AuthenticatedRequest } from "../middleware/auth.js";
 
 export const loanRouter = Router();
 
+const REQUIRED_DOCUMENTS_BY_LOAN_TYPE: Record<string, string[]> = {
+  purchase: ["identity", "income", "bank_statement", "property_contract"],
+  construction: ["identity", "income", "bank_statement", "construction_plan"],
+};
+
 // POST /api/loan/apply
 loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"), async (req, res) => {
   try {
