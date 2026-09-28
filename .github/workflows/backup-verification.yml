@@ -14,7 +14,11 @@ on:
     paths:
       - '.github/workflows/backup-verification.yml'
       - 'scripts/verify-backup-restore.sh'
+      - 'scripts/verify-backup-key-rotation.sh'
       - 'backend/prisma/schema.prisma'
+
+permissions:
+  contents: read
 
 jobs:
   verify-restore:
@@ -132,3 +136,69 @@ jobs:
 
             The validation log is attached to the run as the
             "backup-verification-report" artifact.
+
+  verify-key-rotation:
+    name: Verify Backup Encryption Key Rotation
+    # Checks real production backup metadata against AWS credentials; skip on
+    # PR runs, which neither have those secrets nor need this signal — a
+    # config-only change here is exercised by the schedule/dispatch runs.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    env:
+      BACKUP_BUCKET: ${{ vars.BACKUP_BUCKET || 'remitmortgage-backups' }}
+      BACKUP_KEY_ROTATION_INTERVAL_DAYS: ${{ vars.BACKUP_KEY_ROTATION_INTERVAL_DAYS || '90' }}
+      EXPECTED_ENCRYPTION_KEY_ID: ${{ vars.BACKUP_ENCRYPTION_KEY_ID }}
+      REPORT_PATH: backup-key-rotation-report.txt
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Run Key Rotation Check
+        id: rotation
+        run: |
+          chmod +x scripts/verify-backup-key-rotation.sh
+          scripts/verify-backup-key-rotation.sh
+
+      - name: Upload Rotation Check Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-key-rotation-report
+          path: ${{ env.REPORT_PATH }}
+          retention-days: 90
+
+      - name: Email Alert on Stuck Rotation
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.ALERT_SMTP_SERVER }}
+          server_port: ${{ secrets.ALERT_SMTP_PORT }}
+          username: ${{ secrets.ALERT_SMTP_USERNAME }}
+          password: ${{ secrets.ALERT_SMTP_PASSWORD }}
+          from: RemitMortgage Backup Verification
+          to: ${{ secrets.ALERT_EMAIL_TO }}
+          subject: "[FAILED] Backup encryption key rotation check — ${{ github.repository }}"
+          body: |
+            The backup encryption key rotation check failed.
+
+            Repository: ${{ github.repository }}
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Triggered by: ${{ github.event_name }}
+
+            The encryption key used for the most recent database backup either
+            has not rotated within the configured policy window, or does not
+            match the key currently on file — a stuck rotation could mean
+            months of backups are encrypted under a single aging key.
+
+            See the "backup-key-rotation-report" artifact for details, and
+            docs/SECRETS_ROTATION.md ("Backup encryption key") for how to
+            rotate BACKUP_ENCRYPTION_KEY.

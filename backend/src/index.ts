@@ -79,6 +79,7 @@ import { startNotificationScheduler } from "./services/notification.js";
 import { startScheduler } from "./jobs/scheduler.js";
 import { startBackupScheduler, startBackupCleanupScheduler } from "./jobs/backupScheduler.js";
 import { startWebhookKeyRotationScheduler } from "./jobs/webhookKeyRotation.js";
+import { startWebhookAutoDisableScheduler, stopWebhookAutoDisableScheduler } from "./jobs/webhookAutoDisable.js";
 import { startSecretsRotationScheduler } from "./jobs/secretsRotation.js";
 import { startJwtKeyRotationScheduler } from "./jobs/jwtKeyRotation.js";
 import { startRpcHealthMonitor } from "./services/rpcHealthMonitor.js";
@@ -326,6 +327,7 @@ app.listen(PORT, () => {
   startBackupScheduler();
   startBackupCleanupScheduler();
   startWebhookKeyRotationScheduler();
+  startWebhookAutoDisableScheduler();
   startSecretsRotationScheduler();
   startJwtKeyRotationScheduler();
   // Proactively monitor Soroban RPC node health and alert operators on
@@ -345,6 +347,7 @@ async function shutdown(signal: string) {
     queueService.close(),
     closeCluster(),
   ]);
+  stopWebhookAutoDisableScheduler();
   logger.info("[shutdown] complete");
   process.exit(0);
 }

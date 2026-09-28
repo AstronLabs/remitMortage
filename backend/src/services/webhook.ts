@@ -293,6 +293,14 @@ export async function listSubscriptions(ownerAddress?: string): Promise<any[]> {
       previousSecretExpiresAt: true,
       webhookSchemaVersion: true,
       deprecationNotifiedAt: true,
+      // Lets admin tooling see a subscriber's failure streak before it hits
+      // the auto-disable threshold, and confirm whether a paused subscriber
+      // was disabled automatically or by an operator.
+      consecutiveFailedDispatches: true,
+      failingSinceAt: true,
+      lastFailureAt: true,
+      lastSuccessAt: true,
+      autoDisabledAt: true,
     },
   });
   return rows;
@@ -317,18 +325,38 @@ export async function getSubscription(id: string): Promise<any | null> {
       previousSecretExpiresAt: true,
       webhookSchemaVersion: true,
       deprecationNotifiedAt: true,
+      consecutiveFailedDispatches: true,
+      failingSinceAt: true,
+      lastFailureAt: true,
+      lastSuccessAt: true,
+      autoDisabledAt: true,
     },
   });
 }
 
-/** Pause or revoke a subscription by id. */
+/**
+ * Pause, revoke, or (re-)activate a subscription by id. Re-activating
+ * clears its failure streak, giving it a clean slate for the auto-disable
+ * sweep (jobs/webhookAutoDisable.ts) rather than risking an immediate
+ * re-disable off stale counters from before the fix.
+ */
 export async function updateSubscriptionStatus(
   id: string,
   status: "active" | "paused" | "revoked"
 ): Promise<any> {
   return prisma.webhookSubscription.update({
     where: { id },
-    data: { status, updatedAt: new Date() },
+    data: {
+      status,
+      updatedAt: new Date(),
+      ...(status === "active"
+        ? {
+            consecutiveFailedDispatches: 0,
+            failingSinceAt: null,
+            autoDisabledAt: null,
+          }
+        : {}),
+    },
   });
 }
 

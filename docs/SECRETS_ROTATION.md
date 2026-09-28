@@ -52,3 +52,37 @@ To rotate in a deployment, set the new value in `JWT_SECRET`, move the old value
 into `JWT_PREVIOUS_SECRETS`, and leave it there until the grace period elapses.
 Rotate `JWT_SECRET` in your secret manager first so the app picks up the new key
 before old sessions issued under the previous key fall out of grace.
+
+## Backup encryption key
+
+Database backups (`backend/src/services/databaseBackup.ts`) are encrypted with
+`BACKUP_ENCRYPTION_KEY` before upload. Two companion variables identify *which*
+key produced a given backup, since the restore drill alone (verify-restore in
+`.github/workflows/backup-verification.yml`) proves a backup can be restored
+but says nothing about whether the key encrypting it is stale:
+
+- `BACKUP_ENCRYPTION_KEY_ID` — a short label for the current key (e.g. a
+  year-month like `2026-01`).
+- `BACKUP_ENCRYPTION_KEY_ROTATED_AT` — an ISO-8601 timestamp of when that key
+  was put into service.
+
+Both are stamped as object metadata (`encryptionKeyId`, `encryptionKeyRotatedAt`)
+on every backup uploaded to S3/GCS, independent of the encrypted payload itself.
+
+The `verify-key-rotation` job in `.github/workflows/backup-verification.yml`
+runs on the same monthly schedule as the restore drill and checks the most
+recently uploaded backup's metadata via `scripts/verify-backup-key-rotation.sh`:
+
+- Fails if the key's age (`now - encryptionKeyRotatedAt`) exceeds
+  `BACKUP_KEY_ROTATION_INTERVAL_DAYS` (default 90) — a stuck rotation.
+- If the `BACKUP_ENCRYPTION_KEY_ID` GitHub Actions variable is set, also fails
+  if the backup's `encryptionKeyId` does not match it — the rotation updated
+  the secret store but the backup job is still using the old key.
+
+To rotate: generate a new `BACKUP_ENCRYPTION_KEY`, pick a new
+`BACKUP_ENCRYPTION_KEY_ID`, set `BACKUP_ENCRYPTION_KEY_ROTATED_AT` to the
+rotation time, deploy all three together, and update the
+`BACKUP_ENCRYPTION_KEY_ID` GitHub Actions variable to match so the next
+scheduled check confirms it took effect. Backups already encrypted under the
+previous key are unaffected — restoring them still requires that key, so keep
+retired keys available for at least as long as `BACKUP_RETENTION_DAYS`.
