@@ -66,6 +66,9 @@ jobs:
       - name: Run Library Unit Tests
         run: cargo test --lib
         working-directory: contracts
+        env:
+          PROPTEST_CASES: 256
+
 
   # ── Build ───────────────────────────────────────────────────────────────
   # integration-tests is a native std-based test-only crate and can never

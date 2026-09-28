@@ -21,6 +21,7 @@ import {
   buildGuarantorCommitment,
 } from "../services/guarantor.js";
 import { queueNotification } from "../services/notification.js";
+import { notifyWatchersOfOpenedOffering } from "../services/offeringWatchlist.js";
 import { hasExpiredKycDocuments } from "../jobs/kycExpiryReminder.js";
 import { prisma } from "../services/db.js";
 import {
@@ -42,6 +43,11 @@ import {
 import type { AuthenticatedRequest } from "../middleware/auth.js";
 
 export const loanRouter = Router();
+
+const REQUIRED_DOCUMENTS_BY_LOAN_TYPE: Record<string, string[]> = {
+  purchase: ["identity", "income", "bank_statement", "property_contract"],
+  construction: ["identity", "income", "bank_statement", "construction_plan"],
+};
 
 // POST /api/loan/apply
 loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"), async (req, res) => {
@@ -233,6 +239,10 @@ loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
       req.body.webhookUrl || "https://partner-platform.com/webhooks";
 
     if (approved) {
+      // The offering has just opened for investment: tell investors watching
+      // it (issue #799). Best-effort and never throws — must not fail approval.
+      void notifyWatchersOfOpenedOffering(id);
+
       await queueNotification(
         email,
         "EMAIL",

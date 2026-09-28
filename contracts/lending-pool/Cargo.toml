@@ -20,3 +20,4 @@ proptest = "1"
 verification-registry = { path = "../verification-registry" }
 multisig-validator = { path = "../multisig-validator" }
 insurance-pool = { path = "../insurance-pool" }
+governance = { path = "../governance" }

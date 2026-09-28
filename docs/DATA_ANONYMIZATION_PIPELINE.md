@@ -70,3 +70,47 @@ fails closed at every layer rather than offering an override:
 
 See `assertSafeToRun()` in `backend/scripts/anonymize-staging-seed.ts` for
 the implementation.
+
+## Fail-closed PII leak gate
+
+Every batch is verified **after** anonymization and **before** any write to
+staging (`assertNoPiiLeak` / `scanBatchForPiiLeak`):
+
+1. **Verbatim-survival check** — each field covered by `FIELD_ANONYMIZERS`
+   must differ from its source value (nulls/empties exempt). A new column
+   added without a rule, or a broken anonymizer, trips this.
+2. **Known-PII pattern check** — any value in the anonymized row matching a
+   real-PII shape fails the batch: SSN `XXX-XX-XXXX`, non-`@example-anon.invalid`
+   emails, non-`example-anon.invalid` URLs, non-`203.0.113.x` IPv4, etc.
+
+Any hit throws and aborts the refresh **without loading that batch** —
+staging is left empty rather than populated with leaked PII (fail closed).
+Investigate, add/fix the anonymizer rule, and re-run.
+
+## Anonymization rules per table/field
+
+| Table (Prisma model) | Field | Rule |
+|---|---|---|
+| applicant | stellarAddress | Synthetic `G…` address (HMAC, per-run salt) |
+| applicant | taxId | Opaque `tax-<hex>` token |
+| applicant | monthlyIncome | Jittered ±8%, precision preserved |
+| borrower | stellarAddress | Synthetic `G…` address |
+| workspaceMember | walletAddress | Synthetic `G…` address |
+| workspaceInvitation | inviteeAddress / invitedBy | Synthetic `G…` addresses |
+| loanApplication | assignedReviewerEmail | `user-<hex>@example-anon.invalid` |
+| kycDocument | documentId | Opaque `doc-<hex>` token |
+| kycDocument | originalName | `document-<hex>.<ext>` |
+| notificationPreference | email / phone / webhookUrl | Synthetic email / `+1555…` / `example-anon.invalid` URL |
+| borrowerCredential | did / didHash / issuer / challenge | `did:anon:…` / hex / opaque tokens |
+| auditLog | actorAddress / ipAddress | Synthetic address / `203.0.113.x` (TEST-NET-3) |
+| sessionToken | walletAddress / tokenHash | Synthetic address / hex |
+| apiKey | key / name | Random hex / `key-<hex>` label |
+| webhookSubscription | url / secret / previousSecret / ownerAddress | Synthetic URL / hex / synthetic address |
+| webhookDLQ | url | Synthetic URL |
+| notification | recipient | Synthetic email (EMAIL) or address |
+| inAppNotification | walletAddress | Synthetic address |
+| dataDeletionRequest | walletAddress | Synthetic address |
+
+When the Prisma schema gains a PII-bearing column, add its rule to
+`FIELD_ANONYMIZERS` in the same change — the leak gate will otherwise fail
+the refresh until it is covered.

@@ -103,8 +103,16 @@ pub enum PoolError {
     BorrowerLoanCapExceeded = 46,
     /// Refinancing request was submitted before the cooldown window elapsed.
     RefinanceCooldownActive = 47,
+    /// Application fee exceeds the ceiling permitted on a single application.
+    ApplicationFeeTooHigh = 48,
     /// Withdrawal amount exceeds the pool's configured per-transaction limit.
     WithdrawalExceedsMaxSingleLimit = 50,
+    /// No payoff quote exists for this loan.
+    PayoffQuoteNotFound = 51,
+    /// The payoff quote has expired; request a fresh quote.
+    PayoffQuoteExpired = 52,
+    /// Payoff quotes are disabled (window is zero) or the window is invalid.
+    InvalidQuoteWindow = 53,
 }
 
 #[contracterror]

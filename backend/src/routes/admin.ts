@@ -26,16 +26,11 @@ import {
 } from "../services/webhookLatency.js";
 import { listSuppressedApplicants } from "../services/emailSuppression.js";
 import { runUnusedIndexAuditJob } from "../jobs/unusedIndexAudit.js";
-import { runApiKeyScopeAuditJob } from "../jobs/apiKeyScopeAudit.js";
 import {
-  getConversationById,
-  listMessages as listSupportChatMessages,
-  listOpenConversations,
-  postMessage as postSupportChatMessage,
-  setTypingState as setSupportChatTypingState,
-  SupportChatValidationError,
-} from "../services/supportChat.js";
-import { subscribeToSupportChat } from "../services/supportChatEvents.js";
+  ForensicsReviewError,
+  listFlaggedDocuments,
+  reviewFlaggedDocument,
+} from "../services/kycDocumentForensics.js";
 import { loadConfig } from "../config.js";
 
 export const adminRouter = Router();
@@ -346,28 +341,24 @@ adminRouter.get("/db/unused-indexes", requireAdmin, async (_req: AuthenticatedRe
 
 /**
  * @openapi
- * /api/admin/security/api-key-scopes:
- *   get:
- *     summary: Manually trigger the API key least-privilege scope audit
+ * /api/admin/db/query-killer:
+ *   post:
+ *     summary: Manually trigger the long-running query killer sweep
  *     description: >-
- *       Report-only (issue #772). Compares each configured third-party
- *       integration's granted provider scope against capability usage
- *       actually recorded by the backend, and flags any granted scope never
- *       exercised. Never revokes or modifies a credential — see
- *       docs/API_KEY_SCOPE_AUDIT.md.
+ *       Ops-only (issue #736). Terminates backends running past
+ *       QUERY_KILLER_THRESHOLD_MS, never touching the documented
+ *       maintenance allowlist. Every termination is logged/alerted with
+ *       query text and origin context.
  *     tags:
  *       - Admin
- *     responses:
- *       200:
- *         description: API key scope audit report.
  */
-adminRouter.get("/security/api-key-scopes", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+adminRouter.post("/db/query-killer", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
   try {
-    const { report } = await runApiKeyScopeAuditJob();
-    return res.json(report);
+    const { runQueryKillerJob } = await import("../jobs/queryKiller.js");
+    return res.json(await runQueryKillerJob());
   } catch (error) {
-    logger.error("API key scope audit error", { error });
-    return res.status(500).json({ error: "api_key_scope_audit_failed" });
+    logger.error("Query killer error", { error });
+    return res.status(500).json({ error: "query_killer_failed" });
   }
 });
 
@@ -579,120 +570,38 @@ adminRouter.post("/scoring/models", requireAdmin, async (req: AuthenticatedReque
   }
 });
 
-// ── Support chat, agent side (issue #781) ────────────────────────────────
-// This backend has a single admin identity (see requireAdmin in
-// middleware/auth.ts), not a multi-agent support team — every AGENT-side
-// message/typing signal here is attributed to that one wallet.
+// ── KYC document forgery review (issue #813) ─────────────────────────────
+// Documents whose metadata looked tampered with are queued here for a human;
+// each entry carries the specific signals that triggered the flag.
 
-adminRouter.get("/support-chat/conversations", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+adminRouter.get("/kyc/flagged-documents", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
   try {
-    const conversations = await listOpenConversations();
-    return res.json({ conversations });
+    return res.json({ documents: await listFlaggedDocuments() });
   } catch (error) {
-    logger.error("List support chat conversations error", { error });
-    return res.status(500).json({ error: "support_chat_unavailable" });
+    logger.error("List flagged KYC documents error", { error });
+    return res.status(500).json({ error: "failed_to_list_flagged_documents" });
   }
 });
 
-adminRouter.get(
-  "/support-chat/:conversationId/messages",
-  requireAdmin,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const conversation = await getConversationById(req.params.conversationId);
-      if (!conversation) {
-        return res.status(404).json({ error: "conversation_not_found" });
-      }
-      const messages = await listSupportChatMessages(conversation.id);
-      return res.json({ conversation, messages });
-    } catch (error) {
-      logger.error("List support chat messages error", { error });
-      return res.status(500).json({ error: "support_chat_unavailable" });
-    }
-  }
-);
-
 adminRouter.post(
-  "/support-chat/:conversationId/messages",
+  "/kyc/flagged-documents/:documentId/review",
   requireAdmin,
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const conversation = await getConversationById(req.params.conversationId);
-      if (!conversation) {
-        return res.status(404).json({ error: "conversation_not_found" });
-      }
-      const message = await postSupportChatMessage(
-        conversation.id,
-        "AGENT",
-        req.user?.walletAddress ?? null,
-        req.body?.content
-      );
-      return res.status(201).json({ message });
+      const reviewed = await reviewFlaggedDocument({
+        documentId: String(req.params.documentId),
+        reviewedBy: req.user?.walletAddress ?? "admin-api-key",
+        outcome: req.body?.outcome,
+        note: typeof req.body?.note === "string" ? req.body.note : null,
+      });
+      return res.json({ document: reviewed });
     } catch (error) {
-      if (error instanceof SupportChatValidationError) {
-        return res.status(400).json({ error: "invalid_message", message: error.message });
+      if (error instanceof ForensicsReviewError) {
+        const status = error.code === "not_found" ? 404 : error.code === "invalid_outcome" ? 400 : 409;
+        return res.status(status).json({ error: error.code, message: error.message });
       }
-      logger.error("Post support chat message error", { error });
-      return res.status(500).json({ error: "support_chat_unavailable" });
+      logger.error("Review flagged KYC document error", { error });
+      return res.status(500).json({ error: "failed_to_review_document" });
     }
-  }
-);
-
-adminRouter.post(
-  "/support-chat/:conversationId/typing",
-  requireAdmin,
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const conversation = await getConversationById(req.params.conversationId);
-      if (!conversation) {
-        return res.status(404).json({ error: "conversation_not_found" });
-      }
-      setSupportChatTypingState(conversation.id, "AGENT", Boolean(req.body?.isTyping));
-      return res.status(204).end();
-    } catch (error) {
-      logger.error("Set support chat typing state error", { error });
-      return res.status(500).json({ error: "support_chat_unavailable" });
-    }
-  }
-);
-
-adminRouter.get(
-  "/support-chat/:conversationId/stream",
-  requireAdmin,
-  async (req: AuthenticatedRequest, res: Response) => {
-    let conversation;
-    try {
-      conversation = await getConversationById(req.params.conversationId);
-    } catch (error) {
-      logger.error("Open support chat stream error", { error });
-      return res.status(500).json({ error: "support_chat_unavailable" });
-    }
-    if (!conversation) {
-      return res.status(404).json({ error: "conversation_not_found" });
-    }
-
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    });
-    res.flushHeaders?.();
-
-    const heartbeat = setInterval(() => {
-      res.write(": heartbeat\n\n");
-    }, 25_000);
-
-    const unsubscribe = subscribeToSupportChat(conversation.id, (event) => {
-      // Never echo the agent's own events back to their own stream.
-      if (event.type === "typing" && event.senderRole === "AGENT") return;
-      if (event.type === "message" && event.message.senderRole === "AGENT") return;
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-    });
-
-    req.on("close", () => {
-      clearInterval(heartbeat);
-      unsubscribe();
-    });
   }
 );

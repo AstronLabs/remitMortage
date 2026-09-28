@@ -12,6 +12,15 @@ enum NotificationStatus {
   Failed
 }
 
+// How often a category's non-urgent alerts are delivered. Security-critical
+// alerts never use this — they are always sent immediately in code, and
+// there is deliberately no securityFrequency column to persist otherwise.
+enum NotificationFrequency {
+  IMMEDIATE
+  DAILY_DIGEST
+  WEEKLY_DIGEST
+}
+
 enum LoanStatus {
   Draft
   Pending
@@ -197,12 +206,37 @@ model Applicant {
   loanApplications    LoanApplication[]
   borrowerCredentials BorrowerCredential[]
   kycDocuments        KycDocument[]
+  employmentVerifications EmploymentVerification[]
   notificationPreference NotificationPreference?
+  communicationPreferences CommunicationPreference[]
   deletedAt          DateTime?
 
   @@index([deletedAt])
   @@index([taxIdHash])
   @@index([addressVerificationStatus])
+}
+
+// Employment/income verification attempts (issue #802), automated via a
+// payroll provider or falling back to manual document review. Only the
+// result and the confirmed income figure are stored — never a payroll
+// credential or pay history. verifiedMonthlyIncome is encrypted at rest
+// (services/employmentVerificationStore.ts), matching Applicant.monthlyIncome.
+model EmploymentVerification {
+  id                    String    @id @default(uuid())
+  applicantId           String
+  applicant             Applicant @relation(fields: [applicantId], references: [id])
+  method                String    // "AUTOMATED_PAYROLL" | "MANUAL_DOCUMENT"
+  status                String    // "VERIFIED" | "NOT_COVERED" | "FAILED"
+  employerName          String?
+  verifiedMonthlyIncome String?
+  providerReference     String?
+  providerName          String?
+  failureReason         String?
+  verifiedAt            DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([applicantId, createdAt])
 }
 
 model VerificationResult {
@@ -270,6 +304,31 @@ model KycOcrResult {
   @@index([applicantAddress])
 }
 
+// Metadata forgery analysis of an uploaded ID document (issue #813). One row
+// per document. `flagged` means it needs manual review — never an automatic
+// rejection, since legitimate scans can also lack rich metadata. `signals`
+// holds every signal the analysis produced (code, severity, description,
+// evidence) so a reviewer knows exactly what to look at. Deliberately never
+// returned to the uploader, so a forger cannot iterate against the checks.
+model KycDocumentForensics {
+  id               String    @id @default(uuid())
+  documentId       String    @unique
+  applicantAddress String
+  format           String
+  flagged          Boolean
+  signals          Json
+  analyzedAt       DateTime  @default(now())
+  /// Set when a reviewer resolves a flagged document.
+  reviewedAt       DateTime?
+  reviewedBy       String?
+  /// "CLEARED" | "CONFIRMED_TAMPERED"
+  reviewOutcome    String?
+  reviewNote       String?
+
+  @@index([flagged, reviewedAt])
+  @@index([applicantAddress])
+}
+
 model LoanApplication {
   id                 String           @id @default(uuid())
   applicantId        String
@@ -278,6 +337,10 @@ model LoanApplication {
   loanId             String?
   principal          Float // DB CHECK: principal > 0 (enforced via migration LoanApplication_principal_check)
   interestRateBps    Int      @default(800) // DB CHECK: 200 <= interestRateBps <= 1800 (LoanApplication_interestRateBps_check) — protocol floor/cap 2%/18%
+  // Rate sheet version this application was priced from (issue #746). Null for
+  // applications created before rate sheets were versioned.
+  rateSheetVersionId String?
+  rateSheetVersion   InterestRateSheetVersion? @relation(fields: [rateSheetVersionId], references: [id])
   status             LoanStatus @default(Pending)
   createdAt          DateTime   @default(now())
 
@@ -319,6 +382,7 @@ model LoanApplication {
   servicer               String?
   servicerContact        String?
   servicingTransfers     LoanServicingTransfer[]
+  offeringWatches        OfferingWatch[]
 
   // Index backing getApplicationsByBorrower(): filter by applicant then sort by createdAt
   @@index([applicantId, createdAt])
@@ -333,6 +397,50 @@ model LoanApplication {
   @@index([status, lastActivityAt])
   // Index backing reviewer workload queries (applications assigned to a reviewer)
   @@index([assignedReviewerId])
+  // Index backing "which loans were priced from rate sheet version N" audits
+  @@index([rateSheetVersionId])
+}
+
+/// Append-only history of interest rate sheets (issue #746). A rate change is
+/// always a new row with the next `version`; rows are never updated or deleted
+/// (enforced by a database trigger), so the sheet in effect at any past instant
+/// can be reconstructed exactly.
+model InterestRateSheetVersion {
+  id            String   @id @default(uuid())
+  /// Monotonic version number, 1-based. Unique so concurrent publishes cannot
+  /// both claim the same version.
+  version       Int      @unique
+  /// When this version starts pricing new offers.
+  effectiveAt   DateTime
+  /// The full rate sheet: { baseRateBps, creditScoreTiers? }.
+  rates         Json
+  /// Field-level diff against the previous version: [{ path, before, after }].
+  changedValues Json
+  /// Wallet address of the admin who published it, or "admin-api-key".
+  changedBy     String
+  changeReason  String?
+  createdAt     DateTime @default(now())
+  loanApplications LoanApplication[]
+
+  @@index([effectiveAt])
+}
+
+// Investor watchlist for upcoming offerings (issue #799). A loan is an
+// "upcoming offering" while it is still Pending (in underwriting) and
+// "opens for investment" on approval; `notifiedAt` records that the watching
+// investor has already been told, so the open-transition notification is
+// sent at most once per watch.
+model OfferingWatch {
+  id                String          @id @default(uuid())
+  investorAddress   String
+  loanApplicationId String
+  loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id], onDelete: Cascade)
+  createdAt         DateTime        @default(now())
+  notifiedAt        DateTime?
+
+  @@unique([investorAddress, loanApplicationId])
+  @@index([loanApplicationId, notifiedAt])
+  @@index([investorAddress])
 }
 
 enum ServicingTransferStatus {
@@ -738,22 +846,40 @@ model ApiKey {
   @@index([revoked])
 }
 
-// Least-privilege scope audit for outbound third-party credentials (issue
-// #772). One row per (integration, capability) our code is able to exercise
-// against a provider — e.g. ("pinata", "unpin") — incremented on every real
-// call. A granted provider scope with no corresponding row (or a row whose
-// callCount is 0) has never been exercised and is a candidate for scope
-// reduction. See docs/API_KEY_SCOPE_AUDIT.md.
-model ApiCapabilityUsage {
-  id          String    @id @default(uuid())
-  integration String
-  capability  String
-  callCount   Int       @default(0)
-  lastUsedAt  DateTime?
-  firstSeenAt DateTime  @default(now())
+enum CommunicationChannel {
+  EMAIL
+  SMS
+  PUSH
+}
 
-  @@unique([integration, capability])
-  @@index([integration])
+enum CommunicationCategory {
+  DEPOSITS
+  MILESTONES
+  GOVERNANCE
+  SECURITY
+}
+
+// Per-user, per-category, per-channel opt-in matrix — distinct from
+// NotificationPreference's coarse global email/SMS toggles and per-category
+// delivery frequency (depositsFrequency etc.). Each cell also records when
+// and why consent was granted, for compliance auditability (SMS in
+// particular requires demonstrable opt-in in many jurisdictions). See
+// services/communicationPreferences.ts for the read/write logic and the
+// per-channel opt-in-by-default vs. opt-out-by-default rules.
+model CommunicationPreference {
+  id               String                 @id @default(uuid())
+  applicantId      String
+  applicant        Applicant              @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  category         CommunicationCategory
+  channel          CommunicationChannel
+  enabled          Boolean                @default(false)
+  consentTimestamp DateTime?
+  consentSource    String?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@unique([applicantId, category, channel])
+  @@index([applicantId])
 }
 
 model NotificationPreference {
@@ -768,7 +894,16 @@ model NotificationPreference {
   escrowReached     Boolean  @default(true)
   paymentMissed     Boolean  @default(true)
   loanMilestones    Boolean  @default(true)
+  governanceAlerts  Boolean  @default(true)
   webhookUrl        String?
+
+  // Per-category delivery cadence (immediate / daily digest / weekly digest).
+  // Deliberately no `securityFrequency` field — security-critical alerts
+  // (e.g. new-device login) are always sent immediately in code and are
+  // never gated by a stored preference. See services/notification.ts.
+  depositsFrequency    NotificationFrequency @default(IMMEDIATE)
+  milestonesFrequency  NotificationFrequency @default(IMMEDIATE)
+  governanceFrequency  NotificationFrequency @default(IMMEDIATE)
 
   // Business hours throttling fields
   timezone          String   @default("UTC")
@@ -795,6 +930,30 @@ model SessionToken {
   @@index([walletAddress])
   @@index([expiresAt])
   @@index([createdAt])
+}
+
+// Tracks admin "view as user" read-only support sessions end-to-end: who
+// impersonated whom, the window it was valid for, and when it actually
+// ended (which may be earlier than expiresAt if explicitly revoked). This is
+// the enforcement source of truth (authMiddleware checks it on every
+// impersonated request); AuditLog additionally gets start/end entries
+// referencing this row's id so the audit trail is queryable alongside every
+// other admin action.
+model ImpersonationSession {
+  id            String    @id @default(uuid())
+  adminAddress  String
+  targetAddress String
+  reason        String?
+  ipAddress     String?
+  startedAt     DateTime  @default(now())
+  expiresAt     DateTime
+  endedAt       DateTime?
+  endedBy       String?
+  createdAt     DateTime  @default(now())
+
+  @@index([adminAddress])
+  @@index([targetAddress])
+  @@index([expiresAt])
 }
 
 model InviteCode {
@@ -904,4 +1063,58 @@ model EmailSuppression {
   updatedAt        DateTime               @updatedAt
 
   @@index([permanent])
+}
+
+/// Hardship late-fee waiver request workflow (issue #749).
+///
+/// A borrower facing genuine hardship (job loss, medical emergency, etc.)
+/// submits a structured request against a loan with an outstanding
+/// `lateFeeBalance`. Requests sit in PENDING until an admin applies a
+/// documented decision: APPROVED (full waiver), PARTIAL (partial waiver) or
+/// DENIED. Every decision records the waived amount, the documented reason
+/// and the approving admin so the full request-to-decision trail is auditable
+/// against the loan.
+enum FeeWaiverStatus {
+  PENDING
+  APPROVED
+  PARTIAL
+  DENIED
+}
+
+/// Documented hardship categories accepted on waiver requests.
+enum HardshipReason {
+  JOB_LOSS
+  MEDICAL_EMERGENCY
+  NATURAL_DISASTER
+  REDUCED_INCOME
+  BEREAVEMENT
+  OTHER
+}
+
+model LateFeeWaiverRequest {
+  id                String         @id @default(uuid())
+  loanApplicationId String
+  /// Borrower wallet address that filed the request (denormalized for queue filtering).
+  borrowerAddress   String
+  hardshipReason    HardshipReason
+  /// Free-text supporting context supplied by the borrower.
+  context           String
+  /// Late-fee amount outstanding when the request was filed (audit snapshot).
+  requestedAmount   Float
+  /// Amount actually waived by the admin decision (0 for DENIED/PENDING).
+  waivedAmount      Float          @default(0)
+  status            FeeWaiverStatus @default(PENDING)
+  /// Admin wallet / API-key identity that decided the request.
+  decidedBy         String?
+  /// Documented approval-criteria reference + rationale recorded by the admin.
+  decisionReason    String?
+  /// Approval-criteria version evaluated (e.g. "waiver-policy-v1").
+  policyVersion     String         @default("waiver-policy-v1")
+  decidedAt         DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@index([loanApplicationId, status])
+  @@index([status, createdAt])
+  @@index([borrowerAddress])
 }

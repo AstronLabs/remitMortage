@@ -402,15 +402,34 @@ impl StakingPoolContract {
             return Ok(());
         }
 
+        // ── Dust accounting (issue #735) ─────────────────────────────
+        // Fixed-point floors leave `total_reward - sum(allocs)` stroops of
+        // dust (< pool count). Dust is swept to the first funded pool — a
+        // defined destination — so `sum(payouts) + swept dust == total` and
+        // value is never silently dropped across distribution cycles.
+        let mut distributed: i128 = 0;
+        let mut first_key: Option<Address> = None;
         for key in tokens.keys() {
             let mut info = tokens.get(key.clone()).unwrap();
             if info.total_deposited > 0 {
+                if first_key.is_none() {
+                    first_key = Some(key.clone());
+                }
                 // Reward allocation proportional to this token's share of total deposits.
                 let alloc = (total_reward * info.total_deposited) / total_deposits;
                 if alloc > 0 {
                     info.accumulated_rewards += alloc;
                     Self::write_token_info(&env, &key, &info);
+                    distributed += alloc;
                 }
+            }
+        }
+        let dust = total_reward - distributed;
+        if dust > 0 {
+            if let Some(key) = first_key {
+                let mut info = Self::read_token_info(&env, &key).unwrap();
+                info.accumulated_rewards += dust;
+                Self::write_token_info(&env, &key, &info);
             }
         }
 
@@ -1127,5 +1146,46 @@ mod test {
             client.remove_token(&token_a);
         }));
         assert!(result.is_err());
+    }
+
+    /// Regression test for issue #735: fixed-point floors must never strand
+    /// dust. Over many distribution cycles with dust-maximizing amounts,
+    /// `sum(payouts) + swept dust == total` at every step.
+    #[test]
+    fn test_distribute_rewards_never_loses_dust() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, token_a, token_b, client) = setup(&env);
+        client.add_token(&token_a, &500u32);
+        client.add_token(&token_b, &300u32);
+
+        let staker = Address::generate(&env);
+        // Uneven deposits (1 : 2) maximize remainders for totals not divisible by 3.
+        mint_to(&env, &token_a, &staker, 1_000_000_0000i128);
+        mint_to(&env, &token_b, &staker, 1_000_000_0000i128);
+        client.stake(&staker, &token_a, &100_0000i128).unwrap();
+        client.stake(&staker, &token_b, &200_0000i128).unwrap();
+
+        let mut swept_total: i128 = 0;
+        let mut distributed_total: i128 = 0;
+        for cycle in 0..200 {
+            // Totals chosen so total % 3 != 0 on most cycles (max dust).
+            let total: i128 = 10_000_001 + (cycle % 5) as i128;
+            mint_to(&env, &token_a, &admin, total);
+            let before_a = client.get_accumulated_rewards(&token_a);
+            let before_b = client.get_accumulated_rewards(&token_b);
+            client.distribute_rewards(&admin, &token_a, &total).unwrap();
+            let after_a = client.get_accumulated_rewards(&token_a);
+            let after_b = client.get_accumulated_rewards(&token_b);
+            let credited = (after_a - before_a) + (after_b - before_b);
+            // Explicit dust behavior: swept to a defined pool, never dropped.
+            assert_eq!(
+                credited, total,
+                "cycle {cycle}: credited {credited} != distributed {total}"
+            );
+            swept_total += credited;
+            distributed_total += total;
+        }
+        assert_eq!(swept_total, distributed_total);
     }
 }

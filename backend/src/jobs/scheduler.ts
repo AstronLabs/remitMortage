@@ -17,7 +17,7 @@ import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
 import { runRateLimitAuditJob } from "./rateLimitAudit.js";
 import { runDeadlockDetectionJob } from "./deadlockDetection.js";
 import { runUnusedIndexAuditJob } from "./unusedIndexAudit.js";
-import { runApiKeyScopeAuditJob } from "./apiKeyScopeAudit.js";
+import { runQueryKillerJob } from "./queryKiller.js";
 import { applyDueServicingTransfers } from "../services/loanServicing.js";
 import { prisma } from "../services/db.js";
 import { createPrismaSlowQueryStore } from "../services/slowQueryLog.js";
@@ -35,8 +35,9 @@ let suspiciousActivityTask: ReturnType<typeof cron.schedule> | null = null;
 let rateLimitAuditTask: ReturnType<typeof cron.schedule> | null = null;
 let deadlockDetectionTask: ReturnType<typeof cron.schedule> | null = null;
 let unusedIndexAuditTask: ReturnType<typeof cron.schedule> | null = null;
-let apiKeyScopeAuditTask: ReturnType<typeof cron.schedule> | null = null;
+let staleFlagAuditTask: ReturnType<typeof cron.schedule> | null = null;
 let servicingTransferTask: ReturnType<typeof cron.schedule> | null = null;
+let queryKillerTask: ReturnType<typeof cron.schedule> | null = null;
 
 export function startScheduler() {
   if (schedulerTask) {
@@ -137,15 +138,13 @@ export function startScheduler() {
     }
   }, { timezone: "UTC" });
 
-  // Weekly (Mon 11:00 UTC) by default: API key least-privilege scope audit.
-  // Report-only — never revokes or modifies a credential. See
-  // docs/API_KEY_SCOPE_AUDIT.md.
-  const apiKeyScopeAuditSchedule = process.env.API_KEY_SCOPE_AUDIT_CRON_SCHEDULE || "0 11 * * 1";
-  apiKeyScopeAuditTask = cron.schedule(apiKeyScopeAuditSchedule, async () => {
+  // Every minute: terminate runaway queries past the duration threshold (issue #736).
+  const queryKillerSchedule = process.env.QUERY_KILLER_CRON_SCHEDULE || "*/1 * * * *";
+  queryKillerTask = cron.schedule(queryKillerSchedule, async () => {
     try {
-      await runApiKeyScopeAuditJob();
+      await runQueryKillerJob();
     } catch (error) {
-      logger.error("[Scheduler] API key scope audit job failed", { error });
+      logger.error("[Scheduler] Query killer job failed", { error });
     }
   }, { timezone: "UTC" });
 
@@ -163,7 +162,7 @@ export function startScheduler() {
   startAnalyticsRefreshScheduler();
 
   console.log(
-    "[Scheduler] Started: repayment audit, session token purge, orphaned record cleanup, KYC expiry reminder, escrow reconciliation, application SLA monitor, admin portfolio digest, slow query digest, suspicious activity scan, rate limit audit, deadlock detection, unused index audit, API key scope audit, loan servicing transfer, and analytics refresh jobs scheduled."
+    "[Scheduler] Started: repayment audit, session token purge, orphaned record cleanup, KYC expiry reminder, escrow reconciliation, application SLA monitor, admin portfolio digest, slow query digest, suspicious activity scan, rate limit audit, deadlock detection, unused index audit, loan servicing transfer, query killer, and analytics refresh jobs scheduled."
   );
 }
 
@@ -216,13 +215,17 @@ export function stopScheduler() {
     unusedIndexAuditTask.stop();
     unusedIndexAuditTask = null;
   }
-  if (apiKeyScopeAuditTask) {
-    apiKeyScopeAuditTask.stop();
-    apiKeyScopeAuditTask = null;
+  if (staleFlagAuditTask) {
+    staleFlagAuditTask.stop();
+    staleFlagAuditTask = null;
   }
   if (servicingTransferTask) {
     servicingTransferTask.stop();
     servicingTransferTask = null;
+  }
+  if (queryKillerTask) {
+    queryKillerTask.stop();
+    queryKillerTask = null;
   }
   stopAnalyticsRefreshScheduler();
   console.log("[Scheduler] Stopped.");

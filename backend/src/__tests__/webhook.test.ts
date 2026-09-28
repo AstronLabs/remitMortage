@@ -3,6 +3,7 @@
 
 import {
   rotateSecret,
+  confirmSecretRotation,
   verifySubscriptionSignature,
   pruneExpiredPreviousSecrets,
   rotateDueSecrets,
@@ -63,6 +64,76 @@ describe("rotateSecret", () => {
   it("throws when the subscription does not exist", async () => {
     (prisma.webhookSubscription.findUnique as jest.Mock).mockResolvedValue(null);
     await expect(rotateSecret("missing")).rejects.toThrow("not found");
+  });
+});
+
+describe("confirmSecretRotation (issue #834)", () => {
+  it("expires the previous secret immediately, ahead of the natural grace period", async () => {
+    (prisma.webhookSubscription.findUnique as jest.Mock).mockResolvedValue({
+      previousSecret: encrypt("old-secret"),
+    });
+    (prisma.webhookSubscription.update as jest.Mock).mockResolvedValue({});
+
+    const result = await confirmSecretRotation("sub-1");
+
+    expect(result).toEqual({ confirmed: true });
+    expect(prisma.webhookSubscription.update).toHaveBeenCalledWith({
+      where: { id: "sub-1" },
+      data: { previousSecret: null, previousSecretExpiresAt: null, updatedAt: expect.any(Date) },
+    });
+  });
+
+  it("once confirmed, the old secret is rejected even though its grace period hasn't naturally expired yet", async () => {
+    const primary = "new-secret";
+    const previous = "old-secret";
+    const timestamp = String(Date.now());
+    const rawBody = JSON.stringify({ hello: "world" });
+
+    // Before confirmation: previous secret is still inside its grace window.
+    (prisma.webhookSubscription.findUnique as jest.Mock).mockResolvedValue({
+      secret: encrypt(primary),
+      previousSecret: encrypt(previous),
+      previousSecretExpiresAt: new Date(Date.now() + 6 * 24 * 60 * 60 * 1000),
+    });
+    const previousSignature = signPayload(previous, timestamp, rawBody);
+    await expect(
+      verifySubscriptionSignature("sub-1", timestamp, rawBody, previousSignature)
+    ).resolves.toBe(true);
+
+    // Confirm cutover — the same mock is what confirmSecretRotation reads/writes.
+    (prisma.webhookSubscription.update as jest.Mock).mockResolvedValue({});
+    await confirmSecretRotation("sub-1");
+
+    // After confirmation, the stored record no longer carries a previous secret.
+    (prisma.webhookSubscription.findUnique as jest.Mock).mockResolvedValue({
+      secret: encrypt(primary),
+      previousSecret: null,
+      previousSecretExpiresAt: null,
+    });
+    await expect(
+      verifySubscriptionSignature("sub-1", timestamp, rawBody, previousSignature)
+    ).resolves.toBe(false);
+    // The new secret still validates — cutover completed, not broken.
+    const primarySignature = signPayload(primary, timestamp, rawBody);
+    await expect(
+      verifySubscriptionSignature("sub-1", timestamp, rawBody, primarySignature)
+    ).resolves.toBe(true);
+  });
+
+  it("is a harmless no-op when there is no rotation in progress", async () => {
+    (prisma.webhookSubscription.findUnique as jest.Mock).mockResolvedValue({
+      previousSecret: null,
+    });
+
+    const result = await confirmSecretRotation("sub-1");
+
+    expect(result).toEqual({ confirmed: false });
+    expect(prisma.webhookSubscription.update).not.toHaveBeenCalled();
+  });
+
+  it("throws when the subscription does not exist", async () => {
+    (prisma.webhookSubscription.findUnique as jest.Mock).mockResolvedValue(null);
+    await expect(confirmSecretRotation("missing")).rejects.toThrow("not found");
   });
 });
 

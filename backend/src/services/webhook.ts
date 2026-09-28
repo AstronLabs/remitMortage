@@ -409,6 +409,39 @@ export async function verifySubscriptionSignature(
 }
 
 /**
+ * Confirms cutover to the new secret before the grace period would have
+ * expired it naturally (issue #834): once a subscriber has updated their
+ * receiver and verified the new secret works, they don't need to wait out
+ * the remaining {@link ROTATION_GRACE_PERIOD_DAYS} with the old one still
+ * live. Clears `previousSecret` immediately.
+ *
+ * Idempotent and safe to call when there is nothing to confirm — returns
+ * `{ confirmed: false }` rather than treating "no rotation in progress" as
+ * an error, since a subscriber may call this speculatively.
+ */
+export async function confirmSecretRotation(
+  id: string
+): Promise<{ confirmed: boolean }> {
+  const existing = await prisma.webhookSubscription.findUnique({
+    where: { id },
+    select: { previousSecret: true },
+  });
+  if (!existing) {
+    throw new Error(`Subscription ${id} not found`);
+  }
+  if (!existing.previousSecret) {
+    return { confirmed: false };
+  }
+
+  await prisma.webhookSubscription.update({
+    where: { id },
+    data: { previousSecret: null, previousSecretExpiresAt: null, updatedAt: new Date() },
+  });
+
+  return { confirmed: true };
+}
+
+/**
  * Clears `previousSecret` on every subscription whose grace period has
  * elapsed, so an outdated key never validates indefinitely. Returns the
  * number of subscriptions pruned.

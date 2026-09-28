@@ -20,6 +20,8 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 12 | `Unauthorized` | Unauthorized access (not admin). |
 | 13 | `OperationTimeout` | Operation timeout. |
 | 14 | `InvalidAsset` | Invalid asset identifier. |
+| 15 | `MalformedPayload` | Malformed or truncated inbound bridge message payload. |
+| 16 | `UnsupportedVersion` | Unsupported cross-chain message version. |
 
 ## escrow (`EscrowError`)
 
@@ -49,15 +51,15 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 22 | `PenaltyProposalNotPending` | Penalty proposal is not pending. |
 | 23 | `EscrowGoalNotFound` | Escrow goal does not exist or has no deposits. |
 | 24 | `AddressNotWhitelisted` | Address is not whitelisted when permissioned mode is enabled. |
-| 25 | `InvalidAttestorConfig` | Attestor signer set is empty, has a duplicate, or the threshold is zero or exceeds the number of signers. |
-| 26 | `InvalidAttestation` | An attestor is not part of the configured signer set, or the same attestor was presented more than once, or no attestor config exists. |
-| 27 | `UnauthorizedBeneficiary` | Caller is not the designated beneficiary, or the designation target equals the owner itself. |
-| 28 | `InvalidInactivityPeriod` | Beneficiary inactivity period is zero or exceeds the configured storage TTL bump amounts. |
-| 29 | `BeneficiaryNotConfigured` | No beneficiary is designated for this borrower/goal escrow. |
-| 30 | `BeneficiaryAlreadyClaimed` | The beneficiary has already claimed this borrower/goal escrow. |
-| 31 | `NoClaimableFunds` | Escrow has no deposited balance, or is already released, withdrawn, or seized, so there is nothing for a beneficiary to claim. |
-| 32 | `BeneficiaryInactivityNotElapsed` | The owner inactivity period has not yet elapsed. |
-| 33 | `InsufficientAttestationQuorum` | Fewer approved attestations than the configured quorum threshold. |
+| 25 | `BeneficiaryNotConfigured` | Beneficiary has not been configured for this goal. |
+| 26 | `UnauthorizedBeneficiary` | Caller is not the designated beneficiary for this goal. |
+| 27 | `BeneficiaryInactivityNotElapsed` | The owner-inactivity period has not yet elapsed. |
+| 28 | `InsufficientAttestationQuorum` | Not enough valid attestations to satisfy the configured quorum. |
+| 29 | `InvalidAttestation` | One or more attestations were invalid or from unknown signers. |
+| 30 | `BeneficiaryAlreadyClaimed` | The beneficiary has already claimed this goal. |
+| 31 | `NoClaimableFunds` | There are no funds available to claim. |
+| 32 | `InvalidInactivityPeriod` | The inactivity period must be greater than zero ledgers. |
+| 33 | `InvalidAttestorConfig` | Attestor configuration must have a non-empty signer set and a valid threshold. |
 | 34 | `AutoDepositNotConfigured` | No auto-deposit schedule is configured for this borrower/goal escrow. |
 | 35 | `AutoDepositNotDue` | The auto-deposit interval has not elapsed since the last scheduled draw. |
 | 36 | `InsufficientAllowance` | The borrower's token allowance to the escrow is below the scheduled amount. |
@@ -110,23 +112,24 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 40 | `DepositBelowMinimum` | Deposit is below the pool's configured minimum deposit amount. |
 | 41 | `CollateralRatioBreached` | Collateral release would breach the minimum collateralization ratio. |
 | 42 | `NoCollateralToRelease` | No collateral available for release. |
+| 43 | `CollateralAlreadySeized` | Collateral has already been seized. |
+| 44 | `InvalidCollateralRatio` | Invalid collateral ratio configuration. |
 | 45 | `OriginationFeeTooHigh` | Origination fee exceeds the full-disbursement ceiling. |
 | 46 | `BorrowerLoanCapExceeded` | Borrower already holds the maximum number of active loans permitted by `max_active_loans_per_borrower`. |
+| 48 | `ApplicationFeeTooHigh` | Application fee exceeds the ceiling permitted on a single application. |
 | 50 | `WithdrawalExceedsMaxSingleLimit` | Withdrawal amount exceeds the pool's configured per-transaction limit. |
-| 51 | `AddressNotWhitelisted` | Address is not whitelisted when permissioned mode is enabled. |
-| 52 | `RefinanceCooldownActive` | Refinancing request was submitted before the cooldown window elapsed. |
 
 ## lending-pool (`LoanAssumptionError`)
 
 | Code | Variant | Description |
 |------|---------|-------------|
-| 1 | `ContractPaused` | Operation rejected because the contract is paused. |
-| 2 | `LoanNotFound` | Loan not found. |
-| 3 | `LoanNotActive` | Loan must be in Approved state for this operation. |
-| 4 | `ApplicantNotVerified` | Borrower has no valid, non-expired verification record in the configured VerificationRegistry, so the loan request is rejected. |
-| 5 | `AssumptionAlreadyRequested` | A loan assumption request already exists for this loan. |
-| 6 | `AssumptionNotFound` | No pending loan assumption request found for this loan. |
-| 7 | `AssumptionNotAuthorized` | Loan assumption is not authorized by borrower or new borrower. |
+| 1 | `ContractPaused` |  |
+| 2 | `LoanNotFound` |  |
+| 3 | `LoanNotActive` |  |
+| 4 | `AssumptionNotAuthorized` |  |
+| 5 | `ApplicantNotVerified` |  |
+| 6 | `AssumptionNotFound` |  |
+| 7 | `AssumptionAlreadyRequested` |  |
 
 ## milestone (`MilestoneError`)
 
@@ -152,6 +155,12 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 18 | `BudgetChangeNotFound` | Budget change proposal not found. |
 | 19 | `BudgetChangeAlreadyExecuted` | Budget change proposal has already been executed. |
 | 20 | `BudgetChangeExceedsAllotment` | New budget exceeds the available loan allotment. |
+| 21 | `ArbitrationNotConfigured` | Arbitrators and window have not been configured by the admin. |
+| 22 | `InvalidArbitrationWindow` | Arbitration window must be greater than zero ledgers. |
+| 23 | `DisputeNotFound` | No arbitration dispute exists for this milestone. |
+| 24 | `DisputeAlreadyResolved` | The dispute has already been resolved. |
+| 25 | `ArbitrationWindowElapsed` | The arbitration window has elapsed; only the timeout resolution applies. |
+| 26 | `ArbitrationWindowOpen` | The arbitration window is still open. |
 
 ## multisig-validator (`ValidatorError`)
 

@@ -14,6 +14,7 @@
  * GET    /api/webhooks/subscriptions/:id        — get one subscription
  * PATCH  /api/webhooks/subscriptions/:id/status — pause / revoke / reactivate
  * POST   /api/webhooks/subscriptions/:id/rotate — rotate HMAC secret
+ * POST   /api/webhooks/subscriptions/:id/rotate/confirm — confirm cutover, expire the old secret now
  * GET    /api/webhooks/subscriptions/:id/deliveries — delivery history
  * POST   /api/webhooks/deliveries/:deliveryId/replay — manual replay
  * POST   /api/webhooks/verify                   — test signature verification (public)
@@ -28,6 +29,7 @@ import {
   getSubscription,
   updateSubscriptionStatus,
   rotateSecret,
+  confirmSecretRotation,
   replayDelivery,
   verifySignature,
   verifySubscriptionSignature,
@@ -345,6 +347,67 @@ webhooksRouter.post(
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to rotate secret";
+      res.status(500).json({ error: "server_error", message });
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/webhooks/subscriptions/:id/rotate/confirm
+// ---------------------------------------------------------------------------
+
+/**
+ * @openapi
+ * /api/webhooks/subscriptions/{id}/rotate/confirm:
+ *   post:
+ *     summary: Confirm cutover to the new secret, expiring the old one immediately
+ *     description: >
+ *       Once the subscriber has updated their receiver and verified the new
+ *       secret, this ends the rotation grace period early — the previous
+ *       secret stops being accepted right away instead of after 7 days.
+ *       Safe to call speculatively: returns confirmed:false if there is no
+ *       rotation awaiting cutover.
+ *     tags: [Webhooks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Cutover confirmed or nothing to confirm
+ *       404:
+ *         description: Not found
+ */
+webhooksRouter.post(
+  "/subscriptions/:id/rotate/confirm",
+  requireAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      const existing = await getSubscription(id);
+      if (!existing) {
+        res.status(404).json({ error: "not_found", message: "Subscription not found" });
+        return;
+      }
+
+      const { confirmed } = await confirmSecretRotation(id);
+      if (!confirmed) {
+        res.status(409).json({
+          error: "no_rotation_in_progress",
+          message: "This subscription has no rotation awaiting cutover confirmation.",
+        });
+        return;
+      }
+
+      res.json({
+        confirmed: true,
+        message: "Cutover confirmed — the previous secret has been invalidated immediately.",
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to confirm rotation";
       res.status(500).json({ error: "server_error", message });
     }
   }

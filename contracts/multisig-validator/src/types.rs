@@ -162,4 +162,8 @@ pub enum DataKey {
     SignerVoteRecord(Address, Address),
     /// Time-weighted decay configuration.
     DecayConfig,
+    /// Minimum cooldown in ledgers between successive admin signer-set changes.
+    RotationCooldown,
+    /// Ledger sequence of the last admin signer-set change (absent until first change).
+    LastRotationLedger,
 }
