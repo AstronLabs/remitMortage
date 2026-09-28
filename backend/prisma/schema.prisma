@@ -299,6 +299,7 @@ model LoanApplication {
   servicer               String?
   servicerContact        String?
   servicingTransfers     LoanServicingTransfer[]
+  offeringWatches        OfferingWatch[]
 
   // Index backing getApplicationsByBorrower(): filter by applicant then sort by createdAt
   @@index([applicantId, createdAt])
@@ -313,6 +314,24 @@ model LoanApplication {
   @@index([status, lastActivityAt])
   // Index backing reviewer workload queries (applications assigned to a reviewer)
   @@index([assignedReviewerId])
+}
+
+// Investor watchlist for upcoming offerings (issue #799). A loan is an
+// "upcoming offering" while it is still Pending (in underwriting) and
+// "opens for investment" on approval; `notifiedAt` records that the watching
+// investor has already been told, so the open-transition notification is
+// sent at most once per watch.
+model OfferingWatch {
+  id                String          @id @default(uuid())
+  investorAddress   String
+  loanApplicationId String
+  loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id], onDelete: Cascade)
+  createdAt         DateTime        @default(now())
+  notifiedAt        DateTime?
+
+  @@unique([investorAddress, loanApplicationId])
+  @@index([loanApplicationId, notifiedAt])
+  @@index([investorAddress])
 }
 
 enum ServicingTransferStatus {

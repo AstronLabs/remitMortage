@@ -14,6 +14,7 @@ import { GovernanceVotingModal } from "../../components/governance/GovernanceVot
 import { SubmitProposalModal } from "../../components/governance/SubmitProposalModal";
 import { QuorumProgressBar } from "../../components/governance/QuorumProgressBar";
 import { track } from "../../lib/analytics";
+import InvestorWatchlist from "../../components/InvestorWatchlist";
 
 type Tranche = "Senior" | "Junior";
 
@@ -602,6 +603,9 @@ function InvestPageInner() {
             </div>
           </section>
         </div>
+
+        {/* Watchlist: upcoming offerings, distinct from active holdings */}
+        <InvestorWatchlist />
 
         {/* Governance Section */}
         <section className="mb-10 mt-10">

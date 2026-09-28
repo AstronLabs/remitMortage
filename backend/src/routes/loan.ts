@@ -21,6 +21,7 @@ import {
   buildGuarantorCommitment,
 } from "../services/guarantor.js";
 import { queueNotification } from "../services/notification.js";
+import { notifyWatchersOfOpenedOffering } from "../services/offeringWatchlist.js";
 import { hasExpiredKycDocuments } from "../jobs/kycExpiryReminder.js";
 import { prisma } from "../services/db.js";
 import {
@@ -233,6 +234,10 @@ loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
       req.body.webhookUrl || "https://partner-platform.com/webhooks";
 
     if (approved) {
+      // The offering has just opened for investment: tell investors watching
+      // it (issue #799). Best-effort and never throws — must not fail approval.
+      void notifyWatchersOfOpenedOffering(id);
+
       await queueNotification(
         email,
         "EMAIL",
