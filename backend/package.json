@@ -16,6 +16,7 @@
     "drift:check": "bash ./scripts/detect-prisma-drift.sh",
     "drift:check:ci": "bash ./scripts/detect-prisma-drift.sh --exit-code",
     "drift:sync": "bash ./scripts/sync-production-schema.sh --from-schema=prisma/schema.prisma",
+    "drift:check:cors": "bash ./scripts/detect-cors-drift.sh",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
     "anonymize:staging-seed": "tsx scripts/anonymize-staging-seed.ts",

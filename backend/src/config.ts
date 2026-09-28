@@ -3,6 +3,9 @@
 
 /** Environment configuration with validation. */
 
+import fs from "fs";
+import path from "path";
+
 export type StellarNetwork = "testnet" | "mainnet" | "futurenet" | "standalone";
 
 const NETWORK_PASSPHRASE_DEFAULTS: Record<StellarNetwork, string> = {
@@ -200,6 +203,31 @@ function parseAlertRecipients(raw: string | undefined): Record<string, string> {
   return {};
 }
 
+/**
+ * Reads the documented CORS origins for the current environment from
+ * config/allowed-origins.json (issue #682). This file is the single source
+ * of truth checked by scripts/detect-cors-drift.sh in CI; ALLOWED_ORIGINS
+ * still overrides it when explicitly set, e.g. for local overrides.
+ */
+function loadDocumentedAllowedOrigins(env: string): string[] {
+  try {
+    const resolvedPath = fs.existsSync(path.resolve(process.cwd(), "config/allowed-origins.json"))
+      ? path.resolve(process.cwd(), "config/allowed-origins.json")
+      : path.resolve(process.cwd(), "backend/config/allowed-origins.json");
+
+    if (fs.existsSync(resolvedPath)) {
+      const parsed = JSON.parse(fs.readFileSync(resolvedPath, "utf8"));
+      const origins = parsed?.[env];
+      if (Array.isArray(origins) && origins.every((o) => typeof o === "string")) {
+        return origins;
+      }
+    }
+  } catch {
+    // malformed or missing file falls back to the hardcoded development default
+  }
+  return ["http://localhost:3000", "http://localhost:4000"];
+}
+
 export function loadConfig(): Config {
   return {
     port: parseInt(process.env.PORT || "4000", 10),
@@ -240,7 +268,7 @@ export function loadConfig(): Config {
     webhookRotationNotifyEmail: process.env.WEBHOOK_ROTATION_NOTIFY_EMAIL || "",
     allowedOrigins: process.env.ALLOWED_ORIGINS
       ? process.env.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim())
-      : ["http://localhost:3000", "http://localhost:4000"],
+      : loadDocumentedAllowedOrigins(process.env.NODE_ENV || "development"),
     adminApiKey: process.env.ADMIN_API_KEY || "default_admin_api_key",
     redisUrl: process.env.REDIS_URL || null,
     redisClusterEnabled: process.env.REDIS_CLUSTER_ENABLED === "true",
