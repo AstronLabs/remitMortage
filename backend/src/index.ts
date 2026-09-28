@@ -85,6 +85,10 @@ import { startRpcHealthMonitor } from "./services/rpcHealthMonitor.js";
 import { loadConfig } from "./config.js";
 import { getOcrProvider, setOcrProvider } from "./services/ocrService.js";
 import {
+  HttpAddressVerificationProvider,
+  setAddressVerificationProvider,
+} from "./services/addressVerificationProvider.js";
+import {
   FailoverKycProvider,
   HttpKycProvider,
   sendKycFailoverAlert,

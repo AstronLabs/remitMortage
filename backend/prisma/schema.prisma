@@ -181,6 +181,25 @@ model Applicant {
   taxIdHash          String?
   monthlyIncome      String?
   displayCurrency    String             @default("USD")
+  /// Mailing address (issue #791). Encrypted at rest like taxId/monthlyIncome
+  /// (see ENCRYPTED_FIELDS in services/db.ts). Holds the postal provider's
+  /// canonical/standardized form once verified; otherwise holds exactly what
+  /// the applicant submitted, pending manual review — see
+  /// addressVerificationStatus.
+  addressLine1              String?
+  addressLine2              String?
+  addressCity               String?
+  addressState              String?
+  addressPostalCode         String?
+  addressCountry            String?
+  /// "STANDARDIZED" | "NEEDS_REVIEW" | "UNVERIFIED" — null means no address
+  /// has ever been submitted. NEEDS_REVIEW = provider reached a verdict and
+  /// could not confirm deliverability; UNVERIFIED = provider was
+  /// unreachable/erroring. Neither silently accepts nor rejects the address.
+  addressVerificationStatus String?
+  addressVerificationDetail String?
+  addressVerifiedAt         DateTime?
+  addressProviderReference  String?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
   verificationResults VerificationResult[]
@@ -194,6 +213,7 @@ model Applicant {
 
   @@index([deletedAt])
   @@index([taxIdHash])
+  @@index([addressVerificationStatus])
 }
 
 // Employment/income verification attempts (issue #802), automated via a
@@ -501,6 +521,33 @@ model LoanComment {
   @@index([loanApplicationId, createdAt])
   @@index([parentId])
   @@index([authorAddress])
+}
+
+// In-app support chat (issue #781). One conversation per applicant wallet —
+// the counterparty is always the single admin/support identity gated by
+// `requireAdmin` (see middleware/auth.ts), matching this codebase's
+// single-admin model rather than a multi-agent support team.
+model SupportConversation {
+  id            String   @id @default(uuid())
+  walletAddress String   @unique
+  status        String   @default("OPEN")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  messages      SupportChatMessage[]
+
+  @@index([status])
+}
+
+model SupportChatMessage {
+  id             String              @id @default(uuid())
+  conversationId String
+  conversation   SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderRole     String              // "USER" | "AGENT"
+  senderAddress  String?
+  content        String
+  createdAt      DateTime            @default(now())
+
+  @@index([conversationId, createdAt])
 }
 
 model AuditLog {

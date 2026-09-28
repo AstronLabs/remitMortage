@@ -15,6 +15,10 @@ import {
   initDbPoolMetrics,
 } from "./dbPoolMetrics.js";
 import {
+  startLeakDetector,
+  createLeakDetectorExtension,
+} from "./dbConnectionLeakDetector.js";
+import {
   createPrismaSlowQueryStore,
   createSlowQueryLoggingExtension,
   getSlowQueryThresholdMs,
@@ -90,6 +94,10 @@ function createPrismaClient(url: string | undefined): any {
   // clients used in tests, and losing metrics is never a reason to take the
   // service down.
   initDbPoolMetrics();
+
+  // Start the leak-detection sweeper.  Safe to call multiple times — repeated
+  // calls from the read-replica client factory are no-ops.
+  startLeakDetector();
   if (typeof baseClient.$extends !== "function") return baseClient;
 
   let client = baseClient;
@@ -97,6 +105,15 @@ function createPrismaClient(url: string | undefined): any {
     client = client.$extends(createDbPoolMetricsExtension());
   } catch {
     // Metrics are best-effort; keep the base client if the extension fails.
+  }
+
+  // Wrap every operation with the leak detector so long-held connections are
+  // flagged before they exhaust the pool.  Applied after the saturation metrics
+  // extension so both instruments see the same operation lifecycle.
+  try {
+    client = client.$extends(createLeakDetectorExtension());
+  } catch {
+    // Leak detection is best-effort; never take the service down over it.
   }
 
   // Capture operations that outrun the configurable slow-query threshold and
@@ -152,7 +169,15 @@ export async function disconnect(): Promise<void> {
 
 // ── Applicant ─────────────────────────────────────────────────────────────
 
-const ENCRYPTED_FIELDS = ["taxId", "monthlyIncome"] as const;
+const ENCRYPTED_FIELDS = [
+  "taxId",
+  "monthlyIncome",
+  "addressLine1",
+  "addressLine2",
+  "addressCity",
+  "addressState",
+  "addressPostalCode",
+] as const;
 
 function encryptFields<T extends Record<string, any>>(data: T): T {
   const result: Record<string, any> = { ...data };
@@ -412,6 +437,16 @@ export async function upsertApplicant(
     creditScore?: number;
     taxId?: string;
     monthlyIncome?: string;
+    addressLine1?: string;
+    addressLine2?: string | null;
+    addressCity?: string;
+    addressState?: string;
+    addressPostalCode?: string;
+    addressCountry?: string;
+    addressVerificationStatus?: string;
+    addressVerificationDetail?: string | null;
+    addressVerifiedAt?: Date | null;
+    addressProviderReference?: string | null;
   }
 ) {
   const encrypted: Record<string, any> = encryptFields(data);

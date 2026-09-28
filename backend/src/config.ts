@@ -139,6 +139,16 @@ export interface Config {
   kycFailoverCooldownMs: number;
   /** Alert again when failover is still active after this long (ms). */
   kycFailoverAlertAfterMs: number;
+  /**
+   * Postal address verification/standardization provider endpoint (issue
+   * #791). Null leaves the Null provider active — every submitted address
+   * is then saved as-is and flagged UNVERIFIED for manual review.
+   */
+  addressVerificationApiUrl: string | null;
+  /** Bearer token sent to the address verification provider. */
+  addressVerificationApiKey: string | null;
+  /** Per-call timeout (ms) for the address verification provider. */
+  addressVerificationTimeoutMs: number;
   /** HMAC key for applicant tax ID hashes used in duplicate detection. */
   taxIdHashSecret: string;
   /** Webhook delivery p95 latency (ms) above which an endpoint is flagged (issue #619). */
@@ -317,6 +327,9 @@ export function loadConfig(): Config {
     kycProviderTimeoutMs: parseInt(process.env.KYC_PROVIDER_TIMEOUT_MS || "10000", 10),
     kycFailoverCooldownMs: parseInt(process.env.KYC_FAILOVER_COOLDOWN_MS || "60000", 10),
     kycFailoverAlertAfterMs: parseInt(process.env.KYC_FAILOVER_ALERT_AFTER_MS || "900000", 10),
+    addressVerificationApiUrl: process.env.ADDRESS_VERIFICATION_API_URL || null,
+    addressVerificationApiKey: process.env.ADDRESS_VERIFICATION_API_KEY || null,
+    addressVerificationTimeoutMs: parseInt(process.env.ADDRESS_VERIFICATION_TIMEOUT_MS || "10000", 10),
     taxIdHashSecret: process.env.TAX_ID_HASH_SECRET || "default_tax_id_hash_secret",
     webhookLatencySlaMs: parseInt(process.env.WEBHOOK_LATENCY_SLA_MS || "5000", 10),
     webhookLatencyWindowMinutes: parseInt(process.env.WEBHOOK_LATENCY_WINDOW_MINUTES || "60", 10),
