@@ -250,6 +250,31 @@ model KycOcrResult {
   @@index([applicantAddress])
 }
 
+// Metadata forgery analysis of an uploaded ID document (issue #813). One row
+// per document. `flagged` means it needs manual review — never an automatic
+// rejection, since legitimate scans can also lack rich metadata. `signals`
+// holds every signal the analysis produced (code, severity, description,
+// evidence) so a reviewer knows exactly what to look at. Deliberately never
+// returned to the uploader, so a forger cannot iterate against the checks.
+model KycDocumentForensics {
+  id               String    @id @default(uuid())
+  documentId       String    @unique
+  applicantAddress String
+  format           String
+  flagged          Boolean
+  signals          Json
+  analyzedAt       DateTime  @default(now())
+  /// Set when a reviewer resolves a flagged document.
+  reviewedAt       DateTime?
+  reviewedBy       String?
+  /// "CLEARED" | "CONFIRMED_TAMPERED"
+  reviewOutcome    String?
+  reviewNote       String?
+
+  @@index([flagged, reviewedAt])
+  @@index([applicantAddress])
+}
+
 model LoanApplication {
   id                 String           @id @default(uuid())
   applicantId        String

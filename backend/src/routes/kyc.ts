@@ -11,6 +11,7 @@ import { storeEncryptedDocument, getEncryptedDocument } from "../services/kycSto
 import { decryptBuffer } from "../services/kmsEncryption.js";
 import { issueKycAccessToken, verifyKycAccessToken } from "../services/kycAccessToken.js";
 import { extractKycFields } from "../services/ocrService.js";
+import { analyzeAndRecordDocument } from "../services/kycDocumentForensics.js";
 import {
   createOcrResult,
   getOcrResult,
@@ -176,6 +177,17 @@ kycRouter.post(
       const ocrBuffer = req._ocrBuffer ?? Buffer.alloc(0);
       const ocrMime = req._ocrMimeType ?? req.file.mimetype;
       const ocrResult = await extractKycFields(ocrBuffer, ocrMime);
+
+      // Metadata forgery analysis on the same plaintext copy (issue #813).
+      // A flag routes the document to manual review; it never rejects the
+      // upload, and the outcome is deliberately not returned to the uploader
+      // so the checks can't be iterated against. Never throws.
+      await analyzeAndRecordDocument({
+        documentId: record.documentId,
+        applicantAddress: address,
+        buffer: ocrBuffer,
+        mimeType: ocrMime,
+      });
 
       // Persist the OCR result (non-fatal — upload already succeeded)
       let ocrRecord: Awaited<ReturnType<typeof createOcrResult>> | null = null;
