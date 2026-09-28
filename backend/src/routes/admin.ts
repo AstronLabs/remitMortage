@@ -26,6 +26,7 @@ import {
 } from "../services/webhookLatency.js";
 import { listSuppressedApplicants } from "../services/emailSuppression.js";
 import { runTableBloatScan, getLatestTableBloatSnapshots } from "../services/tableBloatMonitor.js";
+import { getApplicantCommunicationTimeline } from "../services/communicationTimeline.js";
 import { loadConfig } from "../config.js";
 
 export const adminRouter = Router();
@@ -168,6 +169,24 @@ adminRouter.get("/loans/:id/tax-id-matches", requireAdmin, async (req: Authentic
   } catch (error) {
     logger.error("Tax ID match lookup error", { error });
     return res.status(500).json({ error: "failed_to_load_tax_id_matches" });
+  }
+});
+
+/**
+ * Unified email/SMS/in-app notification timeline for one applicant, so
+ * support staff can answer "did they actually receive our reminder?" without
+ * checking three separate logs. `:id` may be an applicant id or stellar address.
+ */
+adminRouter.get("/applicants/:id/communications", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const timeline = await getApplicantCommunicationTimeline(String(req.params.id));
+    if (!timeline) {
+      return res.status(404).json({ error: "not_found", message: "Applicant not found" });
+    }
+    return res.json(timeline);
+  } catch (error) {
+    logger.error("Applicant communication timeline error", { error });
+    return res.status(500).json({ error: "failed_to_load_communication_timeline" });
   }
 });
 
