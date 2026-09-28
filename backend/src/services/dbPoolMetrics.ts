@@ -241,3 +241,35 @@ export function resetDbPoolMetricsState(): void {
 export function getInFlightCount(): number {
   return inFlight;
 }
+
+// ---------------------------------------------------------------------------
+// Connection leak detection metrics
+// ---------------------------------------------------------------------------
+
+/**
+ * Number of Prisma operations currently held open past the configured
+ * leak-detection threshold.  A sustained non-zero value means at least one
+ * call site is holding a database connection longer than expected.
+ *
+ * Refreshed on every sweep of `startLeakDetector` and on every
+ * `releaseCheckout` call.
+ */
+export const dbPoolLongHeldConnections = new Gauge({
+  name: "remitmortgage_db_pool_long_held_connections",
+  help: "Database operations held open past the configured leak-detection threshold.",
+  registers: [metricsRegistry],
+});
+
+/**
+ * Monotonically increasing count of individual leak events detected.
+ *
+ * Each time the sweeper finds an operation that has exceeded the threshold it
+ * increments this counter once (even if it was already flagged in a previous
+ * sweep, to make the rate of new leaks visible in a rate() query).
+ */
+export const dbPoolLeakEventsTotal = new Counter({
+  name: "remitmortgage_db_pool_leak_events_total",
+  help: "Total distinct connection-leak events detected (operations held past threshold).",
+  labelNames: ["model", "operation"] as const,
+  registers: [metricsRegistry],
+});

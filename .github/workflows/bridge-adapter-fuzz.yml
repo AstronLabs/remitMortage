@@ -1,0 +1,37 @@
+name: Bridge Adapter Deep Fuzz (nightly)
+
+# Nightly extended fuzz-testing pipeline for the bridge adapter message parser.
+# Runs deep proptest iterations (10,000 cases per property) to exercise rare
+# edge-case permutations, adversarial payloads, and byte mutations.
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Every night at 02:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: bridge-adapter-fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deep-fuzz:
+    name: Deep Fuzz Testing (bridge-adapter)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            contracts -> target
+
+      - name: Run Extended Fuzz Suite (10k iterations)
+        run: cargo test -p bridge-adapter --lib fuzz_ -- --nocapture
+        working-directory: contracts
+        env:
+          PROPTEST_CASES: 10000

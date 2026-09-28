@@ -3,6 +3,7 @@
 
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { resolveSafeRedirect } from "./lib/safeRedirect";
 
 const PROTECTED_ROUTES = [
   "/dashboard",
@@ -28,7 +29,12 @@ export function middleware(request: NextRequest) {
   const sessionToken = request.cookies.get("session")?.value;
   if (!sessionToken) {
     const loginUrl = new URL("/", request.url);
-    loginUrl.searchParams.set("redirect", pathname);
+    // Issue #759: never echo an unvalidated redirect target. `pathname` is
+    // server-derived and allowlisted, but it still passes through the
+    // allowlist so a future refactor cannot turn this into an open redirect.
+    // Post-login consumers must call `resolveSafeRedirect(?redirect=)` again
+    // before navigating — external targets fall back instead of being followed.
+    loginUrl.searchParams.set("redirect", resolveSafeRedirect(pathname, "/"));
     return NextResponse.redirect(loginUrl);
   }
 

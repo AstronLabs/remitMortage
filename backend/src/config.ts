@@ -119,6 +119,14 @@ export interface Config {
   assignmentQueueEnabled: boolean;
   /** Duration (ms) above which a database operation is captured as a slow query (issue #583). */
   slowQueryThresholdMs: number;
+  /**
+   * Payroll/income verification provider endpoint (issue #802). Null leaves
+   * the Null provider active — every employer is reported not covered and
+   * applicants fall back to manual document review.
+   */
+  payrollVerificationApiUrl: string | null;
+  /** Bearer token sent to the payroll verification provider. */
+  payrollVerificationApiKey: string | null;
   /** Backup KYC provider endpoint. Null leaves failover disabled. */
   kycBackupProviderUrl: string | null;
   /** Bearer token sent to the backup KYC provider. */
@@ -131,6 +139,16 @@ export interface Config {
   kycFailoverCooldownMs: number;
   /** Alert again when failover is still active after this long (ms). */
   kycFailoverAlertAfterMs: number;
+  /**
+   * Postal address verification/standardization provider endpoint (issue
+   * #791). Null leaves the Null provider active — every submitted address
+   * is then saved as-is and flagged UNVERIFIED for manual review.
+   */
+  addressVerificationApiUrl: string | null;
+  /** Bearer token sent to the address verification provider. */
+  addressVerificationApiKey: string | null;
+  /** Per-call timeout (ms) for the address verification provider. */
+  addressVerificationTimeoutMs: number;
   /** HMAC key for applicant tax ID hashes used in duplicate detection. */
   taxIdHashSecret: string;
   /** Webhook delivery p95 latency (ms) above which an endpoint is flagged (issue #619). */
@@ -301,12 +319,17 @@ export function loadConfig(): Config {
     // Default on: the assignment queue is additive and best-effort.
     assignmentQueueEnabled: process.env.ASSIGNMENT_QUEUE_ENABLED !== "false",
     slowQueryThresholdMs: parseInt(process.env.SLOW_QUERY_THRESHOLD_MS || "200", 10),
+    payrollVerificationApiUrl: process.env.PAYROLL_VERIFICATION_API_URL || null,
+    payrollVerificationApiKey: process.env.PAYROLL_VERIFICATION_API_KEY || null,
     kycBackupProviderUrl: process.env.KYC_BACKUP_PROVIDER_URL || null,
     kycBackupProviderApiKey: process.env.KYC_BACKUP_PROVIDER_API_KEY || null,
     kycFailoverThreshold: parseInt(process.env.KYC_FAILOVER_THRESHOLD || "3", 10),
     kycProviderTimeoutMs: parseInt(process.env.KYC_PROVIDER_TIMEOUT_MS || "10000", 10),
     kycFailoverCooldownMs: parseInt(process.env.KYC_FAILOVER_COOLDOWN_MS || "60000", 10),
     kycFailoverAlertAfterMs: parseInt(process.env.KYC_FAILOVER_ALERT_AFTER_MS || "900000", 10),
+    addressVerificationApiUrl: process.env.ADDRESS_VERIFICATION_API_URL || null,
+    addressVerificationApiKey: process.env.ADDRESS_VERIFICATION_API_KEY || null,
+    addressVerificationTimeoutMs: parseInt(process.env.ADDRESS_VERIFICATION_TIMEOUT_MS || "10000", 10),
     taxIdHashSecret: process.env.TAX_ID_HASH_SECRET || "default_tax_id_hash_secret",
     webhookLatencySlaMs: parseInt(process.env.WEBHOOK_LATENCY_SLA_MS || "5000", 10),
     webhookLatencyWindowMinutes: parseInt(process.env.WEBHOOK_LATENCY_WINDOW_MINUTES || "60", 10),

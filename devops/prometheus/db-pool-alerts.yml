@@ -120,3 +120,97 @@ groups:
           description: >-
             initDbPoolMetrics did not resolve a connection limit, so pool
             utilization alerting is not functioning.
+
+      # ── Connection leak: individual long-held operations ─────────────────
+      # At least one Prisma operation has been holding a connection open past
+      # the configured DB_CONNECTION_LEAK_THRESHOLD_MS. The `long_held`
+      # gauge reaches non-zero as soon as the sweeper's first tick crosses
+      # the threshold, so this fires while there is still headroom in the
+      # pool — not after it is exhausted.
+      #
+      # When this fires, check the structured WARN logs emitted by
+      # dbConnectionLeakDetector for `originStack`, `model`, `operation`, and
+      # `requestId` to identify the leaking call site.
+      - alert: DbConnectionLeakDetected
+        expr: remitmortgage_db_pool_long_held_connections > 0
+        for: 1m
+        labels:
+          severity: warning
+          team: ops
+          component: database
+        annotations:
+          summary: >-
+            {{ $value }} DB connection(s) on {{ $labels.instance }} have been
+            held open past the configured leak threshold.
+          description: >-
+            One or more Prisma operations are not releasing their pool
+            connection. This is an early-warning signal: the pool is not yet
+            exhausted, but every leaked slot reduces the margin before P2024
+            timeouts begin.
+
+            Remediation:
+              1. Search logs for `[db-leak] Long-held database connection
+                 detected` — each entry includes the originating call stack,
+                 Prisma model, operation, checkout time, and request/trace IDs.
+              2. Find the call site identified by `originStack` and verify it
+                 is properly awaiting the Prisma promise and handling errors on
+                 all code paths.
+              3. If `long_held_connections` keeps climbing without traffic
+                 growth, treat as an active leak and consider a rolling restart
+                 to reclaim pool slots while the fix is deployed.
+          runbook_url: https://github.com/AstronLabs/remitMortage/blob/main/docs/DB_CONNECTION_POOL_TUNING.md
+
+      # ── Connection leak: utilization trending upward without traffic growth ─
+      # This is the "slow drip" leak signature: utilization climbing steadily
+      # while HTTP request rate is flat or declining.  It fires before the pool
+      # is anywhere near exhaustion, giving a wide remediation window.
+      #
+      # The expression uses a 30-minute derivative of the utilization ratio and
+      # compares it against the derivative of the HTTP request rate over the
+      # same window.  A rising utilization with a flat-or-falling request rate
+      # is the clearest statistical signature of a leak rather than a genuine
+      # traffic increase.
+      #
+      # Threshold calibration:
+      #   deriv(utilization[30m]) > 0.005  →  ~0.5 pp / minute upward drift
+      #   deriv(http_rate[30m])   < 0.1    →  request rate not growing
+      # Tune these to your baseline traffic variability.
+      - alert: DbPoolUtilizationTrendingUp
+        expr: |
+          deriv(avg_over_time(remitmortgage_db_pool_utilization_ratio[30m])[30m:1m]) > 0.005
+          and
+          deriv(
+            avg_over_time(
+              rate(remitmortgage_http_requests_total[5m])[30m:1m]
+            )
+          ) < 0.1
+        for: 30m
+        labels:
+          severity: warning
+          team: ops
+          component: database
+        annotations:
+          summary: >-
+            DB pool utilization on {{ $labels.instance }} is trending upward
+            without a corresponding increase in HTTP traffic — possible
+            connection leak.
+          description: >-
+            Pool utilization has been rising steadily for 30 minutes while the
+            HTTP request rate is flat or falling. This is the classic signature
+            of a slow connection leak: connections are being acquired but not
+            all are being released.
+
+            Current utilization: {{ $value | humanizePercentage }}
+
+            Remediation:
+              1. Check `remitmortgage_db_pool_long_held_connections` and
+                 `remitmortgage_db_pool_leak_events_total` for concurrent
+                 evidence of individual leaked operations.
+              2. Search structured logs for `[db-leak]` entries — each includes
+                 the leaking call stack, model, and operation name.
+              3. Review recently merged code for missing `await`, swallowed
+                 exceptions, or early `return` paths that skip Prisma promise
+                 resolution.
+              4. If utilization continues to climb, consider a rolling restart
+                 to drain leaked slots while the root cause is investigated.
+          runbook_url: https://github.com/AstronLabs/remitMortage/blob/main/docs/DB_CONNECTION_POOL_TUNING.md

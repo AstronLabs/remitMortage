@@ -14,6 +14,7 @@ import { GovernanceVotingModal } from "../../components/governance/GovernanceVot
 import { SubmitProposalModal } from "../../components/governance/SubmitProposalModal";
 import { QuorumProgressBar } from "../../components/governance/QuorumProgressBar";
 import { track } from "../../lib/analytics";
+import InvestorWatchlist from "../../components/InvestorWatchlist";
 
 type Tranche = "Senior" | "Junior";
 
@@ -105,6 +106,8 @@ export default function InvestPage() {
 
 function InvestPageInner() {
   const { publicKey, isConnected, connect } = useWallet();
+  const { status: impersonationStatus } = useImpersonation();
+  const isReadOnly = impersonationStatus.active;
 
   useEffect(() => {
     if (isConnected) track("portfolio_viewed");
@@ -190,6 +193,11 @@ function InvestPageInner() {
     setDepositError(null);
     setDepositSuccess(false);
 
+    if (isReadOnly) {
+      setDepositError("Deposits are disabled while viewing this account read-only.");
+      return;
+    }
+
     const amount = parseFloat(depositAmount);
     if (isNaN(amount) || amount <= 0) {
       setDepositError("Enter a valid positive USDC amount.");
@@ -247,6 +255,11 @@ function InvestPageInner() {
   async function handleWithdraw() {
     setWithdrawError(null);
 
+    if (isReadOnly) {
+      setWithdrawError("Withdrawals are disabled while viewing this account read-only.");
+      return;
+    }
+
     if (!position || parseFloat(position.deposited) <= 0) {
       setWithdrawError("No balance to withdraw.");
       return;
@@ -285,6 +298,17 @@ function InvestPageInner() {
   const juniorApyBps =
     poolRates?.juniorApyBps ??
     (metrics ? Math.max(0, Math.round(metrics.estimatedApyBps * 2 - seniorApyBps)) : 0);
+
+  const userHoldings: TrancheHolding[] =
+    position && position.tranche && parseFloat(position.deposited) > 0
+      ? [{ tranche: position.tranche, amount: parseFloat(position.deposited) }]
+      : [];
+
+  const concentrationAnalysis = computeConcentrationMetrics(
+    userHoldings,
+    0.7,
+    { seniorApyBps, juniorApyBps }
+  );
 
   return (
     <div className="rm-app-page rm-invest-page min-h-screen bg-[#060913] text-slate-100 pb-20">
@@ -393,6 +417,17 @@ function InvestPageInner() {
           )}
         </section>
 
+        {/* Auto-Diversification Rebalancing Suggestion */}
+        <InvestorRebalancingSuggestions
+          analysis={concentrationAnalysis}
+          onSelectTranche={(t, amt) => {
+            setSelectedTranche(t);
+            if (amt) {
+              setDepositAmount(String(amt));
+            }
+          }}
+        />
+
         <div className="grid md:grid-cols-2 gap-6">
           {/* Deposit Form */}
           <section>
@@ -486,11 +521,16 @@ function InvestPageInner() {
                       Deposit submitted successfully.
                     </p>
                   )}
+                  {isReadOnly && (
+                    <p className="text-xs text-rose-400">
+                      Deposits are disabled while viewing this account read-only.
+                    </p>
+                  )}
 
                   <button
                     type="submit"
-                    disabled={depositing}
-                    className="btn-cta w-full justify-center py-3"
+                    disabled={depositing || isReadOnly}
+                    className="btn-cta w-full justify-center py-3 disabled:opacity-40"
                   >
                     {depositing
                       ? "Signing Transaction..."
@@ -590,9 +630,14 @@ function InvestPageInner() {
               {isConnected && position && (
                 <div className="pt-4 border-t border-slate-800 mt-6">
                   {withdrawError && <p className="text-xs text-red-400 mb-2">{withdrawError}</p>}
+                  {isReadOnly && (
+                    <p className="text-xs text-rose-400 mb-2">
+                      Withdrawals are disabled while viewing this account read-only.
+                    </p>
+                  )}
                   <button
                     onClick={handleWithdraw}
-                    disabled={withdrawing || parseFloat(position.deposited) <= 0}
+                    disabled={withdrawing || isReadOnly || parseFloat(position.deposited) <= 0}
                     className="btn-outline w-full justify-center text-xs py-2.5 disabled:opacity-40"
                   >
                     {withdrawing ? "Processing…" : "Withdraw Liquidity"}
@@ -602,6 +647,9 @@ function InvestPageInner() {
             </div>
           </section>
         </div>
+
+        {/* Watchlist: upcoming offerings, distinct from active holdings */}
+        <InvestorWatchlist />
 
         {/* Governance Section */}
         <section className="mb-10 mt-10">
@@ -680,6 +728,15 @@ function InvestPageInner() {
           onCancel={() => setShowAutoReinvestModal(false)}
         />
 
+
+        {isConnected && publicKey && position && parseFloat(position.deposited) > 0 && (
+          <section className="mt-10">
+            <PortfolioBreakdownChart
+              wallet={publicKey}
+              totalDeposited={parseFloat(position.deposited)}
+            />
+          </section>
+        )}
 
         {isConnected && publicKey && position && parseFloat(position.deposited) > 0 && (
           <ROIProjectionWidget

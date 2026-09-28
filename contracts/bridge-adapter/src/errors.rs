@@ -49,4 +49,11 @@ pub enum BridgeError {
 
     /// Invalid asset identifier.
     InvalidAsset = 14,
+
+    /// Malformed or truncated inbound bridge message payload.
+    MalformedPayload = 15,
+
+    /// Unsupported cross-chain message version.
+    UnsupportedVersion = 16,
 }
+

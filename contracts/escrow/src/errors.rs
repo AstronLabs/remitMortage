@@ -83,4 +83,8 @@ pub enum EscrowError {
     InvalidInactivityPeriod = 32,
     /// Attestor configuration must have a non-empty signer set and a valid threshold.
     InvalidAttestorConfig = 33,
+    /// Beneficiary split shares do not sum to exactly 10 000 basis points (100 %).
+    InvalidBeneficiaryShares = 39,
+    /// Beneficiary list exceeds the maximum allowed number of recipients.
+    BeneficiaryListTooLarge = 40,
 }

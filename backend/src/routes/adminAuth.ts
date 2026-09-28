@@ -11,8 +11,12 @@ import {
   disableAdmin2FA,
 } from "../services/totpAuth.js";
 import logger from "../utils/logger.js";
+import { credentialStuffingGuard } from "../middleware/credentialStuffing.js";
+import { recordCredentialFailure } from "../services/credentialStuffing.js";
 
 export const adminAuthRouter = Router();
+
+adminAuthRouter.use(credentialStuffingGuard);
 
 /**
  * @openapi
@@ -93,6 +97,17 @@ adminAuthRouter.post("/2fa/verify", (req: Request, res: Response) => {
   const result = authenticateAdmin2FA(adminAddress, code);
 
   if (!result.authenticated) {
+    // Feed the correlated-source detector so a many-accounts / shared-source
+    // stuffing wave is flagged even though each account fails only once.
+    recordCredentialFailure({
+      account: String(adminAddress),
+      ip: req.ip,
+      asn: typeof req.headers["x-asn"] === "string" ? String(req.headers["x-asn"]) : undefined,
+      fingerprint:
+        typeof req.headers["x-device-fingerprint"] === "string"
+          ? String(req.headers["x-device-fingerprint"])
+          : undefined,
+    });
     return res.status(401).json({
       error: "2fa_authentication_failed",
       message: result.error,

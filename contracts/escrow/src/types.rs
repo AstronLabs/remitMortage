@@ -11,6 +11,30 @@ pub struct BeneficiaryAttestorConfig {
     pub threshold: u32,
 }
 
+/// One entry in a multi-beneficiary split list.
+///
+/// `share_bps` is this recipient's entitlement expressed in basis points
+/// (1 bp = 0.01 %).  All entries in a `BeneficiaryList` must sum to exactly
+/// 10 000 bps (= 100 %).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BeneficiarySplit {
+    /// The receiving address.
+    pub beneficiary: Address,
+    /// Share of the total claimable amount in basis points (0 < share_bps ≤ 10_000).
+    pub share_bps: u32,
+}
+
+/// Ordered list of beneficiary splits stored per (owner, goal_id).
+///
+/// The sum of all `share_bps` values MUST equal 10 000 at the time the list
+/// is persisted; the contract rejects any configuration that violates this.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BeneficiaryList {
+    pub splits: Vec<BeneficiarySplit>,
+}
+
 /// Configuration set during contract initialization.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -154,6 +178,9 @@ pub enum DataKey {
     LendingPool,
     /// Beneficiary designated by the borrower for a given goal.
     Beneficiary(Address, Symbol),
+    /// Multi-beneficiary split list designated by the borrower for a given goal.
+    /// When present it takes precedence over the legacy single `Beneficiary` key.
+    BeneficiaryList(Address, Symbol),
     /// Last ledger at which the goal owner performed an authenticated action.
     LastOwnerActivity(Address, Symbol),
     /// Marks that a beneficiary has already claimed a given goal.

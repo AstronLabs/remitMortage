@@ -1,7 +1,7 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import { Router, Request, Response } from "express";
+import { Router, Response } from "express";
 import { prisma } from "../services/db.js";
 import { sendWebhook } from "../services/webhook.js";
 import { runEscrowReconciliation } from "../jobs/escrowReconciliation.js";
@@ -25,6 +25,12 @@ import {
   MAX_LATENCY_WINDOW_MINUTES,
 } from "../services/webhookLatency.js";
 import { listSuppressedApplicants } from "../services/emailSuppression.js";
+import { runUnusedIndexAuditJob } from "../jobs/unusedIndexAudit.js";
+import {
+  ForensicsReviewError,
+  listFlaggedDocuments,
+  reviewFlaggedDocument,
+} from "../services/kycDocumentForensics.js";
 import { loadConfig } from "../config.js";
 
 export const adminRouter = Router();
@@ -307,6 +313,55 @@ adminRouter.get("/email-suppressions", requireAdmin, async (_req: AuthenticatedR
   }
 });
 
+/**
+ * @openapi
+ * /api/admin/db/unused-indexes:
+ *   get:
+ *     summary: Manually trigger the unused-index candidate report
+ *     description: >-
+ *       Report-only (issue #758). Scans pg_stat_user_indexes for indexes with
+ *       sustained near-zero usage, excludes constraint-backing indexes, and
+ *       returns candidates with table/columns/size context for human review.
+ *       Never drops an index — see docs/UNUSED_INDEX_REVIEW.md.
+ *     tags:
+ *       - Admin
+ *     responses:
+ *       200:
+ *         description: Unused-index report.
+ */
+adminRouter.get("/db/unused-indexes", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { report } = await runUnusedIndexAuditJob();
+    return res.json(report);
+  } catch (error) {
+    logger.error("Unused index audit error", { error });
+    return res.status(500).json({ error: "unused_index_audit_failed" });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/db/query-killer:
+ *   post:
+ *     summary: Manually trigger the long-running query killer sweep
+ *     description: >-
+ *       Ops-only (issue #736). Terminates backends running past
+ *       QUERY_KILLER_THRESHOLD_MS, never touching the documented
+ *       maintenance allowlist. Every termination is logged/alerted with
+ *       query text and origin context.
+ *     tags:
+ *       - Admin
+ */
+adminRouter.post("/db/query-killer", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { runQueryKillerJob } = await import("../jobs/queryKiller.js");
+    return res.json(await runQueryKillerJob());
+  } catch (error) {
+    logger.error("Query killer error", { error });
+    return res.status(500).json({ error: "query_killer_failed" });
+  }
+});
+
 adminRouter.get("/webhooks/latency", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   const config = loadConfig();
   const windowMinutes = positiveIntParam(
@@ -331,7 +386,7 @@ adminRouter.get("/webhooks/latency", requireAdmin, async (req: AuthenticatedRequ
 });
 
 // Trigger manual retry of a DLQ job
-adminRouter.post("/webhooks/dlq/:id/retry", async (req: Request, res: Response) => {
+adminRouter.post("/webhooks/dlq/:id/retry", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   const rawId = req.params.id;
   const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
@@ -386,7 +441,7 @@ adminRouter.post("/webhooks/dlq/:id/retry", async (req: Request, res: Response) 
  *       500:
  *         description: Reconciliation job threw an unexpected error.
  */
-adminRouter.post("/escrow/reconcile", async (req: Request, res: Response) => {
+adminRouter.post("/escrow/reconcile", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     logger.info("[AdminRouter] Manual escrow reconciliation triggered", {
       ip: req.ip,
@@ -514,3 +569,39 @@ adminRouter.post("/scoring/models", requireAdmin, async (req: AuthenticatedReque
     return res.status(500).json({ error: "failed_to_update_scoring_models" });
   }
 });
+
+// ── KYC document forgery review (issue #813) ─────────────────────────────
+// Documents whose metadata looked tampered with are queued here for a human;
+// each entry carries the specific signals that triggered the flag.
+
+adminRouter.get("/kyc/flagged-documents", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    return res.json({ documents: await listFlaggedDocuments() });
+  } catch (error) {
+    logger.error("List flagged KYC documents error", { error });
+    return res.status(500).json({ error: "failed_to_list_flagged_documents" });
+  }
+});
+
+adminRouter.post(
+  "/kyc/flagged-documents/:documentId/review",
+  requireAdmin,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const reviewed = await reviewFlaggedDocument({
+        documentId: String(req.params.documentId),
+        reviewedBy: req.user?.walletAddress ?? "admin-api-key",
+        outcome: req.body?.outcome,
+        note: typeof req.body?.note === "string" ? req.body.note : null,
+      });
+      return res.json({ document: reviewed });
+    } catch (error) {
+      if (error instanceof ForensicsReviewError) {
+        const status = error.code === "not_found" ? 404 : error.code === "invalid_outcome" ? 400 : 409;
+        return res.status(status).json({ error: error.code, message: error.message });
+      }
+      logger.error("Review flagged KYC document error", { error });
+      return res.status(500).json({ error: "failed_to_review_document" });
+    }
+  }
+);

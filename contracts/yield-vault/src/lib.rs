@@ -33,6 +33,38 @@ pub enum DataKey {
     TotalAssets,
     LastAccrualLedger,
     ShareBalance(Address),
+    /// Redemption amount (underlying asset units) above which a withdrawal
+    /// is queued instead of executed immediately. Absent (defaults to
+    /// `i128::MAX`) means queuing is disabled — every existing deployment
+    /// and test that never calls `set_withdrawal_threshold` keeps today's
+    /// unconditional-immediate-withdrawal behavior via `withdraw`.
+    WithdrawalThreshold,
+    /// Token liquidity currently available to fulfill queued withdrawals —
+    /// distinct from `TotalAssets`, which includes value already earmarked
+    /// for queued-but-unfulfilled requests. Grows from new deposits and
+    /// admin-reported matured positions; shrinks as immediate
+    /// `request_withdrawal` calls and queue fulfillment consume it.
+    AvailableLiquidity,
+    /// Index of the oldest not-yet-fulfilled queue entry (FIFO front).
+    QueueHead,
+    /// Index the next enqueued entry will be assigned (FIFO back).
+    QueueTail,
+    /// One queued withdrawal request, keyed by its queue index.
+    QueueEntry(u64),
+}
+
+/// A withdrawal request queued because it exceeded `WithdrawalThreshold` at
+/// request time. `amount` is fixed at that moment (the exchange rate the
+/// requester's shares were burned at), so further yield accrual while a
+/// request waits in the queue never changes what it's owed.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueuedWithdrawal {
+    pub id: u64,
+    pub requester: Address,
+    pub shares: i128,
+    pub amount: i128,
+    pub queued_ledger: u32,
 }
 
 #[contract]
@@ -55,6 +87,54 @@ impl YieldVaultContract {
             exp >>= 1;
         }
         result
+    }
+
+    fn read_withdrawal_threshold(env: &Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::WithdrawalThreshold)
+            .unwrap_or(i128::MAX)
+    }
+
+    fn read_available_liquidity(env: &Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::AvailableLiquidity)
+            .unwrap_or(0)
+    }
+
+    /// Floors at zero — this counter is a bookkeeping gate for the queue,
+    /// not a ledger that should ever go negative.
+    fn set_available_liquidity(env: &Env, value: i128) {
+        env.storage()
+            .instance()
+            .set(&DataKey::AvailableLiquidity, &value.max(0));
+    }
+
+    fn read_queue_head(env: &Env) -> u64 {
+        env.storage().instance().get(&DataKey::QueueHead).unwrap_or(0)
+    }
+
+    fn read_queue_tail(env: &Env) -> u64 {
+        env.storage().instance().get(&DataKey::QueueTail).unwrap_or(0)
+    }
+
+    /// Transfers `amount` of the underlying token to `to`, minting the
+    /// shortfall first if the vault's own balance is short — the same
+    /// simulated-yield-funding fallback `withdraw` already relies on.
+    /// Shared by the legacy `withdraw`, `request_withdrawal`'s immediate
+    /// path, and queue fulfillment so all three pay out identically.
+    fn pay_out(env: &Env, to: &Address, amount: i128) {
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token_client = token::Client::new(env, &token_addr);
+
+        let vault_balance = token_client.balance(&env.current_contract_address());
+        if vault_balance < amount {
+            let sac = token::StellarAssetClient::new(env, &token_addr);
+            sac.mint(&env.current_contract_address(), &(amount - vault_balance));
+        }
+
+        token_client.transfer(&env.current_contract_address(), to, &amount);
     }
 }
 
@@ -231,6 +311,11 @@ impl YieldVaultContract {
             .instance()
             .set(&DataKey::TotalAssets, &new_total_assets);
 
+        // A fresh deposit is immediately spendable liquidity for fulfilling
+        // queued withdrawals — see the withdrawal-queue note above `withdraw`.
+        let liquidity = Self::read_available_liquidity(&env);
+        Self::set_available_liquidity(&env, liquidity + amount);
+
         let caller_shares: i128 = env
             .storage()
             .persistent()
@@ -250,6 +335,16 @@ impl YieldVaultContract {
 
     /// Withdraw shares and receive underlying USDC tokens (plus accrued yield).
     /// Interface expected by EscrowContract: `withdraw(to: Address, shares: i128) -> i128`
+    ///
+    /// # Withdrawal queue
+    /// This function is deliberately left unconditional — it always executes
+    /// immediately regardless of size, exactly as before — because its
+    /// signature and synchronous-completion semantics are a fixed interface
+    /// contract EscrowContract calls against. The large-redemption safety
+    /// valve (`WithdrawalThreshold` / FIFO queue / `process_withdrawal_queue`)
+    /// lives entirely in the new [Self::request_withdrawal], the entry point
+    /// investors call directly. See the doc comment there for the invariant
+    /// the queue maintains.
     pub fn withdraw(env: Env, to: Address, shares: i128) -> i128 {
         to.require_auth();
         if shares <= 0 {
@@ -318,6 +413,212 @@ impl YieldVaultContract {
         );
 
         amount
+    }
+
+    /// Configure the redemption threshold (underlying asset units) above
+    /// which [Self::request_withdrawal] queues instead of executing
+    /// immediately. Admin-only. Must be positive — pass a very large value
+    /// to effectively disable queuing rather than zero, which would queue
+    /// every withdrawal including zero-amount ones.
+    pub fn set_withdrawal_threshold(env: Env, admin: Address, threshold: i128) {
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+        if admin != stored_admin {
+            panic!("unauthorized");
+        }
+        if threshold <= 0 {
+            panic!("threshold must be positive");
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::WithdrawalThreshold, &threshold);
+
+        env.events()
+            .publish((symbol_short!("thresh"),), (admin, threshold));
+    }
+
+    /// Reports capital returned to the vault from a matured position (this
+    /// toy vault has no real external investment to mature from, so this is
+    /// the admin/keeper-facing hook standing in for that event) as newly
+    /// available liquidity for the withdrawal queue. Admin-only.
+    pub fn add_liquidity(env: Env, admin: Address, amount: i128) {
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+        if admin != stored_admin {
+            panic!("unauthorized");
+        }
+        if amount <= 0 {
+            panic!("amount must be positive");
+        }
+
+        let liquidity = Self::read_available_liquidity(&env);
+        let new_liquidity = liquidity + amount;
+        Self::set_available_liquidity(&env, new_liquidity);
+
+        env.events()
+            .publish((symbol_short!("liq_add"),), (amount, new_liquidity));
+    }
+
+    /// Request a withdrawal, subject to the configured
+    /// [Self::set_withdrawal_threshold]. Below (or equal to) the threshold,
+    /// this behaves exactly like [Self::withdraw] and returns the amount
+    /// paid out immediately. Above it, the shares are burned at today's
+    /// exchange rate (so waiting in the queue never changes what's owed),
+    /// the request is appended to the FIFO queue, a `w_queued` event is
+    /// emitted, and this returns `0` — nothing has been paid out yet.
+    /// Call [Self::process_withdrawal_queue] (anyone may call it, like
+    /// [Self::batch_harvest]) to advance the queue as liquidity arrives.
+    ///
+    /// # Invariant
+    /// A queued request is only ever fulfilled after every request ahead of
+    /// it in the queue — strict FIFO. [Self::process_withdrawal_queue]
+    /// enforces this by stopping at the first entry it can't fully cover,
+    /// even if a smaller entry further back in the queue technically could
+    /// be paid from the liquidity that remains.
+    pub fn request_withdrawal(env: Env, to: Address, shares: i128) -> i128 {
+        to.require_auth();
+        if shares <= 0 {
+            panic!("shares must be positive");
+        }
+
+        Self::accrue_interest(&env);
+
+        let total_shares: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalShares)
+            .unwrap_or(0);
+        let total_assets: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalAssets)
+            .unwrap_or(0);
+
+        if shares > total_shares {
+            panic!("insufficient vault shares");
+        }
+
+        let caller_shares: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ShareBalance(to.clone()))
+            .unwrap_or(0);
+        if caller_shares < shares {
+            panic!("insufficient share balance");
+        }
+
+        let amount = ((shares as u128).saturating_mul(total_assets as u128)
+            / total_shares as u128) as i128;
+
+        // Burn the shares now regardless of which path this takes — the
+        // exchange rate is locked in at request time either way.
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalShares, &(total_shares - shares));
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalAssets, &(total_assets - amount));
+        env.storage()
+            .persistent()
+            .set(&DataKey::ShareBalance(to.clone()), &(caller_shares - shares));
+
+        let threshold = Self::read_withdrawal_threshold(&env);
+
+        if amount <= threshold {
+            Self::pay_out(&env, &to, amount);
+
+            let liquidity = Self::read_available_liquidity(&env);
+            Self::set_available_liquidity(&env, liquidity - amount);
+
+            env.events()
+                .publish((symbol_short!("withdraw"), to), (shares, amount));
+
+            return amount;
+        }
+
+        let id = Self::read_queue_tail(&env);
+        let entry = QueuedWithdrawal {
+            id,
+            requester: to.clone(),
+            shares,
+            amount,
+            queued_ledger: env.ledger().sequence(),
+        };
+        env.storage().persistent().set(&DataKey::QueueEntry(id), &entry);
+        env.storage().instance().set(&DataKey::QueueTail, &(id + 1));
+
+        env.events()
+            .publish((symbol_short!("w_queued"), to), (id, shares, amount));
+
+        0
+    }
+
+    /// Advances the FIFO withdrawal queue as far as available liquidity
+    /// allows, paying out each entry in order and stopping at the first one
+    /// it can't fully cover (see the invariant documented on
+    /// [Self::request_withdrawal]). Callable by anyone — like
+    /// [Self::batch_harvest], it's a keeper-style convenience so no single
+    /// party has to pay the gas for every other investor's fulfillment.
+    /// Returns the number of entries fulfilled by this call.
+    pub fn process_withdrawal_queue(env: Env) -> u32 {
+        let mut head = Self::read_queue_head(&env);
+        let tail = Self::read_queue_tail(&env);
+        let mut liquidity = Self::read_available_liquidity(&env);
+        let mut fulfilled_count: u32 = 0;
+
+        while head < tail {
+            let entry: QueuedWithdrawal = match env.storage().persistent().get(&DataKey::QueueEntry(head)) {
+                Some(e) => e,
+                None => break,
+            };
+
+            if liquidity < entry.amount {
+                break;
+            }
+
+            Self::pay_out(&env, &entry.requester, entry.amount);
+            liquidity -= entry.amount;
+
+            env.storage().persistent().remove(&DataKey::QueueEntry(head));
+
+            env.events().publish(
+                (symbol_short!("w_fulfil"), entry.requester.clone()),
+                (entry.id, entry.shares, entry.amount),
+            );
+
+            head += 1;
+            fulfilled_count += 1;
+        }
+
+        if fulfilled_count > 0 {
+            env.storage().instance().set(&DataKey::QueueHead, &head);
+            Self::set_available_liquidity(&env, liquidity);
+        }
+
+        fulfilled_count
+    }
+
+    /// Current withdrawal-queuing threshold (`i128::MAX` if never configured).
+    pub fn get_withdrawal_threshold(env: Env) -> i128 {
+        Self::read_withdrawal_threshold(&env)
+    }
+
+    /// Current liquidity available to fulfill queued withdrawals.
+    pub fn get_available_liquidity(env: Env) -> i128 {
+        Self::read_available_liquidity(&env)
+    }
+
+    /// Number of requests currently waiting in the withdrawal queue.
+    pub fn get_queue_length(env: Env) -> u32 {
+        let head = Self::read_queue_head(&env);
+        let tail = Self::read_queue_tail(&env);
+        (tail - head) as u32
+    }
+
+    /// Fetch a queued withdrawal by its id, if it hasn't been fulfilled yet.
+    pub fn get_queued_withdrawal(env: Env, id: u64) -> Option<QueuedWithdrawal> {
+        env.storage().persistent().get(&DataKey::QueueEntry(id))
     }
 
     /// Read current share balance of an address.
@@ -535,5 +836,302 @@ mod test {
         let withdrawn = client.withdraw(&depositor, &shares);
         assert!(withdrawn > 1_000 * USDC);
         assert_eq!(client.get_shares(&depositor), 0);
+    }
+
+    // ── Withdrawal Queue ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_legacy_withdraw_is_unaffected_by_a_configured_threshold() {
+        // The EscrowContract-facing `withdraw` must stay unconditional even
+        // once a threshold is configured — only `request_withdrawal` is
+        // threshold-aware.
+        let env = Env::default();
+        let (admin, token, client) = setup(&env, 0);
+        let sac = StellarAssetClient::new(&env, &token);
+
+        client.set_withdrawal_threshold(&admin, &(1 * USDC));
+
+        let depositor = Address::generate(&env);
+        sac.mint(&depositor, &(10_000 * USDC));
+        client.deposit(&depositor, &(10_000 * USDC));
+
+        let shares = client.get_shares(&depositor);
+        let withdrawn = client.withdraw(&depositor, &shares);
+
+        assert_eq!(withdrawn, 10_000 * USDC);
+        assert_eq!(client.get_queue_length(), 0);
+    }
+
+    #[test]
+    fn test_below_threshold_withdrawal_is_immediate() {
+        let env = Env::default();
+        let (admin, token, client) = setup(&env, 0);
+        let sac = StellarAssetClient::new(&env, &token);
+
+        client.set_withdrawal_threshold(&admin, &(5_000 * USDC));
+
+        let depositor = Address::generate(&env);
+        sac.mint(&depositor, &(3_000 * USDC));
+        client.deposit(&depositor, &(3_000 * USDC));
+
+        let shares = client.get_shares(&depositor);
+        let paid = client.request_withdrawal(&depositor, &shares);
+
+        assert_eq!(paid, 3_000 * USDC);
+        assert_eq!(client.get_shares(&depositor), 0);
+        assert_eq!(client.get_queue_length(), 0);
+        assert_eq!(token.balance(&depositor), 3_000 * USDC);
+    }
+
+    #[test]
+    fn test_above_threshold_withdrawal_is_queued_instead_of_executed() {
+        let env = Env::default();
+        let (admin, token, client) = setup(&env, 0);
+        let sac = StellarAssetClient::new(&env, &token);
+
+        client.set_withdrawal_threshold(&admin, &(5_000 * USDC));
+
+        let depositor = Address::generate(&env);
+        sac.mint(&depositor, &(10_000 * USDC));
+        client.deposit(&depositor, &(10_000 * USDC));
+
+        let shares = client.get_shares(&depositor);
+        let paid = client.request_withdrawal(&depositor, &shares);
+
+        // Nothing paid out yet, and the shares are already gone (locked in
+        // at today's exchange rate) rather than still redeemable elsewhere.
+        assert_eq!(paid, 0);
+        assert_eq!(client.get_shares(&depositor), 0);
+        assert_eq!(token.balance(&depositor), 0);
+
+        assert_eq!(client.get_queue_length(), 1);
+        let entry = client.get_queued_withdrawal(&0).unwrap();
+        assert_eq!(entry.requester, depositor);
+        assert_eq!(entry.shares, shares);
+        assert_eq!(entry.amount, 10_000 * USDC);
+    }
+
+    #[test]
+    fn test_queue_fulfills_in_fifo_order_once_liquidity_covers_the_whole_queue() {
+        let env = Env::default();
+        let (admin, token, client) = setup(&env, 0);
+        let sac = StellarAssetClient::new(&env, &token);
+
+        client.set_withdrawal_threshold(&admin, &(2_000 * USDC));
+
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+        sac.mint(&alice, &(4_000 * USDC));
+        sac.mint(&bob, &(3_000 * USDC));
+        client.deposit(&alice, &(4_000 * USDC));
+        client.deposit(&bob, &(3_000 * USDC));
+
+        // Both exceed the threshold and queue in deposit order.
+        let alice_shares = client.get_shares(&alice);
+        let bob_shares = client.get_shares(&bob);
+        assert_eq!(client.request_withdrawal(&alice, &alice_shares), 0);
+        assert_eq!(client.request_withdrawal(&bob, &bob_shares), 0);
+        assert_eq!(client.get_queue_length(), 2);
+
+        client.add_liquidity(&admin, &(7_000 * USDC));
+        let fulfilled = client.process_withdrawal_queue();
+
+        assert_eq!(fulfilled, 2);
+        assert_eq!(client.get_queue_length(), 0);
+        assert_eq!(token.balance(&alice), 4_000 * USDC);
+        assert_eq!(token.balance(&bob), 3_000 * USDC);
+        assert_eq!(client.get_available_liquidity(), 0);
+    }
+
+    #[test]
+    fn test_partial_liquidity_fulfills_only_the_front_of_the_queue() {
+        let env = Env::default();
+        let (admin, token, client) = setup(&env, 0);
+        let sac = StellarAssetClient::new(&env, &token);
+
+        client.set_withdrawal_threshold(&admin, &(1_000 * USDC));
+
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+        sac.mint(&alice, &(8_000 * USDC));
+        sac.mint(&bob, &(3_000 * USDC));
+        client.deposit(&alice, &(8_000 * USDC));
+        client.deposit(&bob, &(3_000 * USDC));
+
+        // Alice queues first (front of the queue) for more than the
+        // liquidity that will be available; Bob queues second for less.
+        let alice_shares = client.get_shares(&alice);
+        let bob_shares = client.get_shares(&bob);
+        client.request_withdrawal(&alice, &alice_shares); // id 0, 8,000
+        client.request_withdrawal(&bob, &bob_shares); // id 1, 3,000
+        assert_eq!(client.get_queue_length(), 2);
+
+        // Enough to cover Bob's smaller request alone, but not Alice's.
+        client.add_liquidity(&admin, &(5_000 * USDC));
+        let fulfilled = client.process_withdrawal_queue();
+
+        // Strict FIFO: Bob is never paid ahead of Alice just because there's
+        // enough liquidity for his smaller request — the queue only ever
+        // advances from the front.
+        assert_eq!(fulfilled, 0);
+        assert_eq!(client.get_queue_length(), 2);
+        assert_eq!(token.balance(&alice), 0);
+        assert_eq!(token.balance(&bob), 0);
+        assert!(client.get_queued_withdrawal(&0).is_some());
+        assert!(client.get_queued_withdrawal(&1).is_some());
+
+        // Top up to exactly cover Alice's request (front of the queue).
+        client.add_liquidity(&admin, &(3_000 * USDC));
+        let fulfilled = client.process_withdrawal_queue();
+
+        // Only Alice is paid — the loop stops there even though Bob's
+        // request is still unfulfilled and the queue is now empty of
+        // liquidity to reach him yet.
+        assert_eq!(fulfilled, 1);
+        assert_eq!(client.get_queue_length(), 1);
+        assert_eq!(token.balance(&alice), 8_000 * USDC);
+        assert_eq!(token.balance(&bob), 0);
+        assert!(client.get_queued_withdrawal(&0).is_none());
+        assert!(client.get_queued_withdrawal(&1).is_some());
+
+        // Finally enough liquidity reaches Bob.
+        client.add_liquidity(&admin, &(3_000 * USDC));
+        let fulfilled = client.process_withdrawal_queue();
+
+        assert_eq!(fulfilled, 1);
+        assert_eq!(client.get_queue_length(), 0);
+        assert_eq!(token.balance(&bob), 3_000 * USDC);
+    }
+
+    #[test]
+    fn test_set_withdrawal_threshold_requires_admin() {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+        use soroban_sdk::IntoVal;
+
+        let env = Env::default();
+        let (_admin, _token, client) = setup(&env, 0);
+        let attacker = Address::generate(&env);
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &attacker,
+                invoke: &MockAuthInvoke {
+                    contract: &client.address,
+                    fn_name: "set_withdrawal_threshold",
+                    args: (attacker.clone(), 1_000_i128).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_set_withdrawal_threshold(&attacker, &1_000i128);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_add_liquidity_requires_admin() {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+        use soroban_sdk::IntoVal;
+
+        let env = Env::default();
+        let (_admin, _token, client) = setup(&env, 0);
+        let attacker = Address::generate(&env);
+
+        let result = client
+            .mock_auths(&[MockAuth {
+                address: &attacker,
+                invoke: &MockAuthInvoke {
+                    contract: &client.address,
+                    fn_name: "add_liquidity",
+                    args: (attacker.clone(), 1_000_i128).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_add_liquidity(&attacker, &1_000i128);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deposit_increases_available_liquidity() {
+        let env = Env::default();
+        let (_admin, token, client) = setup(&env, 0);
+        let sac = StellarAssetClient::new(&env, &token);
+
+        assert_eq!(client.get_available_liquidity(), 0);
+
+        let depositor = Address::generate(&env);
+        sac.mint(&depositor, &(2_000 * USDC));
+        client.deposit(&depositor, &(2_000 * USDC));
+
+        assert_eq!(client.get_available_liquidity(), 2_000 * USDC);
+    }
+
+    #[test]
+    fn test_queued_withdrawal_emits_event() {
+        use soroban_sdk::IntoVal;
+
+        let env = Env::default();
+        let (admin, token, client) = setup(&env, 0);
+        let sac = StellarAssetClient::new(&env, &token);
+
+        client.set_withdrawal_threshold(&admin, &(1_000 * USDC));
+
+        let depositor = Address::generate(&env);
+        sac.mint(&depositor, &(5_000 * USDC));
+        client.deposit(&depositor, &(5_000 * USDC));
+
+        let shares = client.get_shares(&depositor);
+        client.request_withdrawal(&depositor, &shares);
+
+        let events = env.events().all();
+        let last_event = events.last().unwrap();
+
+        let expected_topic: soroban_sdk::Vec<soroban_sdk::Val> = soroban_sdk::vec![
+            &env,
+            symbol_short!("w_queued").into_val(&env),
+            depositor.clone().into_val(&env),
+        ];
+        assert_eq!(last_event.1, expected_topic);
+
+        let (event_id, event_shares, event_amount): (u64, i128, i128) = last_event.2.into_val(&env);
+        assert_eq!(event_id, 0);
+        assert_eq!(event_shares, shares);
+        assert_eq!(event_amount, 5_000 * USDC);
+    }
+
+    #[test]
+    fn test_fulfilled_withdrawal_emits_event() {
+        use soroban_sdk::IntoVal;
+
+        let env = Env::default();
+        let (admin, token, client) = setup(&env, 0);
+        let sac = StellarAssetClient::new(&env, &token);
+
+        client.set_withdrawal_threshold(&admin, &(1_000 * USDC));
+
+        let depositor = Address::generate(&env);
+        sac.mint(&depositor, &(5_000 * USDC));
+        client.deposit(&depositor, &(5_000 * USDC));
+
+        let shares = client.get_shares(&depositor);
+        client.request_withdrawal(&depositor, &shares);
+
+        client.add_liquidity(&admin, &(5_000 * USDC));
+        client.process_withdrawal_queue();
+
+        let events = env.events().all();
+        let last_event = events.last().unwrap();
+
+        let expected_topic: soroban_sdk::Vec<soroban_sdk::Val> = soroban_sdk::vec![
+            &env,
+            symbol_short!("w_fulfil").into_val(&env),
+            depositor.clone().into_val(&env),
+        ];
+        assert_eq!(last_event.1, expected_topic);
+
+        let (event_id, event_shares, event_amount): (u64, i128, i128) = last_event.2.into_val(&env);
+        assert_eq!(event_id, 0);
+        assert_eq!(event_shares, shares);
+        assert_eq!(event_amount, 5_000 * USDC);
     }
 }

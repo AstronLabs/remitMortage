@@ -253,6 +253,38 @@ jobs:
   # Uses scripts/check-sri.py which understands sriProps() helper and skips
   # non-executable links (a href, fetch, img). Fails the job with GitHub
   # annotations so PRs cannot merge with un-hashed CDN loads.
+  # ── IDOR Audit Coverage Gate (issue #760) ──────────────────────────────
+  # Fails CI when a backend endpoint accepts a resource identifier (loan ID,
+  # applicant ID, document ID, borrower address, …) without a registered
+  # ownership check in backend/src/security/idorRegistry.ts. The behavioural
+  # side (cross-user access rejected) is covered by
+  # backend/src/__tests__/idorAudit.test.ts in the backend-coverage job.
+  idor-audit-coverage:
+    name: IDOR Audit Coverage Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Check IDOR coverage
+        run: node scripts/check-idor-coverage.mjs
+
+  # ── Open Redirect Coverage Gate (issue #759) ─────────────────────────────
+  # Fails CI when a redirect-accepting path is added without validation via
+  # resolveSafeRedirect/getSafeRedirectTarget plus registry coverage in
+  # backend/src/security/redirectRegistry.ts. Behavioural assertions live in
+  # backend/src/__tests__/openRedirectAudit.test.ts and
+  # frontend/src/lib/__tests__/safeRedirect.test.ts.
+  open-redirect-coverage:
+    name: Open Redirect Coverage Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Check redirect coverage
+        run: node scripts/check-redirect-coverage.mjs
+
   sri-check:
     name: SRI Check — third-party scripts
     runs-on: ubuntu-latest
