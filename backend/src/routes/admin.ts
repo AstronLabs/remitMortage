@@ -25,6 +25,7 @@ import {
   MAX_LATENCY_WINDOW_MINUTES,
 } from "../services/webhookLatency.js";
 import { listSuppressedApplicants } from "../services/emailSuppression.js";
+import { runTableBloatScan, getLatestTableBloatSnapshots } from "../services/tableBloatMonitor.js";
 import { loadConfig } from "../config.js";
 
 export const adminRouter = Router();
@@ -304,6 +305,39 @@ adminRouter.get("/email-suppressions", requireAdmin, async (_req: AuthenticatedR
   } catch (error) {
     logger.error("List email suppressions error", { error });
     return res.status(500).json({ error: "failed_to_list_email_suppressions" });
+  }
+});
+
+/**
+ * Latest dead-tuple bloat snapshot per table, most bloated first, for the
+ * database health dashboard.
+ */
+adminRouter.get("/database/table-bloat", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    return res.json({ tables: await getLatestTableBloatSnapshots() });
+  } catch (error) {
+    logger.error("List table bloat snapshots error", { error });
+    return res.status(500).json({ error: "failed_to_list_table_bloat" });
+  }
+});
+
+/** Triggers an on-demand bloat scan, manually VACUUMing any table at or above the critical threshold. */
+adminRouter.post("/database/table-bloat/scan", requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const result = await runTableBloatScan();
+    return res.json({
+      scannedAt: result.scannedAt,
+      tablesScanned: result.tablesScanned,
+      findings: result.findings.map((f) => ({
+        ...f,
+        liveTuples: f.liveTuples.toString(),
+        deadTuples: f.deadTuples.toString(),
+        tableSizeBytes: f.tableSizeBytes.toString(),
+      })),
+    });
+  } catch (error) {
+    logger.error("Table bloat scan error", { error });
+    return res.status(500).json({ error: "table_bloat_scan_failed" });
   }
 });
 
