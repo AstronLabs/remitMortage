@@ -173,7 +173,7 @@ especially when tested from a region distant from the origin server.
 
 ---
 
-## 3. Automated Testing with GitHub Actions
+# 3. Automated Testing with GitHub Actions
 
 The following ad-hoc workflow can be triggered via `workflow_dispatch`  
 to validate CDN + Geo-DNS from multiple AWS regions simultaneously:
@@ -202,7 +202,24 @@ jobs:
 
 ---
 
-## 4. Edge Cases & Troubleshooting
+## 4. Automated Deployment CDN Cache Invalidation
+
+The deployment pipeline (`.github/workflows/blue-green-deploy.yml`) automatically triggers and verifies CDN cache invalidation after traffic switch and post-deploy health check verification:
+
+- **Script:** `scripts/invalidate-cdn-cache.mjs` (unit tested via `scripts/invalidate-cdn-cache.test.mjs`).
+- **Paths invalidated:** `/_next/static/*` and `/public/*` (configurable via `INVALIDATION_PATHS`).
+- **Verification:** Polls `aws cloudfront get-invalidation` until status reaches `Completed`.
+- **Alerting:** Posts alerts to `DEVOPS_ALERT_WEBHOOK_URL` if invalidation fails or times out.
+
+Manual local run:
+
+```bash
+node scripts/invalidate-cdn-cache.mjs
+```
+
+---
+
+## 5. Edge Cases & Troubleshooting
 
 | Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
@@ -211,11 +228,12 @@ jobs:
 | `x-cache: Error from cloudfront` | Origin is unhealthy or CloudFront cannot reach it | Check `frontend_origin_domain`; verify App Runner / ALB is accepting traffic |
 | `curl: (60) SSL certificate problem` | Certificate not yet provisioned for the CloudFront domain | Ensure `certificate_arn` covers all `aliases` |
 | API responses are cached | Cache policy for `/api/*` not applied | Verify `ordered_cache_behavior` for `/api/*` uses `cache_policy_disabled` |
+| CDN Invalidation fails on deploy | Missing IAM permissions or invalid distribution ID | Verify `CLOUDFRONT_DISTRIBUTION_ID` secret and AWS credentials |
 | Different continents resolve to different IPs | (Desired in future) | Currently expected — all alias records point to the same CloudFront distribution |
 
 ---
 
-## 5. Re-testing After Changes
+## 6. Re-testing After Changes
 
 After any Terraform change that affects DNS or caching:
 
@@ -226,10 +244,9 @@ terraform apply
 # 2. Wait for CloudFront deployment (~5-15 min)
 aws cloudfront wait distribution-deployed --id <distribution-id>
 
-# 3. Flush CloudFront cache (optional)
-aws cloudfront create-invalidation \
-  --distribution-id <distribution-id> \
-  --paths "/*"
+# 3. Flush CloudFront cache
+node scripts/invalidate-cdn-cache.mjs
 
 # 4. Re-run sections 1 and 2 above
 ```
+

@@ -355,18 +355,51 @@ jobs:
           ROLLBACK_HEALTH: ${{ steps.verify.outputs.health }}
         run: node scripts/post-deploy-health-gate.mjs alert rollback_failed
 
+  invalidate-cdn-cache:
+    name: Invalidate CDN Cache
+    runs-on: ubuntu-latest
+    needs: [determine-slots, post-deploy-health-gate]
+    if: needs.post-deploy-health-gate.result == 'success'
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+      INVALIDATION_PATHS: "/_next/static/* /public/*"
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      DEVOPS_ALERT_WEBHOOK_URL: ${{ secrets.DEVOPS_ALERT_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Invalidate CloudFront CDN Cache
+        run: node scripts/invalidate-cdn-cache.mjs
+
   notify:
     name: Notify Deployment Result
     runs-on: ubuntu-latest
-    needs: [determine-slots, post-deploy-health-gate, rollback]
+    needs: [determine-slots, post-deploy-health-gate, invalidate-cdn-cache, rollback]
     if: always()
     steps:
       - name: Deployment Success
-        if: needs.post-deploy-health-gate.result == 'success'
+        if: needs.post-deploy-health-gate.result == 'success' && (needs.invalidate-cdn-cache.result == 'success' || needs.invalidate-cdn-cache.result == 'skipped')
         run: |
-          echo "✅ Blue-green deployment succeeded and passed its post-deploy health window"
+          echo "✅ Blue-green deployment succeeded, passed post-deploy health window, and CDN cache invalidation completed"
           echo "Active slot: ${{ needs.determine-slots.outputs.idle_slot }}"
           echo "Image: ${{ github.event.inputs.image_tag }}"
+
+      - name: CDN Invalidation Failed Warning
+        if: needs.post-deploy-health-gate.result == 'success' && needs.invalidate-cdn-cache.result != 'success'
+        run: |
+          echo "::error::Deployment completed but CDN cache invalidation failed! Stale assets may be served."
+          exit 1
 
       - name: Deployment Failed and Rolled Back
         if: needs.post-deploy-health-gate.result != 'success' && needs.rollback.result == 'success'
