@@ -102,4 +102,4 @@ Refer to those guides to deploy contracts, fund wallets, and exercise the full b
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file
