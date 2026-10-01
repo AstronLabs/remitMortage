@@ -157,18 +157,29 @@ fn full_borrower_lifecycle_end_to_end() {
     assert_eq!(loan.repaid, 75_600 * USDC);
     assert_eq!(loan.outstanding_debt, 0);
 
+    // Paying off a 12-month loan in the first month is an early prepayment, so
+    // the pool additionally collects its 1% standard prepayment penalty
+    // (756 USDC on 75,600) and forwards it straight to the treasury. The
+    // borrower therefore owes 76,356, and the penalty never becomes pool
+    // liquidity — it arrives and leaves in the same transaction.
+    let prepay_penalty = 75_600 * USDC * 100 / 10_000;
+    assert_eq!(p.pool.get_total_prepayment_penalties(), prepay_penalty);
+
     // Contractor keeps the full 70,000. Construction fund holds the 30,000
-    // down-payment. Borrower spent 30,000 (savings) + 75,600 (repayment).
+    // down-payment. Borrower spent 30,000 (savings) + 75,600 (repayment)
+    // + 756 (early-prepayment penalty).
     assert_eq!(token.balance(&contractor), 70_000 * USDC);
     assert_eq!(token.balance(&construction_fund), 30_000 * USDC);
-    assert_eq!(token.balance(&borrower), 4_400 * USDC);
+    assert_eq!(token.balance(&borrower), 4_400 * USDC - prepay_penalty);
 
-    // Pool liquidity: 70,000 in, 70,000 out, 75,600 repaid back.
+    // Pool liquidity: 70,000 in, 70,000 out, 75,600 repaid back. The penalty
+    // is excluded — it was forwarded to the treasury before this accounting.
     assert_eq!(p.pool.get_liquidity(), 75_600 * USDC);
     assert_eq!(token.balance(&p.pool.address), 75_600 * USDC);
 
-    // Treasury untouched (no withdrawals occurred).
-    assert_eq!(token.balance(&p.treasury), 0);
+    // The only treasury movement is the early-prepayment penalty; no
+    // withdrawals occurred.
+    assert_eq!(token.balance(&p.treasury), prepay_penalty);
 }
 
 #[test]

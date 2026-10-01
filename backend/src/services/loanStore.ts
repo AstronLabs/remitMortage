@@ -10,6 +10,7 @@ import {
   type LoanSnapshot,
 } from "./loanHistory.js";
 import { autoAssignApplicationReviewer } from "./assignmentQueue.js";
+import { priceNewOffer } from "./rateSheet.js";
 
 // lightweight id generator to avoid adding dependencies
 function makeId() {
@@ -33,6 +34,7 @@ export interface LoanApplication {
   id: string;
   borrowerAddress: string;
   amount: string;
+  loanType?: string;
   status: LoanStatus;
   reason?: string;
   createdAt: string;
@@ -46,6 +48,10 @@ export interface LoanApplication {
   /** Current servicer of record; absent while the originator services the loan. */
   servicer?: string;
   servicerContact?: string;
+  /** Rate this offer was priced at, in basis points. */
+  interestRateBps?: number;
+  /** Rate sheet version that priced this offer; absent for pre-versioning loans. */
+  rateSheetVersionId?: string;
 }
 
 /** Options for attaching a guarantor at application creation time. */
@@ -71,6 +77,8 @@ function mapLoanApplication(record: any): LoanApplication {
     manualReviewReason: record.manualReviewReason ?? undefined,
     servicer: record.servicer ?? undefined,
     servicerContact: record.servicerContact ?? undefined,
+    interestRateBps: record.interestRateBps ?? undefined,
+    rateSheetVersionId: record.rateSheetVersionId ?? undefined,
     createdAt: record.createdAt.toISOString(),
     // updatedAt is not on the schema model; fall back to createdAt
     updatedAt: (record.updatedAt ?? record.createdAt).toISOString(),
@@ -113,12 +121,19 @@ export async function createApplication(
   const applicant = await findOrCreateApplicant(borrowerAddress);
   const id = makeId();
 
+  // Issue #746: price from the rate sheet in effect right now and record which
+  // version that was, so the offer can be traced back to its exact rates.
+  const pricing = await priceNewOffer(applicant.creditScore, new Date());
+
   const record = await prisma.loanApplication.create({
     data: {
       id,
       applicantId: applicant.id,
       principal: Number(amount),
       status: "Pending",
+      ...(pricing
+        ? { interestRateBps: pricing.interestRateBps, rateSheetVersionId: pricing.rateSheetVersionId }
+        : {}),
       ...(guarantor
         ? {
             guarantorAddress: guarantor.address,

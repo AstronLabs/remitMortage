@@ -179,3 +179,294 @@ fn owner_activity_resets_exact_deadline() {
         .set_sequence_number(env.ledger().sequence() + 1);
     assert_eq!(client.claim_as_beneficiary(&owner, &goal, &beneficiary, &attestations), 600);
 }
+
+// ── Multi-beneficiary split tests ────────────────────────────────────────────
+
+/// Helper that builds a BeneficiaryList from a slice of (address, share_bps)
+/// pairs, borrowing the env for the inner Vec allocation.
+fn make_list(
+    env: &Env,
+    entries: &[(Address, u32)],
+) -> BeneficiaryList {
+    let mut splits = Vec::new(env);
+    for (addr, bps) in entries {
+        splits.push_back(BeneficiarySplit {
+            beneficiary: addr.clone(),
+            share_bps: *bps,
+        });
+    }
+    BeneficiaryList { splits }
+}
+
+// ── Share-sum validation ──────────────────────────────────────────────────────
+
+#[test]
+fn set_beneficiary_list_rejects_shares_not_summing_to_10000() {
+    let env = Env::default();
+    let (owner, _b, _a, client, goal) = setup(&env);
+
+    let b1 = Address::generate(&env);
+    let b2 = Address::generate(&env);
+
+    // 4000 + 4000 = 8000, not 10 000 → must be rejected.
+    let bad_list = make_list(&env, &[(b1.clone(), 4_000), (b2.clone(), 4_000)]);
+    assert!(client
+        .try_set_beneficiary_list(&owner, &goal, &bad_list)
+        .is_err());
+
+    // 5001 + 5000 = 10 001 → also rejected.
+    let over_list = make_list(&env, &[(b1.clone(), 5_001), (b2.clone(), 5_000)]);
+    assert!(client
+        .try_set_beneficiary_list(&owner, &goal, &over_list)
+        .is_err());
+
+    // Single recipient at exactly 10 000 → accepted.
+    let exact_list = make_list(&env, &[(b1.clone(), 10_000)]);
+    assert!(client
+        .try_set_beneficiary_list(&owner, &goal, &exact_list)
+        .is_ok());
+}
+
+#[test]
+fn set_beneficiary_list_rejects_zero_share_entry() {
+    let env = Env::default();
+    let (owner, _b, _a, client, goal) = setup(&env);
+
+    let b1 = Address::generate(&env);
+    let b2 = Address::generate(&env);
+
+    // One entry has share_bps = 0.
+    let bad = make_list(&env, &[(b1.clone(), 0), (b2.clone(), 10_000)]);
+    assert!(client
+        .try_set_beneficiary_list(&owner, &goal, &bad)
+        .is_err());
+}
+
+#[test]
+fn set_beneficiary_list_rejects_duplicate_address() {
+    let env = Env::default();
+    let (owner, _b, _a, client, goal) = setup(&env);
+
+    let b1 = Address::generate(&env);
+    // Same address in two entries — must be rejected even when shares sum correctly.
+    let dup = make_list(&env, &[(b1.clone(), 5_000), (b1.clone(), 5_000)]);
+    assert!(client
+        .try_set_beneficiary_list(&owner, &goal, &dup)
+        .is_err());
+}
+
+#[test]
+fn set_beneficiary_list_rejects_empty_list() {
+    let env = Env::default();
+    let (owner, _b, _a, client, goal) = setup(&env);
+
+    let empty = BeneficiaryList { splits: Vec::new(&env) };
+    assert!(client
+        .try_set_beneficiary_list(&owner, &goal, &empty)
+        .is_err());
+}
+
+#[test]
+fn set_beneficiary_list_rejects_self_as_recipient() {
+    let env = Env::default();
+    let (owner, _b, _a, client, goal) = setup(&env);
+
+    // Owner names themselves — must be rejected.
+    let self_list = make_list(&env, &[(owner.clone(), 10_000)]);
+    assert!(client
+        .try_set_beneficiary_list(&owner, &goal, &self_list)
+        .is_err());
+}
+
+// ── Happy-path multi-split claim ─────────────────────────────────────────────
+
+#[test]
+fn two_beneficiary_split_distributes_exact_proportions() {
+    let env = Env::default();
+    let (owner, _b, attestor, client, goal) = setup(&env);
+    let token_address = client.get_escrow_config().token;
+    let token = soroban_sdk::token::Client::new(&env, &token_address);
+
+    let b1 = Address::generate(&env);
+    let b2 = Address::generate(&env);
+
+    // 60 / 40 split over 500 tokens deposited in setup().
+    let list = make_list(&env, &[(b1.clone(), 6_000), (b2.clone(), 4_000)]);
+    client.set_beneficiary_list(&owner, &goal, &list);
+
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 10);
+    let attestations = Vec::from_array(&env, [attestor]);
+
+    // Either beneficiary can trigger the claim.
+    let total = client.claim_as_beneficiary(&owner, &goal, &b1, &attestations);
+    assert_eq!(total, 500);
+
+    // b1 receives 60 % → 300, b2 receives 40 % → 200.
+    assert_eq!(token.balance(&b1), 300);
+    assert_eq!(token.balance(&b2), 200);
+}
+
+#[test]
+fn three_beneficiary_split_remainder_goes_to_last_recipient() {
+    let env = Env::default();
+    let (owner, _b, attestor, client, goal) = setup(&env);
+    let token_address = client.get_escrow_config().token;
+    let token = soroban_sdk::token::Client::new(&env, &token_address);
+
+    // Deposit an extra 1 token so balance = 501 (prime-ish, exercises rounding).
+    client.deposit(&owner, &goal, &1);
+
+    let b1 = Address::generate(&env);
+    let b2 = Address::generate(&env);
+    let b3 = Address::generate(&env);
+
+    // 33.33…% each (rounds down); last recipient absorbs the 1-stroop remainder.
+    let list = make_list(
+        &env,
+        &[
+            (b1.clone(), 3_334),
+            (b2.clone(), 3_333),
+            (b3.clone(), 3_333),
+        ],
+    );
+    client.set_beneficiary_list(&owner, &goal, &list);
+
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 10);
+    let attestations = Vec::from_array(&env, [attestor]);
+
+    // b2 is the caller this time — any listed address may trigger.
+    let total = client.claim_as_beneficiary(&owner, &goal, &b2, &attestations);
+    assert_eq!(total, 501);
+
+    let share_b1 = token.balance(&b1); // floor(501 * 3334 / 10000) = 167
+    let share_b2 = token.balance(&b2); // floor(501 * 3333 / 10000) = 166
+    let share_b3 = token.balance(&b3); // 501 - 167 - 166 = 168 (remainder)
+    assert_eq!(share_b1 + share_b2 + share_b3, 501);
+    // Every recipient must have received a positive non-zero amount.
+    assert!(share_b1 > 0);
+    assert!(share_b2 > 0);
+    assert!(share_b3 > 0);
+}
+
+#[test]
+fn multi_split_claim_is_idempotent_guard_prevents_double_claim() {
+    let env = Env::default();
+    let (owner, _b, attestor, client, goal) = setup(&env);
+
+    let b1 = Address::generate(&env);
+    let b2 = Address::generate(&env);
+    let list = make_list(&env, &[(b1.clone(), 5_000), (b2.clone(), 5_000)]);
+    client.set_beneficiary_list(&owner, &goal, &list);
+
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 10);
+    let attestations = Vec::from_array(&env, [attestor.clone()]);
+
+    // First claim succeeds.
+    assert!(client
+        .try_claim_as_beneficiary(&owner, &goal, &b1, &attestations)
+        .is_ok());
+
+    // Second attempt — even from a different listed address — must fail.
+    assert!(client
+        .try_claim_as_beneficiary(&owner, &goal, &b2, &attestations)
+        .is_err());
+}
+
+#[test]
+fn unlisted_address_cannot_trigger_multi_split_claim() {
+    let env = Env::default();
+    let (owner, _b, attestor, client, goal) = setup(&env);
+
+    let b1 = Address::generate(&env);
+    let b2 = Address::generate(&env);
+    let intruder = Address::generate(&env);
+
+    let list = make_list(&env, &[(b1.clone(), 7_000), (b2.clone(), 3_000)]);
+    client.set_beneficiary_list(&owner, &goal, &list);
+
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 10);
+    let attestations = Vec::from_array(&env, [attestor]);
+
+    assert!(client
+        .try_claim_as_beneficiary(&owner, &goal, &intruder, &attestations)
+        .is_err());
+}
+
+// ── set_beneficiary_list clears legacy single address ────────────────────────
+
+#[test]
+fn setting_list_removes_legacy_single_beneficiary() {
+    let env = Env::default();
+    let (owner, legacy_ben, attestor, client, goal) = setup(&env);
+    let token_address = client.get_escrow_config().token;
+    let token = soroban_sdk::token::Client::new(&env, &token_address);
+
+    // First, set a legacy single beneficiary.
+    client.set_beneficiary(&owner, &goal, &Some(legacy_ben.clone()));
+
+    let b1 = Address::generate(&env);
+    let b2 = Address::generate(&env);
+    let list = make_list(&env, &[(b1.clone(), 5_000), (b2.clone(), 5_000)]);
+
+    // Setting the list must clear the old single-address designation.
+    client.set_beneficiary_list(&owner, &goal, &list);
+    assert_eq!(client.get_beneficiary(&owner, &goal), None);
+
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 10);
+    let attestations = Vec::from_array(&env, [attestor]);
+
+    // The old beneficiary can no longer claim.
+    assert!(client
+        .try_claim_as_beneficiary(&owner, &goal, &legacy_ben, &attestations)
+        .is_err());
+
+    // A listed address succeeds and both recipients get their share.
+    let total = client.claim_as_beneficiary(&owner, &goal, &b1, &attestations);
+    assert_eq!(total, 500);
+    assert_eq!(token.balance(&b1), 250);
+    assert_eq!(token.balance(&b2), 250);
+}
+
+// ── Legacy single-beneficiary backward compatibility ─────────────────────────
+
+#[test]
+fn legacy_single_beneficiary_still_works_without_list() {
+    let env = Env::default();
+    let (owner, beneficiary, attestor, client, goal) = setup(&env);
+    let token_address = client.get_escrow_config().token;
+    let token = soroban_sdk::token::Client::new(&env, &token_address);
+
+    // No list is ever set — use the original single-address path.
+    client.set_beneficiary(&owner, &goal, &Some(beneficiary.clone()));
+
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 10);
+    let attestations = Vec::from_array(&env, [attestor]);
+
+    let claimed = client.claim_as_beneficiary(&owner, &goal, &beneficiary, &attestations);
+    assert_eq!(claimed, 500);
+    assert_eq!(token.balance(&beneficiary), 500);
+}
+
+#[test]
+fn remove_beneficiary_list_allows_re_designation() {
+    let env = Env::default();
+    let (owner, beneficiary, _attestor, client, goal) = setup(&env);
+
+    let b1 = Address::generate(&env);
+    let list = make_list(&env, &[(b1.clone(), 10_000)]);
+    client.set_beneficiary_list(&owner, &goal, &list);
+
+    // Owner removes the list.
+    client.remove_beneficiary_list(&owner, &goal);
+    assert!(client.get_beneficiary_list(&owner, &goal).is_none());
+
+    // After removal, owner can set a new legacy single beneficiary.
+    client.set_beneficiary(&owner, &goal, &Some(beneficiary.clone()));
+    assert_eq!(client.get_beneficiary(&owner, &goal), Some(beneficiary));
+}

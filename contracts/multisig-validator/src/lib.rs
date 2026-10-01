@@ -476,16 +476,61 @@ impl MultisigValidator {
         Self::bump_instance(env);
     }
 
+    /// Minimum cooldown in ledgers between successive admin signer-set
+    /// changes. Absent storage means `0` (no cooldown, preserves existing
+    /// behaviour until an admin opts in).
+    fn read_rotation_cooldown(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::RotationCooldown)
+            .unwrap_or(0u32)
+    }
+
+    /// Reject a signer-set change that arrives before the cooldown from the
+    /// previous change has elapsed. The very first change (no recorded
+    /// rotation yet) always succeeds so initial setup is never blocked.
+    fn check_rotation_cooldown(env: &Env) -> Result<(), ValidatorError> {
+        let cooldown = Self::read_rotation_cooldown(env);
+        if cooldown == 0 {
+            return Ok(());
+        }
+        let last: Option<u32> = env.storage().instance().get(&DataKey::LastRotationLedger);
+        match last {
+            None => Ok(()),
+            Some(last_ledger) => {
+                let now = env.ledger().sequence();
+                if now < last_ledger.saturating_add(cooldown) {
+                    return Err(ValidatorError::RotationCooldownActive);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Record the current ledger as the last signer-set change for cooldown
+    /// accounting.
+    fn record_rotation(env: &Env) {
+        env.storage()
+            .instance()
+            .set(&DataKey::LastRotationLedger, &env.ledger().sequence());
+        Self::bump_instance(env);
+    }
+
     /// Register the initial admin-managed signer set and required threshold.
     /// Requires the admin's signature. The threshold must satisfy
     /// `0 < threshold <= signers.len()`, and the signer set must contain no
     /// duplicate addresses.
+    ///
+    /// Subject to the rotation cooldown: reconfiguring before the cooldown
+    /// from the previous signer-set change has elapsed reverts with
+    /// `RotationCooldownActive`. The very first configuration always succeeds.
     pub fn configure_signers(
         env: Env,
         signers: Vec<Address>,
         threshold: u32,
     ) -> Result<(), ValidatorError> {
         Self::require_admin(&env)?;
+        Self::check_rotation_cooldown(&env)?;
 
         let len = signers.len();
         // Reject duplicate signer addresses.
@@ -502,7 +547,14 @@ impl MultisigValidator {
             return Err(ValidatorError::InvalidThreshold);
         }
 
-        Self::write_admin_config(&env, &AdminMultisigConfig { signers, threshold });
+        Self::write_admin_config(&env, &AdminMultisigConfig { signers: signers.clone(), threshold });
+        Self::record_rotation(&env);
+        let now_ledger = env.ledger().sequence();
+        let now_ts = env.ledger().timestamp();
+        env.events().publish(
+            (symbol_short!("signers"), symbol_short!("config")),
+            (signers.len(), now_ledger, now_ts),
+        );
         Ok(())
     }
 
@@ -528,9 +580,11 @@ impl MultisigValidator {
 
     /// Add an address to the admin-managed signer set. Requires the admin's
     /// signature. Fails with `SignerAlreadyExists` if the address is already a
-    /// signer.
+    /// signer. Reverts with `RotationCooldownActive` when called before the
+    /// rotation cooldown from the previous signer-set change has elapsed.
     pub fn add_signer(env: Env, signer: Address) -> Result<(), ValidatorError> {
         Self::require_admin(&env)?;
+        Self::check_rotation_cooldown(&env)?;
 
         let mut config = Self::read_admin_config(&env)?;
         for i in 0..config.signers.len() {
@@ -538,16 +592,24 @@ impl MultisigValidator {
                 return Err(ValidatorError::SignerAlreadyExists);
             }
         }
-        config.signers.push_back(signer);
+        config.signers.push_back(signer.clone());
         Self::write_admin_config(&env, &config);
+        Self::record_rotation(&env);
+        env.events().publish(
+            (symbol_short!("signers"), symbol_short!("add")),
+            (signer, env.ledger().sequence(), env.ledger().timestamp()),
+        );
         Ok(())
     }
 
     /// Remove an address from the admin-managed signer set. Requires the admin's
     /// signature. Fails if the address is not a signer, or if removing it would
     /// leave fewer signers than the configured threshold (`InvalidThreshold`).
+    /// Reverts with `RotationCooldownActive` when called before the rotation
+    /// cooldown from the previous signer-set change has elapsed.
     pub fn remove_signer(env: Env, signer: Address) -> Result<(), ValidatorError> {
         Self::require_admin(&env)?;
+        Self::check_rotation_cooldown(&env)?;
 
         let mut config = Self::read_admin_config(&env)?;
         let mut found: Option<u32> = None;
@@ -564,7 +626,41 @@ impl MultisigValidator {
         }
         config.signers.remove(idx);
         Self::write_admin_config(&env, &config);
+        Self::record_rotation(&env);
+        env.events().publish(
+            (symbol_short!("signers"), symbol_short!("remove")),
+            (signer, env.ledger().sequence(), env.ledger().timestamp()),
+        );
         Ok(())
+    }
+
+    /// Configure the minimum cooldown in ledgers between successive
+    /// admin signer-set changes (`configure_signers` / `add_signer` /
+    /// `remove_signer`). Admin-only. `0` disables the cooldown.
+    pub fn set_rotation_cooldown(
+        env: Env,
+        cooldown_ledgers: u32,
+    ) -> Result<(), ValidatorError> {
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::RotationCooldown, &cooldown_ledgers);
+        Self::bump_instance(&env);
+        env.events().publish(
+            (symbol_short!("signers"), symbol_short!("cooldown")),
+            (cooldown_ledgers, env.ledger().sequence()),
+        );
+        Ok(())
+    }
+
+    /// Return the configured rotation cooldown in ledgers (`0` = disabled).
+    pub fn get_rotation_cooldown(env: Env) -> u32 {
+        Self::read_rotation_cooldown(&env)
+    }
+
+    /// Return the ledger sequence of the last signer-set change, if any.
+    pub fn get_last_rotation_ledger(env: Env) -> Option<u32> {
+        env.storage().instance().get(&DataKey::LastRotationLedger)
     }
 
     /// Return the current admin-managed signer configuration.

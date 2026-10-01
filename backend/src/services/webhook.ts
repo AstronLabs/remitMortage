@@ -293,6 +293,14 @@ export async function listSubscriptions(ownerAddress?: string): Promise<any[]> {
       previousSecretExpiresAt: true,
       webhookSchemaVersion: true,
       deprecationNotifiedAt: true,
+      // Lets admin tooling see a subscriber's failure streak before it hits
+      // the auto-disable threshold, and confirm whether a paused subscriber
+      // was disabled automatically or by an operator.
+      consecutiveFailedDispatches: true,
+      failingSinceAt: true,
+      lastFailureAt: true,
+      lastSuccessAt: true,
+      autoDisabledAt: true,
     },
   });
   return rows;
@@ -317,18 +325,38 @@ export async function getSubscription(id: string): Promise<any | null> {
       previousSecretExpiresAt: true,
       webhookSchemaVersion: true,
       deprecationNotifiedAt: true,
+      consecutiveFailedDispatches: true,
+      failingSinceAt: true,
+      lastFailureAt: true,
+      lastSuccessAt: true,
+      autoDisabledAt: true,
     },
   });
 }
 
-/** Pause or revoke a subscription by id. */
+/**
+ * Pause, revoke, or (re-)activate a subscription by id. Re-activating
+ * clears its failure streak, giving it a clean slate for the auto-disable
+ * sweep (jobs/webhookAutoDisable.ts) rather than risking an immediate
+ * re-disable off stale counters from before the fix.
+ */
 export async function updateSubscriptionStatus(
   id: string,
   status: "active" | "paused" | "revoked"
 ): Promise<any> {
   return prisma.webhookSubscription.update({
     where: { id },
-    data: { status, updatedAt: new Date() },
+    data: {
+      status,
+      updatedAt: new Date(),
+      ...(status === "active"
+        ? {
+            consecutiveFailedDispatches: 0,
+            failingSinceAt: null,
+            autoDisabledAt: null,
+          }
+        : {}),
+    },
   });
 }
 
@@ -406,6 +434,39 @@ export async function verifySubscriptionSignature(
   }
 
   return false;
+}
+
+/**
+ * Confirms cutover to the new secret before the grace period would have
+ * expired it naturally (issue #834): once a subscriber has updated their
+ * receiver and verified the new secret works, they don't need to wait out
+ * the remaining {@link ROTATION_GRACE_PERIOD_DAYS} with the old one still
+ * live. Clears `previousSecret` immediately.
+ *
+ * Idempotent and safe to call when there is nothing to confirm — returns
+ * `{ confirmed: false }` rather than treating "no rotation in progress" as
+ * an error, since a subscriber may call this speculatively.
+ */
+export async function confirmSecretRotation(
+  id: string
+): Promise<{ confirmed: boolean }> {
+  const existing = await prisma.webhookSubscription.findUnique({
+    where: { id },
+    select: { previousSecret: true },
+  });
+  if (!existing) {
+    throw new Error(`Subscription ${id} not found`);
+  }
+  if (!existing.previousSecret) {
+    return { confirmed: false };
+  }
+
+  await prisma.webhookSubscription.update({
+    where: { id },
+    data: { previousSecret: null, previousSecretExpiresAt: null, updatedAt: new Date() },
+  });
+
+  return { confirmed: true };
 }
 
 /**

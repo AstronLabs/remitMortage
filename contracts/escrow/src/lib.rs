@@ -29,11 +29,15 @@ mod test_auto_deposit;
 #[cfg(test)]
 mod test_goal_consolidation;
 
+#[cfg(test)]
+mod beneficiary_tests;
+
 pub use crate::errors::EscrowError;
 use crate::token_utils::get_token_client;
 use crate::types::DataKey;
 pub use crate::types::{
-    AutoDepositSchedule, BorrowerRecord, EscrowConfig, PendingPenaltyProposal, PendingUpgradeRecord,
+    AutoDepositSchedule, BeneficiaryList, BeneficiarySplit, BorrowerRecord, EscrowConfig,
+    PendingPenaltyProposal, PendingUpgradeRecord,
 };
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, IntoVal, Symbol};
 
@@ -913,6 +917,123 @@ impl EscrowContract {
         Ok(())
     }
 
+    // ── Multi-beneficiary split ──────────────────────────────────────────
+
+    /// Maximum number of recipients allowed in a single beneficiary list.
+    ///
+    /// Kept small so that the per-recipient token transfers inside
+    /// `claim_as_beneficiary` fit comfortably within one Soroban invocation
+    /// budget, and so that storage entry size stays bounded.
+    const MAX_BENEFICIARY_SPLITS: u32 = 10;
+
+    /// Validate a proposed `BeneficiaryList` before it is persisted.
+    ///
+    /// Rules enforced here so they are checked at *configuration time*, not at
+    /// claim time (per the acceptance criteria):
+    ///
+    /// 1. List is non-empty and does not exceed `MAX_BENEFICIARY_SPLITS`.
+    /// 2. Every `share_bps` is > 0.
+    /// 3. No duplicate beneficiary addresses.
+    /// 4. The borrower's own address is not among the recipients.
+    /// 5. The sum of all `share_bps` equals exactly 10 000.
+    fn validate_beneficiary_list(
+        borrower: &Address,
+        list: &crate::types::BeneficiaryList,
+    ) -> Result<(), EscrowError> {
+        let len = list.splits.len();
+        if len == 0 || len > Self::MAX_BENEFICIARY_SPLITS {
+            return Err(EscrowError::BeneficiaryListTooLarge);
+        }
+        let mut total_bps: u32 = 0;
+        for i in 0..len {
+            let split = list.splits.get_unchecked(i);
+            if split.share_bps == 0 {
+                return Err(EscrowError::InvalidBeneficiaryShares);
+            }
+            if &split.beneficiary == borrower {
+                return Err(EscrowError::UnauthorizedBeneficiary);
+            }
+            // Duplicate-address check — O(n²) but n ≤ MAX_BENEFICIARY_SPLITS.
+            for j in (i + 1)..len {
+                if list.splits.get_unchecked(j).beneficiary == split.beneficiary {
+                    return Err(EscrowError::UnauthorizedBeneficiary);
+                }
+            }
+            total_bps = total_bps
+                .checked_add(split.share_bps)
+                .ok_or(EscrowError::InvalidBeneficiaryShares)?;
+        }
+        if total_bps != 10_000 {
+            return Err(EscrowError::InvalidBeneficiaryShares);
+        }
+        Ok(())
+    }
+
+    /// Designate a multi-recipient beneficiary split for one owner/goal escrow.
+    ///
+    /// The shares are validated at call time; the transaction is rejected if
+    /// they do not sum to exactly 10 000 bps.  Setting a list also clears the
+    /// legacy single-address beneficiary key for the same goal, so the two
+    /// mechanisms are mutually exclusive.
+    pub fn set_beneficiary_list(
+        env: Env,
+        borrower: Address,
+        goal_id: Symbol,
+        list: crate::types::BeneficiaryList,
+    ) -> Result<(), EscrowError> {
+        borrower.require_auth();
+        Self::check_not_paused(&env)?;
+        Self::validate_beneficiary_list(&borrower, &list)?;
+
+        // Remove any legacy single-beneficiary entry for this goal.
+        let legacy_key = DataKey::Beneficiary(borrower.clone(), goal_id.clone());
+        env.storage().persistent().remove(&legacy_key);
+
+        let list_key = DataKey::BeneficiaryList(borrower.clone(), goal_id.clone());
+        env.storage().persistent().set(&list_key, &list);
+        Self::extend_persistent_ttl(&env, &list_key);
+
+        Self::owner_activity(&env, &borrower, &goal_id);
+        env.events().publish(
+            (symbol_short!("ben_list"), goal_id),
+            (borrower, list.splits.len()),
+        );
+        Self::extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Return the currently configured multi-beneficiary list, or `None`.
+    pub fn get_beneficiary_list(
+        env: Env,
+        borrower: Address,
+        goal_id: Symbol,
+    ) -> Option<crate::types::BeneficiaryList> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::BeneficiaryList(borrower, goal_id))
+    }
+
+    /// Remove the multi-beneficiary list for the given goal.  The owner
+    /// signature is required.  This does not reinstate a legacy single address.
+    pub fn remove_beneficiary_list(
+        env: Env,
+        borrower: Address,
+        goal_id: Symbol,
+    ) -> Result<(), EscrowError> {
+        borrower.require_auth();
+        Self::check_not_paused(&env)?;
+        env.storage()
+            .persistent()
+            .remove(&DataKey::BeneficiaryList(borrower.clone(), goal_id.clone()));
+        Self::owner_activity(&env, &borrower, &goal_id);
+        env.events().publish(
+            (symbol_short!("ben_list"), goal_id),
+            (borrower, 0u32),
+        );
+        Self::extend_instance_ttl(&env);
+        Ok(())
+    }
+
     /// Designate or replace the beneficiary for one owner/goal escrow.
     /// `None` removes the designation. The owner signature is mandatory.
     pub fn set_beneficiary(
@@ -1028,6 +1149,19 @@ impl EscrowContract {
 
     /// Transfer the funded owner/goal escrow to its currently designated
     /// beneficiary after inactivity and an authenticated attestor quorum.
+    ///
+    /// Routing logic (checked in priority order):
+    ///
+    /// 1. **Multi-split** — if a `BeneficiaryList` is configured for this
+    ///    (borrower, goal_id) pair the caller must be one of the listed
+    ///    addresses.  Each recipient receives `amount * share_bps / 10_000`
+    ///    tokens.  A single call by any one of the beneficiaries claims the
+    ///    entire escrow and disburses proportional shares to *all* of them in
+    ///    one transaction.
+    ///
+    /// 2. **Legacy single-address** — falls back to the original single
+    ///    `Beneficiary(borrower, goal_id)` key when no list is present,
+    ///    preserving full backward compatibility.
     pub fn claim_as_beneficiary(
         env: Env,
         borrower: Address,
@@ -1036,16 +1170,62 @@ impl EscrowContract {
         attestations: soroban_sdk::Vec<Address>,
     ) -> Result<i128, EscrowError> {
         Self::non_reentrant(&env, || {
-            let configured: Address = env
+            // ── 1. Resolve beneficiary configuration ──────────────────────
+            //
+            // We support two storage layouts:
+            //   a) BeneficiaryList(borrower, goal_id)  →  multi-split (new)
+            //   b) Beneficiary(borrower, goal_id)       →  single address (legacy)
+            //
+            // The list takes precedence when both are somehow present, though
+            // `set_beneficiary_list` always clears the legacy key.
+            let maybe_list: Option<crate::types::BeneficiaryList> = env
                 .storage()
                 .persistent()
-                .get(&DataKey::Beneficiary(borrower.clone(), goal_id.clone()))
-                .ok_or(EscrowError::BeneficiaryNotConfigured)?;
-            if configured != beneficiary {
-                return Err(EscrowError::UnauthorizedBeneficiary);
-            }
+                .get(&DataKey::BeneficiaryList(borrower.clone(), goal_id.clone()));
+
+            // Verify that the caller is a configured recipient and collect the
+            // per-recipient split ratios.  For the single-address legacy path
+            // we synthesise a one-entry list at 10 000 bps.
+            let splits: soroban_sdk::Vec<crate::types::BeneficiarySplit> = match &maybe_list {
+                Some(list) => {
+                    // The caller must appear in the list.
+                    let mut found = false;
+                    for i in 0..list.splits.len() {
+                        if list.splits.get_unchecked(i).beneficiary == beneficiary {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        return Err(EscrowError::UnauthorizedBeneficiary);
+                    }
+                    list.splits.clone()
+                }
+                None => {
+                    // Legacy single-address path.
+                    let configured: Address = env
+                        .storage()
+                        .persistent()
+                        .get(&DataKey::Beneficiary(borrower.clone(), goal_id.clone()))
+                        .ok_or(EscrowError::BeneficiaryNotConfigured)?;
+                    if configured != beneficiary {
+                        return Err(EscrowError::UnauthorizedBeneficiary);
+                    }
+                    soroban_sdk::vec![
+                        &env,
+                        crate::types::BeneficiarySplit {
+                            beneficiary: beneficiary.clone(),
+                            share_bps: 10_000,
+                        }
+                    ]
+                }
+            };
+
+            // The caller (one of the listed beneficiaries) must authorise the
+            // transaction.
             beneficiary.require_auth();
 
+            // ── 2. Duplicate-claim guard ───────────────────────────────────
             let mut record = Self::get_borrower(&env, &borrower, &goal_id);
             if env
                 .storage()
@@ -1058,9 +1238,13 @@ impl EscrowContract {
             {
                 return Err(EscrowError::BeneficiaryAlreadyClaimed);
             }
+
+            // ── 3. Funds check ────────────────────────────────────────────
             if record.deposited <= 0 || record.released || record.withdrawn || record.seized {
                 return Err(EscrowError::NoClaimableFunds);
             }
+
+            // ── 4. Inactivity check ───────────────────────────────────────
             let period = env
                 .storage()
                 .instance()
@@ -1071,6 +1255,7 @@ impl EscrowContract {
                 return Err(EscrowError::BeneficiaryInactivityNotElapsed);
             }
 
+            // ── 5. Attestation quorum check ───────────────────────────────
             let quorum = Self::attestors(&env)?;
             if attestations.is_empty() {
                 return Err(EscrowError::InsufficientAttestationQuorum);
@@ -1100,8 +1285,9 @@ impl EscrowContract {
                 return Err(EscrowError::InsufficientAttestationQuorum);
             }
 
+            // ── 6. Resolve claimable amount (principal + optional yield) ──
             let config = Self::get_config(&env)?;
-            let mut amount = record.deposited;
+            let mut total_amount = record.deposited;
             let yield_shares = Self::read_yield_shares(&env, &borrower, &goal_id);
             if let Some(vault) = &config.yield_vault {
                 if yield_shares > 0 {
@@ -1110,7 +1296,7 @@ impl EscrowContract {
                         env.current_contract_address().into_val(&env),
                         yield_shares.into_val(&env),
                     ];
-                    amount =
+                    total_amount =
                         env.invoke_contract(vault, &Symbol::new(&env, "withdraw"), invoke_args);
                     let total_shares = Self::read_total_yield_shares(&env) - yield_shares;
                     env.storage()
@@ -1122,29 +1308,50 @@ impl EscrowContract {
                 }
             }
             let principal = record.deposited;
-            // State is changed before the external token call; Soroban rolls
-            // back both changes if the transfer fails.
+
+            // ── 7. Mutate state BEFORE all external token calls ───────────
+            //
+            // Soroban rolls back the entire transaction atomically if any
+            // subsequent call fails, so zeroing state here is safe.
             record.deposited = 0;
             env.storage().persistent().set(
                 &DataKey::BeneficiaryClaimed(borrower.clone(), goal_id.clone()),
                 &true,
             );
             Self::set_borrower(&env, &borrower, &goal_id, &record);
-            // `TotalPooled` tracks deposited principal, not accrued yield.
-            // Remove exactly the principal recorded for this escrow.
-            let total = Self::read_total_pooled(&env).saturating_sub(principal);
-            env.storage().instance().set(&DataKey::TotalPooled, &total);
-            get_token_client(&env, &config.token).transfer(
-                &env.current_contract_address(),
-                &beneficiary,
-                &amount,
-            );
+            // `TotalPooled` tracks deposited principal only, not accrued yield.
+            let new_total = Self::read_total_pooled(&env).saturating_sub(principal);
+            env.storage().instance().set(&DataKey::TotalPooled, &new_total);
+
+            // ── 8. Distribute funds proportionally to each recipient ──────
+            //
+            // For rounding: each recipient receives floor(total * bps / 10_000).
+            // Any 1-stroop remainder from integer division accumulates in
+            // `remainder` and is given to the first recipient in the list,
+            // keeping the total transferred equal to `total_amount`.
+            let token = get_token_client(&env, &config.token);
+            let contract_addr = env.current_contract_address();
+            let mut distributed: i128 = 0;
+            for i in 0..splits.len() {
+                let split = splits.get_unchecked(i);
+                let share = if i == splits.len() - 1 {
+                    // Last recipient gets whatever is left to avoid dust from
+                    // integer rounding across multiple recipients.
+                    total_amount - distributed
+                } else {
+                    (total_amount * i128::from(split.share_bps)) / 10_000
+                };
+                token.transfer(&contract_addr, &split.beneficiary, &share);
+                distributed += share;
+            }
+
+            // ── 9. Emit event ─────────────────────────────────────────────
             env.events().publish(
                 (symbol_short!("ben_claim"), goal_id),
-                (borrower, beneficiary, amount),
+                (borrower, beneficiary, total_amount),
             );
             Self::extend_instance_ttl(&env);
-            Ok(amount)
+            Ok(total_amount)
         })
     }
 

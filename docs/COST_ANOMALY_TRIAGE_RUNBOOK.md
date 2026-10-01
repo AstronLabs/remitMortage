@@ -169,3 +169,37 @@ aws sns publish \
 ```
 
 Verify that the Slack message arrives in `#devops` formatted with service details, expected vs actual spend, cost delta, and interactive console button.
+
+---
+
+## Infrastructure References
+
+The resource names and threshold cited above (`dev` environment, `devops/cost-anomaly.tf`)
+are checked against live Terraform state/outputs by the scheduled runbook
+drift check — see [`RUNBOOK_DRIFT_DETECTION.md`](RUNBOOK_DRIFT_DETECTION.md)
+for the `runbook-ref` annotation convention.
+
+```runbook-ref
+resource: aws_sns_topic.cost_anomaly_alerts
+output: cost_anomaly_alerts_topic_name
+expect: remit-mortgage-cost-anomaly-alerts-dev
+root: devops
+environment: dev
+```
+
+```runbook-ref
+resource: aws_lambda_function.cost_anomaly_slack_notifier
+output: cost_anomaly_notifier_function_name
+expect: remit-mortgage-cost-anomaly-notifier-dev
+root: devops
+environment: dev
+note: the Lambda that formats and posts the Slack alert
+```
+
+```runbook-ref
+output: cost_anomaly_threshold_usd
+expect: 50
+root: devops
+environment: dev
+note: the "Anomaly Total Impact >= $50" threshold in the monitoring pipeline diagram above
+```

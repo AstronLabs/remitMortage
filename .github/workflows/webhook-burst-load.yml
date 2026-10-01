@@ -1,0 +1,63 @@
+name: Webhook Burst Load Test (scheduled)
+
+# Issue #761: burst webhook delivery has never been load tested. This suite
+# simulates bulk-action / replay bursts and reports latency, queue depth, and
+# retry/DLQ behavior at increasing throughput levels.
+#
+# Deliberately NOT run per-PR (runtime cost + needs Redis): weekly schedule
+# plus manual dispatch only.
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # Mondays 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  webhook-burst-load-test:
+    name: Burst webhook delivery throughput sweep
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Run webhook burst sweep
+        working-directory: backend
+        run: npm run load-test:webhook-burst
+        env:
+          REDIS_URL: redis://localhost:6379
+          WEBHOOK_BURST_LEVELS: "50,200,500"
+          WEBHOOK_BURST_CONCURRENCY: 20
+          SINK_LATENCY_MS: 25
+          WEBHOOK_BURST_P95_SLA_MS: 2000
+          ENFORCE_SLA: 1
+
+      - name: Upload burst report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webhook-burst-report
+          path: backend/load-tests/results/webhook-burst-*.json
+          retention-days: 30

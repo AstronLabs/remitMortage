@@ -4,6 +4,7 @@
 #![no_std]
 
 mod errors;
+mod state_machine;
 mod types;
 
 use crate::errors::MilestoneError;
@@ -12,13 +13,20 @@ use crate::types::{
     MilestoneConfig, MilestoneRecord, MilestoneStatus,
 };
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, vec, Address, Bytes, BytesN, Env, IntoVal, Symbol, Val,
-    Vec,
+    contract, contractimpl, symbol_short, token, vec, Address, Bytes, BytesN, Env, IntoVal,
+    Symbol, Val, Vec,
 };
 
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 129_600; // ~7.5 days
 const INSTANCE_BUMP_AMOUNT: u32 = 518_400; // ~30 days
 const DEFAULT_MIN_DELAY_LEDGERS: u32 = 100;
+/// Default deadline (in ledgers past proposal) a milestone must be approved
+/// by to remain performance-bonus-eligible, until the contractor tightens it
+/// via `set_milestone_deadline`. Generous enough that it's effectively "no
+/// deadline" unless a contractor opts into a tighter one.
+const DEFAULT_MILESTONE_DEADLINE_LEDGERS: u32 = 1_000_000;
+/// Basis-point scale performance_bonus_bps is expressed in (10_000 = 100%).
+const BPS_SCALE: i128 = 10_000;
 
 /// Milestone Disbursement Contract
 ///
@@ -140,6 +148,63 @@ impl MilestoneContract {
             .persistent()
             .set(&DataKey::BudgetChange(milestone_id.clone()), proposal);
     }
+
+    fn read_bonus_pool(env: &Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::BonusPool)
+            .unwrap_or(0)
+    }
+
+    /// Pays a performance bonus into `record` if it qualifies: approved on
+    /// its very first submission (never rejected/resubmitted) and on or
+    /// before its deadline. The bonus is capped to whatever the bonus pool
+    /// currently holds — including zero — so an exhausted or under-funded
+    /// pool degrades gracefully instead of blocking (or partially undoing)
+    /// the milestone's real disbursement, which has already completed by
+    /// the time this runs.
+    fn maybe_award_bonus(
+        env: &Env,
+        config: &MilestoneConfig,
+        proposal_id: &BytesN<32>,
+        record: &mut MilestoneRecord,
+    ) {
+        if config.performance_bonus_bps == 0 {
+            return;
+        }
+
+        let eligible = !record.was_resubmitted && record.approved_ledger <= record.deadline_ledger;
+        if !eligible {
+            return;
+        }
+
+        let full_bonus = record
+            .amount
+            .saturating_mul(config.performance_bonus_bps as i128)
+            / BPS_SCALE;
+        let pool_balance = Self::read_bonus_pool(env);
+        let bonus_amount = full_bonus.min(pool_balance);
+
+        if bonus_amount <= 0 {
+            return;
+        }
+
+        token::Client::new(env, &config.token).transfer(
+            &env.current_contract_address(),
+            &record.contractor,
+            &bonus_amount,
+        );
+
+        env.storage()
+            .instance()
+            .set(&DataKey::BonusPool, &(pool_balance - bonus_amount));
+        record.bonus_awarded = true;
+
+        env.events().publish(
+            (symbol_short!("ms_bonus"),),
+            (record.contractor.clone(), proposal_id.clone(), bonus_amount),
+        );
+    }
 }
 
 #[contractimpl]
@@ -173,6 +238,9 @@ impl MilestoneContract {
             approvers,
             threshold,
             min_delay_ledgers: DEFAULT_MIN_DELAY_LEDGERS,
+            // Off by default; enable via set_performance_bonus_bps once the
+            // bonus pool is funded.
+            performance_bonus_bps: 0,
         };
         env.storage().instance().set(&DataKey::Config, &config);
         env.storage()
@@ -233,6 +301,7 @@ impl MilestoneContract {
             }
         }
 
+        let created_ledger = env.ledger().sequence();
         let record = MilestoneRecord {
             loan_id,
             contractor,
@@ -241,9 +310,10 @@ impl MilestoneContract {
             cid,
             status: MilestoneStatus::Proposed,
             votes: 0,
-            created_ledger: env.ledger().sequence(),
+            created_ledger,
             approved_ledger: 0,
             disputed_ledger: 0,
+            released_amount: 0,
         };
         Self::set_milestone(&env, &proposal_id, &record);
 
@@ -418,19 +488,28 @@ impl MilestoneContract {
     ///
     /// Admin-only. The milestone is marked `Disbursed`, so it can never be
     /// released more than once (preventing over-release of the allocation).
+    /// If prior partial releases exist (`PartiallyDisbursed`), this releases
+    /// only the remaining unreleased portion and completes the milestone.
     pub fn release_milestone(env: Env, proposal_id: BytesN<32>) -> Result<(), MilestoneError> {
         let config = Self::read_config(&env)?;
         config.admin.require_auth();
         Self::non_reentrant(&env, || {
 
         let mut record = Self::read_milestone(&env, &proposal_id)?;
-        if record.status != MilestoneStatus::Approved {
+        if record.status != MilestoneStatus::Approved
+            && record.status != MilestoneStatus::PartiallyDisbursed
+        {
             return Err(MilestoneError::InvalidStatus);
         }
 
         let current_ledger = env.ledger().sequence();
         if current_ledger < record.approved_ledger.saturating_add(config.min_delay_ledgers) {
             return Err(MilestoneError::TimelockNotElapsed);
+        }
+
+        let remaining = record.amount.saturating_sub(record.released_amount);
+        if remaining <= 0 {
+            return Err(MilestoneError::InvalidStatus);
         }
 
         // Cross-contract call: lending_pool.disburse(loan_id, contractor, amount).
@@ -441,17 +520,126 @@ impl MilestoneContract {
             &env,
             record.loan_id.clone().into_val(&env),
             record.contractor.clone().into_val(&env),
-            record.amount.into_val(&env),
+            remaining.into_val(&env),
         ];
         env.invoke_contract::<()>(&config.lending_pool, &func, args);
 
+        record.released_amount = record.amount;
         record.status = MilestoneStatus::Disbursed;
+
+        // Performance bonus — evaluated only after the underlying
+        // disbursement above has already succeeded, and never able to fail
+        // this function: eligibility that isn't met, or a bonus pool that's
+        // partially or fully exhausted, simply pays less (or nothing) rather
+        // than reverting anything.
+        Self::maybe_award_bonus(&env, &config, &proposal_id, &mut record);
+
         Self::set_milestone(&env, &proposal_id, &record);
+
+        env.events().publish(
+            (symbol_short!("milestone"), symbol_short!("full")),
+            (proposal_id, remaining),
+        );
 
         Self::bump_instance(&env);
 
         Ok(())
         }) // non_reentrant
+    }
+
+    /// Partially approve a milestone, releasing only `release_amount` now
+    /// and leaving the remainder tracked as still pending.
+    ///
+    /// Admin-only. The milestone must be in `Approved` status (or
+    /// `PartiallyDisbursed` for a follow-up partial). `release_amount` must
+    /// be greater than zero and no more than the remaining unreleased amount
+    /// (`amount - released_amount`); larger requests revert with
+    /// `ExceedsRemainingAmount` instead of closing the milestone prematurely.
+    /// When the cumulative released total reaches the full milestone amount
+    /// the milestone transitions to `Disbursed`; otherwise it moves to (or
+    /// stays in) `PartiallyDisbursed` so a later full or partial approval
+    /// can complete it. Emits a `partial` event, distinct from the `full`
+    /// event emitted by `release_milestone` / completing partials.
+    pub fn partially_approve_milestone(
+        env: Env,
+        proposal_id: BytesN<32>,
+        release_amount: i128,
+    ) -> Result<(), MilestoneError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        Self::non_reentrant(&env, || {
+
+        let mut record = Self::read_milestone(&env, &proposal_id)?;
+        if record.status != MilestoneStatus::Approved
+            && record.status != MilestoneStatus::PartiallyDisbursed
+        {
+            return Err(MilestoneError::InvalidStatus);
+        }
+
+        if release_amount <= 0 {
+            return Err(MilestoneError::InvalidPartialAmount);
+        }
+
+        let remaining = record.amount.saturating_sub(record.released_amount);
+        if release_amount > remaining {
+            return Err(MilestoneError::ExceedsRemainingAmount);
+        }
+
+        let current_ledger = env.ledger().sequence();
+        if current_ledger < record.approved_ledger.saturating_add(config.min_delay_ledgers) {
+            return Err(MilestoneError::TimelockNotElapsed);
+        }
+
+        let func: Symbol = symbol_short!("disburse");
+        let args: Vec<Val> = vec![
+            &env,
+            record.loan_id.clone().into_val(&env),
+            record.contractor.clone().into_val(&env),
+            release_amount.into_val(&env),
+        ];
+        env.invoke_contract::<()>(&config.lending_pool, &func, args);
+
+        record.released_amount += release_amount;
+        if record.released_amount >= record.amount {
+            record.released_amount = record.amount;
+            record.status = MilestoneStatus::Disbursed;
+            Self::set_milestone(&env, &proposal_id, &record);
+            env.events().publish(
+                (symbol_short!("milestone"), symbol_short!("full")),
+                (proposal_id, release_amount),
+            );
+        } else {
+            record.status = MilestoneStatus::PartiallyDisbursed;
+            Self::set_milestone(&env, &proposal_id, &record);
+            let remaining_after = record.amount.saturating_sub(record.released_amount);
+            env.events().publish(
+                (symbol_short!("milestone"), symbol_short!("partial")),
+                (proposal_id, release_amount, remaining_after),
+            );
+        }
+
+        Self::bump_instance(&env);
+
+        Ok(())
+        }) // non_reentrant
+    }
+
+    /// Remaining unreleased amount for a milestone
+    /// (`amount - released_amount`, floored at zero).
+    pub fn get_remaining_amount(
+        env: Env,
+        proposal_id: BytesN<32>,
+    ) -> Result<i128, MilestoneError> {
+        let record = Self::read_milestone(&env, &proposal_id)?;
+        Ok(record.amount.saturating_sub(record.released_amount))
+    }
+
+    /// Amount already released via partial/full approvals.
+    pub fn get_released_amount(
+        env: Env,
+        proposal_id: BytesN<32>,
+    ) -> Result<i128, MilestoneError> {
+        Ok(Self::read_milestone(&env, &proposal_id)?.released_amount)
     }
 
     /// Dispute an active milestone and trigger a refund to the lending pool.
@@ -746,6 +934,183 @@ impl MilestoneContract {
         Ok(())
     }
 
+    /// Configure the performance bonus rate — basis points of a qualifying
+    /// milestone's amount, paid from the bonus pool on release. Admin-only.
+    /// Zero (the default) disables bonuses entirely.
+    pub fn set_performance_bonus_bps(
+        env: Env,
+        admin: Address,
+        bps: u32,
+    ) -> Result<(), MilestoneError> {
+        let mut config = Self::read_config(&env)?;
+        admin.require_auth();
+
+        if admin != config.admin {
+            return Err(MilestoneError::Unauthorized);
+        }
+        if bps > BPS_SCALE as u32 {
+            return Err(MilestoneError::InvalidBonusConfig);
+        }
+
+        config.performance_bonus_bps = bps;
+        env.storage().instance().set(&DataKey::Config, &config);
+        Self::bump_instance(&env);
+
+        Ok(())
+    }
+
+    /// Deposit funds into the shared performance bonus pool.
+    ///
+    /// Anyone may fund it — the transfer moves the funder's own tokens into
+    /// this contract under their own authorization, so it isn't restricted
+    /// to the admin. Funds here are entirely separate from loan capital held
+    /// by the lending pool; they only ever pay out as bonuses, never as the
+    /// underlying milestone disbursement.
+    pub fn fund_bonus_pool(env: Env, funder: Address, amount: i128) -> Result<(), MilestoneError> {
+        funder.require_auth();
+
+        if amount <= 0 {
+            return Err(MilestoneError::InvalidAmount);
+        }
+
+        let config = Self::read_config(&env)?;
+        token::Client::new(&env, &config.token).transfer(
+            &funder,
+            &env.current_contract_address(),
+            &amount,
+        );
+
+        let balance = Self::read_bonus_pool(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::BonusPool, &(balance + amount));
+        Self::bump_instance(&env);
+
+        Ok(())
+    }
+
+    /// Current bonus pool balance available to fund future performance
+    /// bonuses.
+    pub fn get_bonus_pool_balance(env: Env) -> i128 {
+        Self::read_bonus_pool(&env)
+    }
+
+    /// Set (or tighten) the ledger by which a milestone must be approved to
+    /// remain performance-bonus-eligible. Contractor-only, for their own
+    /// milestone, and only while it hasn't been approved yet (`Proposed` or
+    /// `Rejected`) — a deadline can't be moved after the fact to manufacture
+    /// eligibility.
+    pub fn set_milestone_deadline(
+        env: Env,
+        contractor: Address,
+        proposal_id: BytesN<32>,
+        deadline_ledger: u32,
+    ) -> Result<(), MilestoneError> {
+        contractor.require_auth();
+
+        let mut record = Self::read_milestone(&env, &proposal_id)?;
+        if record.contractor != contractor {
+            return Err(MilestoneError::Unauthorized);
+        }
+        if record.status != MilestoneStatus::Proposed && record.status != MilestoneStatus::Rejected
+        {
+            return Err(MilestoneError::InvalidStatus);
+        }
+        if deadline_ledger <= env.ledger().sequence() {
+            return Err(MilestoneError::InvalidDeadline);
+        }
+
+        record.deadline_ledger = deadline_ledger;
+        Self::set_milestone(&env, &proposal_id, &record);
+        Self::bump_instance(&env);
+
+        Ok(())
+    }
+
+    /// Reject a proposed milestone, sending it back to the contractor for
+    /// resubmission.
+    ///
+    /// Any single configured multisig approver may reject — no threshold
+    /// vote required, mirroring `dispute_milestone`'s single-signer style
+    /// for this kind of negative action. Clears every approver's prior vote
+    /// so a resubmission can be re-voted on from a clean slate rather than
+    /// instantly re-approving on stale votes.
+    pub fn reject_milestone(
+        env: Env,
+        governance_signer: Address,
+        proposal_id: BytesN<32>,
+    ) -> Result<(), MilestoneError> {
+        governance_signer.require_auth();
+
+        let config = Self::read_config(&env)?;
+        if !config.approvers.contains(&governance_signer) {
+            return Err(MilestoneError::Unauthorized);
+        }
+
+        let mut record = Self::read_milestone(&env, &proposal_id)?;
+        if record.status != MilestoneStatus::Proposed {
+            return Err(MilestoneError::CannotReject);
+        }
+
+        for approver in config.approvers.iter() {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::Voted(proposal_id.clone(), approver.clone()));
+        }
+
+        record.votes = 0;
+        record.status = MilestoneStatus::Rejected;
+        Self::set_milestone(&env, &proposal_id, &record);
+        Self::bump_instance(&env);
+
+        env.events()
+            .publish((symbol_short!("ms_rej"),), (governance_signer, proposal_id));
+
+        Ok(())
+    }
+
+    /// Resubmit a rejected milestone with updated evidence.
+    ///
+    /// Contractor-only, and only from `Rejected` status. Permanently marks
+    /// the milestone as having been resubmitted, disqualifying it from the
+    /// first-submission performance bonus even if this or a later
+    /// resubmission is subsequently approved cleanly and on time.
+    pub fn resubmit_milestone(
+        env: Env,
+        contractor: Address,
+        proposal_id: BytesN<32>,
+        evidence_hash: BytesN<32>,
+        cid: Bytes,
+    ) -> Result<(), MilestoneError> {
+        contractor.require_auth();
+
+        let mut record = Self::read_milestone(&env, &proposal_id)?;
+        if record.contractor != contractor {
+            return Err(MilestoneError::Unauthorized);
+        }
+        if record.status != MilestoneStatus::Rejected {
+            return Err(MilestoneError::CannotResubmit);
+        }
+
+        let zero: BytesN<32> = BytesN::from_array(&env, &[0u8; 32]);
+        if evidence_hash == zero {
+            return Err(MilestoneError::EvidenceRequired);
+        }
+        Self::validate_cid(&cid)?;
+
+        record.evidence_hash = evidence_hash;
+        record.cid = cid;
+        record.status = MilestoneStatus::Proposed;
+        record.was_resubmitted = true;
+        Self::set_milestone(&env, &proposal_id, &record);
+        Self::bump_instance(&env);
+
+        env.events()
+            .publish((symbol_short!("ms_resub"),), (contractor, proposal_id));
+
+        Ok(())
+    }
+
     /// Fetch a milestone record by proposal ID.
     pub fn get_milestone(
         env: Env,
@@ -763,3 +1128,6 @@ impl MilestoneContract {
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod property_tests;

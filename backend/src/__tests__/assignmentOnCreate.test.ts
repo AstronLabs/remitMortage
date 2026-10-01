@@ -36,6 +36,11 @@ jest.mock("../services/loanHistory.js", () => ({
   diffLoanSnapshot: jest.fn(),
 }));
 
+// Pricing (issue #746) is covered in rateSheet.test.ts; this suite is about assignment.
+jest.mock("../services/rateSheet.js", () => ({
+  priceNewOffer: jest.fn().mockResolvedValue(null),
+}));
+
 import { createApplication } from "../services/loanStore.js";
 
 const ADDRESS = StrKey.encodeEd25519PublicKey(Buffer.alloc(32));

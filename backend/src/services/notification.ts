@@ -8,25 +8,18 @@ import { sendWebhook } from "./webhook.js";
 import { queueService } from "./queueService.js";
 import { getCurrentTenant } from "./tenant.js";
 
-export type NotificationType = "EMAIL" | "WEBHOOK" | "SMS";
+export type NotificationType = "EMAIL" | "WEBHOOK" | "SMS" | "PUSH";
 
 const MAX_ATTEMPTS = 5;
 const BASE_BACKOFF_MS = 60 * 1000; // 1 minute base backoff
 
 /**
- * Computes milliseconds until the next business hour start time.
+ * Resolves "now" in a given IANA timezone as wall-clock components, plus a
+ * `Date` whose UTC fields *are* those local wall-clock values (a convenient
+ * trick for doing day/hour arithmetic without a full timezone library —
+ * `setUTCHours`/`setUTCDate` on this Date operate on local wall-clock time).
  */
-function computeBusinessHoursDelay(preferences: any, isUrgent: boolean): number {
-  if (isUrgent || !preferences || !preferences.timezone) return 0;
-  
-  const tz = preferences.timezone || "UTC";
-  const startHourStr = preferences.startHour || "09:00";
-  const endHourStr = preferences.endHour || "17:00";
-  const businessDaysStr = preferences.businessDays || "1,2,3,4,5";
-  const businessDays = businessDaysStr.split(',').map(Number);
-  
-  const now = new Date();
-  
+function resolveLocalWallClock(tz: string): { localDate: Date; currentMinutes: number; currentDay: number } | null {
   try {
     const formatter = new Intl.DateTimeFormat('en-US', {
       timeZone: tz,
@@ -38,17 +31,13 @@ function computeBusinessHoursDelay(preferences: any, isUrgent: boolean): number 
       month: 'numeric',
       day: 'numeric'
     });
-    
-    const parts = formatter.formatToParts(now);
+
+    const parts = formatter.formatToParts(new Date());
     const getPart = (type: string) => parts.find(p => p.type === type)?.value || "";
-    
+
     const currentHour = parseInt(getPart("hour"));
     const currentMin = parseInt(getPart("minute"));
-    const startH = parseInt(startHourStr.split(':')[0]);
-    const startM = parseInt(startHourStr.split(':')[1] || "0");
-    const endH = parseInt(endHourStr.split(':')[0]);
-    const endM = parseInt(endHourStr.split(':')[1] || "0");
-    
+
     const localDate = new Date(Date.UTC(
       parseInt(getPart("year")),
       parseInt(getPart("month")) - 1,
@@ -57,37 +46,103 @@ function computeBusinessHoursDelay(preferences: any, isUrgent: boolean): number 
       currentMin,
       parseInt(getPart("second"))
     ));
-    const currentDay = localDate.getUTCDay(); // 0-6
-    
-    const currentMinutes = currentHour * 60 + currentMin;
-    const startMinutes = startH * 60 + startM;
-    const endMinutes = endH * 60 + endM;
-    
-    const isBusinessDay = businessDays.includes(currentDay);
-    const isBusinessHours = currentMinutes >= startMinutes && currentMinutes < endMinutes;
-    
-    if (isBusinessDay && isBusinessHours) {
-      return 0;
-    }
-    
-    let daysToAdd = 0;
-    if (!isBusinessDay || currentMinutes >= endMinutes) {
-      daysToAdd = 1;
-      while (!businessDays.includes((currentDay + daysToAdd) % 7)) {
-        daysToAdd++;
-      }
-    }
-    
-    const targetTime = new Date(localDate);
-    targetTime.setUTCDate(localDate.getUTCDate() + daysToAdd);
-    targetTime.setUTCHours(startH, startM, 0, 0);
-    
-    const diffMs = targetTime.getTime() - localDate.getTime();
-    return diffMs > 0 ? diffMs : 0;
+
+    return {
+      localDate,
+      currentMinutes: currentHour * 60 + currentMin,
+      currentDay: localDate.getUTCDay(), // 0-6, Sunday-Saturday
+    };
   } catch (e) {
-    logger.warn(`Failed to compute business hours for tz ${tz}`, e);
+    logger.warn(`Failed to resolve local time for tz ${tz}`, e);
+    return null;
+  }
+}
+
+/**
+ * Computes milliseconds until the next business hour start time.
+ */
+function computeBusinessHoursDelay(preferences: any, isUrgent: boolean): number {
+  if (isUrgent || !preferences || !preferences.timezone) return 0;
+
+  const tz = preferences.timezone || "UTC";
+  const startHourStr = preferences.startHour || "09:00";
+  const endHourStr = preferences.endHour || "17:00";
+  const businessDaysStr = preferences.businessDays || "1,2,3,4,5";
+  const businessDays = businessDaysStr.split(',').map(Number);
+
+  const wallClock = resolveLocalWallClock(tz);
+  if (!wallClock) return 0;
+  const { localDate, currentMinutes, currentDay } = wallClock;
+
+  const startH = parseInt(startHourStr.split(':')[0]);
+  const startM = parseInt(startHourStr.split(':')[1] || "0");
+  const endH = parseInt(endHourStr.split(':')[0]);
+  const endM = parseInt(endHourStr.split(':')[1] || "0");
+
+  const startMinutes = startH * 60 + startM;
+  const endMinutes = endH * 60 + endM;
+
+  const isBusinessDay = businessDays.includes(currentDay);
+  const isBusinessHours = currentMinutes >= startMinutes && currentMinutes < endMinutes;
+
+  if (isBusinessDay && isBusinessHours) {
     return 0;
   }
+
+  let daysToAdd = 0;
+  if (!isBusinessDay || currentMinutes >= endMinutes) {
+    daysToAdd = 1;
+    while (!businessDays.includes((currentDay + daysToAdd) % 7)) {
+      daysToAdd++;
+    }
+  }
+
+  const targetTime = new Date(localDate);
+  targetTime.setUTCDate(localDate.getUTCDate() + daysToAdd);
+  targetTime.setUTCHours(startH, startM, 0, 0);
+
+  const diffMs = targetTime.getTime() - localDate.getTime();
+  return diffMs > 0 ? diffMs : 0;
+}
+
+/**
+ * Computes milliseconds until the next digest delivery window for a
+ * DAILY_DIGEST or WEEKLY_DIGEST preference. Reuses the same `timezone` and
+ * `startHour` fields as the business-hours throttle above, rather than
+ * adding new columns: "daily digest" means "once a day, at the hour you
+ * configured as your business-hours start"; "weekly digest" means "once a
+ * week, same hour, on Monday". IMMEDIATE always returns 0 and is handled by
+ * the caller before this is reached.
+ */
+function computeDigestDelay(preferences: any, frequency: NotificationFrequency): number {
+  if (frequency === "IMMEDIATE" || !preferences) return 0;
+
+  const tz = preferences.timezone || "UTC";
+  const digestHourStr = preferences.startHour || "09:00";
+  const digestH = parseInt(digestHourStr.split(':')[0]);
+  const digestM = parseInt(digestHourStr.split(':')[1] || "0");
+  const digestMinutes = digestH * 60 + digestM;
+
+  const wallClock = resolveLocalWallClock(tz);
+  if (!wallClock) return 0;
+  const { localDate, currentMinutes, currentDay } = wallClock;
+
+  let daysToAdd: number;
+  if (frequency === "DAILY_DIGEST") {
+    daysToAdd = currentMinutes < digestMinutes ? 0 : 1;
+  } else {
+    // WEEKLY_DIGEST: next Monday (day 1) at the digest hour.
+    const MONDAY = 1;
+    daysToAdd = (MONDAY - currentDay + 7) % 7;
+    if (daysToAdd === 0 && currentMinutes >= digestMinutes) daysToAdd = 7;
+  }
+
+  const targetTime = new Date(localDate);
+  targetTime.setUTCDate(localDate.getUTCDate() + daysToAdd);
+  targetTime.setUTCHours(digestH, digestM, 0, 0);
+
+  const diffMs = targetTime.getTime() - localDate.getTime();
+  return diffMs > 0 ? diffMs : 0;
 }
 
 /**
@@ -157,6 +212,8 @@ export async function dispatchNotification(id: string): Promise<boolean> {
       success = await handleEmailDispatch(notification.recipient, notification.content);
     } else if (notification.type === "SMS") {
       success = await handleSmsDispatch(notification.recipient, notification.content);
+    } else if (notification.type === "PUSH") {
+      success = await handlePushDispatch(notification.recipient, notification.content);
     } else if (notification.type === "WEBHOOK") {
       let payload = {};
       try {
@@ -251,6 +308,22 @@ async function handleSmsDispatch(recipient: string, content: string): Promise<bo
 }
 
 /**
+ * Internal helper to dispatch browser/mobile push notifications.
+ *
+ * There is no push subscription registry on the backend yet (see
+ * lib/webPush.ts on the frontend, which manages subscriptions client-side
+ * without a corresponding backend delivery service) — `recipient` here is
+ * the applicant's wallet address rather than a real push endpoint. This
+ * stays a simulated dispatch, same honesty level as handleSmsDispatch above,
+ * until that registry exists.
+ */
+async function handlePushDispatch(recipient: string, content: string): Promise<boolean> {
+  logger.info(`[Push Dispatcher] Sending push notification for ${recipient}: "${content}"`);
+  // Simulated push provider integration (e.g. web-push / FCM / APNs)
+  return true;
+}
+
+/**
  * Internal helper to send correct email format depending on whether content is JSON-structured.
  */
 async function handleEmailDispatch(recipient: string, content: string): Promise<boolean> {
@@ -258,14 +331,15 @@ async function handleEmailDispatch(recipient: string, content: string): Promise<
   if (content.trim().startsWith("{")) {
     try {
       const parsed = JSON.parse(content);
+      const locale: string | undefined = parsed.locale;
       if (parsed.template === "deposit_receipt") {
-        return await sendDepositReceipt(recipient, parsed.amount, parsed.transactionId);
+        return await sendDepositReceipt(recipient, parsed.amount, parsed.transactionId, locale);
       }
       if (parsed.template === "repayment_reminder") {
-        return await sendRepaymentReminder(recipient, parsed.amount, parsed.dueDate);
+        return await sendRepaymentReminder(recipient, parsed.amount, parsed.dueDate, locale);
       }
       if (parsed.template === "loan_status_update") {
-        return await sendLoanStatusUpdate(recipient, parsed.loanId, parsed.status);
+        return await sendLoanStatusUpdate(recipient, parsed.loanId, parsed.status, locale);
       }
     } catch {
       // Fallback if JSON parsing fails
@@ -279,10 +353,33 @@ async function handleEmailDispatch(recipient: string, content: string): Promise<
 /**
  * Evaluates dynamic escrow maturity & missed payment triggers and dispatches alerts according to user preferences.
  */
+export type MaturityAlertEventType =
+  | "ESCROW_APPROACHING"
+  | "ESCROW_REACHED"
+  | "PAYMENT_MISSED"
+  | "MILESTONE_UPDATE"
+  | "GOVERNANCE_PROPOSAL"
+  | "SECURITY_ALERT";
+
+/**
+ * Maps each event type to the NotificationPreference field governing its
+ * delivery cadence. SECURITY_ALERT is intentionally absent — it never
+ * consults a stored frequency (see the `isSecurity` branch below), so there
+ * is no key here that could be mistakenly wired up to make it configurable.
+ */
+const FREQUENCY_FIELD_BY_EVENT: Partial<
+  Record<MaturityAlertEventType, "depositsFrequency" | "milestonesFrequency" | "governanceFrequency">
+> = {
+  ESCROW_APPROACHING: "depositsFrequency",
+  ESCROW_REACHED: "depositsFrequency",
+  MILESTONE_UPDATE: "milestonesFrequency",
+  GOVERNANCE_PROPOSAL: "governanceFrequency",
+};
+
 export async function dispatchMaturityAlerts(
   applicantAddress: string,
   event: {
-    type: "ESCROW_APPROACHING" | "ESCROW_REACHED" | "PAYMENT_MISSED" | "MILESTONE_UPDATE";
+    type: MaturityAlertEventType;
     progress?: number;
     deposited?: string;
     target?: string;
@@ -305,6 +402,7 @@ export async function dispatchMaturityAlerts(
     escrowReached,
     paymentMissed,
     loanMilestones,
+    governanceAlerts,
     webhookUrl,
   } = preferences;
 
@@ -313,6 +411,10 @@ export async function dispatchMaturityAlerts(
   let text = event.message || "";
 
   let isUrgent = false;
+  // Security-critical alerts (new-device login, etc.) are never gated by a
+  // user preference and never deferred — this is the one non-negotiable
+  // exception the settings UI must make clear to users.
+  const isSecurity = event.type === "SECURITY_ALERT";
 
   switch (event.type) {
     case "ESCROW_APPROACHING":
@@ -336,6 +438,19 @@ export async function dispatchMaturityAlerts(
       subject = "🏗️ Construction Milestone Update";
       text = text || `Milestone update: ${event.milestoneName || "Construction phase"} has been updated on IPFS & Soroban multisig.`;
       break;
+    case "GOVERNANCE_PROPOSAL":
+      shouldSend = Boolean(governanceAlerts);
+      subject = "🗳️ New Governance Proposal";
+      text = text || "A new protocol governance proposal is open for voting.";
+      break;
+    case "SECURITY_ALERT":
+      // Always sent — security alerts cannot be disabled, unlike every
+      // other category above.
+      shouldSend = true;
+      isUrgent = true;
+      subject = "🔒 Security Alert";
+      text = text || "A new sign-in or other security-sensitive action was detected on your account. If this wasn't you, secure your account immediately.";
+      break;
   }
 
   if (!shouldSend) {
@@ -343,15 +458,40 @@ export async function dispatchMaturityAlerts(
     return;
   }
 
-  const delayMs = computeBusinessHoursDelay(preferences, isUrgent);
+  // Frequency-based deferral only applies to categories with a mapped
+  // preference field, and never to security alerts or already-urgent events
+  // — those always deliver with delayMs = 0 via computeBusinessHoursDelay's
+  // own isUrgent short-circuit.
+  const frequencyField = FREQUENCY_FIELD_BY_EVENT[event.type];
+  const frequency: NotificationFrequency = isSecurity
+    ? "IMMEDIATE"
+    : ((frequencyField ? (preferences as any)[frequencyField] : undefined) ?? "IMMEDIATE");
+
+  const delayMs =
+    isUrgent || isSecurity
+      ? 0
+      : frequency === "IMMEDIATE"
+        ? computeBusinessHoursDelay(preferences, isUrgent)
+        : computeDigestDelay(preferences, frequency);
+
+  // Note: the emailAlerts/smsAlerts channel toggles below still apply even to
+  // security alerts — "always immediate" governs *timing*, not whether the
+  // user has that delivery channel switched on at all.
   const dispatches: Promise<any>[] = [];
 
-  if (emailAlerts && email) {
+  if (email && channelEnabled("EMAIL", Boolean(emailAlerts))) {
     dispatches.push(queueNotification(email, "EMAIL", `${subject}: ${text}`, delayMs));
   }
 
-  if (smsAlerts && phone) {
+  if (phone && channelEnabled("SMS", Boolean(smsAlerts))) {
     dispatches.push(queueNotification(phone, "SMS", `${subject}: ${text}`, delayMs));
+  }
+
+  // Push has no legacy toggle to fall back to (it didn't exist as a channel
+  // before this matrix), so an uncategorized event type (PAYMENT_MISSED)
+  // simply never sends push.
+  if (channelEnabled("PUSH", false)) {
+    dispatches.push(queueNotification(applicantAddress, "PUSH", `${subject}: ${text}`, delayMs));
   }
 
   if (webhookUrl) {

@@ -6,6 +6,7 @@
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, Vec};
 
 mod errors;
+pub mod message;
 mod types;
 
 /// Generic, interface-level compliance suite. Available to this crate's tests
@@ -16,7 +17,11 @@ pub mod compliance;
 #[cfg(test)]
 mod test;
 
+#[cfg(test)]
+mod fuzz_tests;
+
 pub use crate::errors::BridgeError;
+pub use crate::message::{InboundBridgeMessage, MessagePayloadType};
 pub use crate::types::{AssetInfo, BridgeConfig, BridgeOperation, BridgeState};
 
 /// Cross-chain bridge adapter interface for future EVM collateral support.

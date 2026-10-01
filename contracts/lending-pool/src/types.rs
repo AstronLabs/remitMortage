@@ -51,6 +51,25 @@ pub struct PoolConfig {
     /// Loan origination fee, in basis points, deducted from each disbursement
     /// and routed to `treasury_address`. Loan accounting remains gross.
     pub origination_fee_bps: u32,
+    /// Loan application (processing) fee, in basis points of the requested
+    /// principal, collected from the borrower when the application is
+    /// submitted. Unlike the origination fee — which is taken out of the
+    /// disbursement and is only ever payable by a loan that reaches funds —
+    /// the application fee is paid up front, before any credit decision, so
+    /// it is escrowed by the pool against that application until a final
+    /// decision is reached:
+    ///
+    /// * `approve_loan` retains it and routes it to `treasury_address`.
+    /// * `reject_loan` and `cancel_loan` refund it in full to the borrower
+    ///   automatically, in the same transaction as the transition.
+    ///
+    /// The escrowed tokens are never booked as pool liquidity, so settling
+    /// the fee in either direction leaves investor accounting untouched.
+    ///
+    /// `0` — the deployment default — charges no application fee at all, so
+    /// existing integrations are unaffected until an admin opts in via
+    /// `set_application_fee_bps`.
+    pub application_fee_bps: u32,
     /// Minimum number of ledgers an LP's deposit must remain in the pool
     /// before a withdrawal is allowed. 0 means no lockup.
     pub lockup_duration_ledgers: u32,
@@ -84,11 +103,47 @@ pub struct PoolConfig {
     /// behaviour is unchanged until an admin opts in via
     /// `set_max_single_withdrawal`.
     pub max_single_withdrawal: i128,
+    /// Minimum number of ledgers that must elapse between an investor's
+    /// consecutive deposits.  Prevents rapid-fire deposit spam that could
+    /// grief pool accounting or exploit a buggy integration retry loop.
+    ///
+    /// `0` — the deployment default — disables the cooldown entirely, so
+    /// existing behaviour is unchanged until an admin opts in via
+    /// `set_deposit_cooldown_ledgers`.
+    pub deposit_cooldown_ledgers: u32,
+    /// Number of ledgers after a `request_refinance` call during which the
+    /// quoted rate is guaranteed.  `execute_refinance` is rejected once this
+    /// window has elapsed; the borrower must re-request to obtain a fresh
+    /// quote.
+    ///
+    /// `0` — the deployment default — means no expiry is enforced: the lock
+    /// holds indefinitely until executed or superseded.  Set a non-zero value
+    /// via `set_rate_lock_window_ledgers` to opt in.
+    pub rate_lock_window_ledgers: u32,
+    /// Maximum share of the insurance pool's current reserves that a single
+    /// `inject_emergency_liquidity` call may draw, expressed in basis points
+    /// (e.g. 2000 = 20 %).
+    ///
+    /// `0` — the deployment default — disables the cap entirely (no per-call
+    /// ceiling beyond the pool's actual reserve balance).  Set a non-zero
+    /// value via `set_emergency_injection_cap_bps` to opt in.
+    pub emergency_injection_cap_bps: u32,
     /// When true, only whitelisted addresses may call deposit, request_loan,
     /// and withdraw. Toggleable by admin for regulated or pilot deployments.
     /// `false` — the deployment default — preserves existing permissionless
     /// behaviour.
     pub permissioned_mode: bool,
+    /// Minimum holding period, in ledgers, after which an investor's
+    /// withdrawal is waived of the early-redemption (utilization-based
+    /// withdrawal) fee. Holding duration is measured from the investor's
+    /// `start_ledger` to the current ledger at withdrawal time.
+    /// `0` — the deployment default — disables the waiver so every
+    /// withdrawal pays the fee exactly as before.
+    pub redemption_fee_waiver_ledgers: u32,
+    /// Fixed window, in ledgers, for which a `quote_payoff` snapshot stays
+    /// valid. A payoff executed within the window settles at exactly the
+    /// quoted amount. `0` disables quoting (quotes cannot be created).
+    pub payoff_quote_window_ledgers: u32,
 }
 
 /// Tracks an individual investor's capital contribution.
@@ -140,6 +195,11 @@ pub enum LoanStatus {
     /// Loan defaulted — losses are distributed via the waterfall.
     /// Loan has defaulted after missed payments.
     Defaulted = 4,
+    /// The admin rejected this application. Terminal, and distinct from
+    /// `Cancelled` so a credit decision is distinguishable on-chain from a
+    /// borrower withdrawing their own request. Any application fee escrowed
+    /// at submission is refunded to the borrower on entry to this state.
+    Rejected = 5,
 }
 
 /// Repayment schedule for a loan, tracked on-chain.
@@ -185,6 +245,15 @@ pub struct LoanRecord {
     pub defaulted_ledger: u32,
     /// Optional escrow contract address that originated this loan via the bridge.
     pub escrow_origin: Option<Address>,
+    /// Age of the borrower's escrow savings relationship at the moment this
+    /// loan was originated, in ledgers. `0` means the borrower had no
+    /// recorded relationship.
+    ///
+    /// Latched at origination rather than read at repayment time so that the
+    /// early-prepayment penalty a borrower is assessed cannot be changed after
+    /// the fact by opening or closing an escrow account. See
+    /// `PoolConfig::prepay_waiver_ledgers` for how it is used.
+    pub escrow_relationship_ledgers: u32,
     /// Ledger sequence when the loan was refinanced.
     pub refinanced_at_ledger: Option<u32>,
     /// Previous interest rate before refinancing.
@@ -237,6 +306,27 @@ pub struct HalvingInfo {
 pub struct RestructureProposal {
     pub new_schedule: RepaymentSchedule,
     pub proposed_at_ledger: u32,
+}
+
+/// Rate-lock snapshot recorded when a refinance is requested.
+///
+/// The locked rate is guaranteed to apply on `execute_refinance` as long as
+/// the call arrives before `lock_expiry_ledger`.  After that ledger the
+/// borrower must call `request_refinance` again to obtain a fresh quote.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RefinanceRateLock {
+    /// The interest rate (bps) quoted at request time.  This is the rate that
+    /// will be written to the loan on a successful `execute_refinance`.
+    pub locked_rate_bps: u32,
+    /// Proposed new term length in months, also locked at request time.
+    pub locked_duration_months: u32,
+    /// Ledger sequence at or before which `execute_refinance` must be called.
+    /// A call arriving at a ledger strictly greater than this value is
+    /// rejected with `RefinanceRateLockExpired`.
+    pub lock_expiry_ledger: u32,
+    /// Ledger at which the request was made, used for event attribution.
+    pub requested_at_ledger: u32,
 }
 
 /// An individual item in a batch disbursement request.
@@ -306,6 +396,16 @@ pub enum DataKey {
     PendingAdmin,
     /// Total withdrawal fees collected and routed to treasury.
     TotalWithdrawalFees,
+    /// Application (processing) fee escrowed for a loan, keyed by loan ID.
+    /// Present only while a `Requested` loan is awaiting a final decision;
+    /// removed as soon as the fee is settled — retained by `approve_loan`,
+    /// or refunded by `reject_loan` / `cancel_loan`. A missing entry means
+    /// either no fee was collected or it has already been settled.
+    ApplicationFee(BytesN<32>),
+    /// Lifetime application fees retained by the protocol, i.e. collected on
+    /// applications that went on to be approved. Refunded fees are never
+    /// counted here.
+    TotalApplicationFees,
     /// Lifetime protocol fees skimmed from interest by the fee switch and
     /// routed to the treasury.
     TotalProtocolFees,
@@ -363,6 +463,8 @@ pub enum DataKey {
     LoanSymbolMap(Symbol),
     /// Pending loan assumption request, keyed by loan ID.
     LoanAssumption(BytesN<32>),
+    /// Locked payoff quote for a loan, keyed by loan ID.
+    PayoffQuote(BytesN<32>),
 }
 
 /// A pending loan assumption request where an existing borrower proposes to transfer
@@ -388,4 +490,17 @@ pub struct LoanCollateralRecord {
     pub released_collateral: i128,
     /// Minimum required collateralization ratio in basis points (e.g. 3000 = 30%).
     pub min_collateral_ratio_bps: u32,
+}
+
+/// A locked payoff quote: the exact amount that settles the loan if paid
+/// within the validity window, regardless of intervening interest accrual.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PayoffQuote {
+    /// Snapshotted payoff amount (outstanding debt at quote time).
+    pub quoted_amount: i128,
+    /// Ledger at which the quote was created.
+    pub quoted_at_ledger: u32,
+    /// Last ledger at which the quote is still valid (inclusive).
+    pub expires_ledger: u32,
 }

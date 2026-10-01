@@ -13,6 +13,7 @@ import {
   createDidChallenge,
 } from "../services/did.js";
 import { prisma } from "../services/db.js";
+import { requireBorrowerAddressOwnership } from "../security/requireResourceOwnership.js";
 
 export const didRouter = Router();
 
@@ -156,6 +157,8 @@ didRouter.get("/credential/:did", authMiddleware, async (req: AuthenticatedReque
 didRouter.get("/applicant/:address", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { address } = req.params as { address: string };
+    // Issue #760: applicants may only read their own credential bundle (admins exempt).
+    if (!requireBorrowerAddressOwnership(req, res, address)) return;
     const applicant = await prisma.applicant.findFirst({
       where: { stellarAddress: address, deletedAt: null },
       include: { borrowerCredentials: true },
