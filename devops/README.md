@@ -89,14 +89,15 @@ An SSM Parameter Store key (`/remitmortgage/<env>/active-slot`) tracks which slo
 2. Waits for the App Runner service to reach `RUNNING`.
 3. Runs repeated HTTP health checks against the idle slot's `/api/health` endpoint.
 4. Switches traffic by updating the active-slot pointer (and in production, Route 53 weighted records).
-5. Soaks for 60 seconds, then re-validates the now-active slot.
-6. **Auto-rollback**: if the post-switch health check fails, the active-slot pointer is immediately reverted to the previous stable slot.
+5. Soaks for 60 seconds, then runs the **post-deploy health gate**: watches the now-active slot's `/api/health` and 5xx rate for a 5-minute window.
+6. **Auto-rollback**: if the gate fails, the active-slot pointer is automatically reverted to the previous known-good slot, and both the failure and the rollback are alerted with diagnostic context. See [docs/AUTOMATIC_ROLLBACK.md](../docs/AUTOMATIC_ROLLBACK.md).
 
 ### Trigger a Deployment
 
 Go to **Actions → Blue-Green Deployment → Run workflow** and supply:
 - `environment` — `dev`, `staging`, or `production`
 - `image_tag` — the Docker image tag to deploy
+- `disable_auto_rollback` *(optional)* — alert on a failed health gate but do **not** roll back, for an intentional deploy expected to trip a health signal (e.g. a migration). Requires `override_reason`.
 
 ### Required Secrets
 
@@ -104,6 +105,8 @@ Go to **Actions → Blue-Green Deployment → Run workflow** and supply:
 |--------|-------------|
 | `AWS_ACCESS_KEY_ID` | IAM key with App Runner + SSM + Route 53 write access |
 | `AWS_SECRET_ACCESS_KEY` | Corresponding secret key |
+| `DEVOPS_ALERT_WEBHOOK_URL` | *(optional)* Slack/Discord webhook for health-gate failure and rollback alerts |
+| `METRICS_TOKEN` | *(optional)* Bearer token for `/metrics`, enabling the 5xx-rate signal; without it the gate uses the health signal only |
 
 ### Terraform Resources
 

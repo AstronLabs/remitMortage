@@ -15,6 +15,7 @@ import { loadConfig } from "../config.js";
 import { configuredSecretId, secrets } from "./secretsManager.js";
 import { DEFAULT_TENANT_ID, getCurrentTenant } from "./tenant.js";
 import { isEmailSuppressed } from "./emailSuppression.js";
+import { recordApiCapabilityUsage } from "./apiScopeUsageTracker.js";
 
 const SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send";
 
@@ -80,6 +81,7 @@ export async function sendGridSend(message: SendGridMessage): Promise<boolean> {
         subject: message.subject,
         html: message.html,
       });
+      void recordApiCapabilityUsage("sendgrid", "send_mail").catch(() => {});
       return true;
     }
 
@@ -99,6 +101,7 @@ export async function sendGridSend(message: SendGridMessage): Promise<boolean> {
         timeout: 10_000,
       }
     );
+    void recordApiCapabilityUsage("sendgrid", "send_mail").catch(() => {});
     return true;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

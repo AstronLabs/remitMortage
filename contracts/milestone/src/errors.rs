@@ -59,4 +59,8 @@ pub enum MilestoneError {
     ArbitrationWindowElapsed = 25,
     /// The arbitration window is still open.
     ArbitrationWindowOpen = 26,
+    /// Partial release amount must be greater than zero.
+    InvalidPartialAmount = 27,
+    /// Partial release amount exceeds the milestone's remaining unreleased amount.
+    ExceedsRemainingAmount = 28,
 }

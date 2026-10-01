@@ -9,6 +9,7 @@ import { Storage } from "@google-cloud/storage";
 import { createCipheriv, randomBytes, createHash } from "crypto";
 import { loadConfig } from "../config.js";
 import logger from "../utils/logger.js";
+import { recordApiCapabilityUsage } from "./apiScopeUsageTracker.js";
 
 const execPromise = promisify(exec);
 
@@ -30,6 +31,11 @@ export class DatabaseBackupService {
   private s3Client?: S3Client;
   private gcsStorage?: Storage;
   private options: BackupOptions;
+
+  /** Integration id used by the API key scope audit (issue #772). */
+  private scopeIntegration(): string {
+    return this.options.provider === "aws" ? "aws_s3_backup" : "gcs_backup";
+  }
 
   constructor(options: BackupOptions) {
     this.options = options;
@@ -179,6 +185,15 @@ export class DatabaseBackupService {
     const fileStream = createReadStream(filePath);
     const stats = require("fs").statSync(filePath);
 
+    // Stamped on every backup so the key rotation verification job
+    // (scripts/verify-backup-key-rotation.sh) can tell which encryption key
+    // produced it and how long that key has been in service, without needing
+    // to decrypt anything. See docs/SECRETS_ROTATION.md, "Backup encryption key".
+    const encryptionMetadata = {
+      encryptionKeyId: process.env.BACKUP_ENCRYPTION_KEY_ID || "unknown",
+      encryptionKeyRotatedAt: process.env.BACKUP_ENCRYPTION_KEY_ROTATED_AT || "",
+    };
+
     if (this.options.provider === "aws" && this.s3Client) {
       const command = new PutObjectCommand({
         Bucket: this.options.bucket,
@@ -188,11 +203,13 @@ export class DatabaseBackupService {
         Metadata: {
           timestamp: new Date().toISOString(),
           service: "remitmortgage-backend",
+          ...encryptionMetadata,
         },
       });
 
       await this.s3Client.send(command);
 
+      void recordApiCapabilityUsage(this.scopeIntegration(), "put_object").catch(() => {});
       return { size: stats.size };
     } else if (this.options.provider === "gcs" && this.gcsStorage) {
       const bucket = this.gcsStorage.bucket(this.options.bucket);
@@ -207,6 +224,7 @@ export class DatabaseBackupService {
                 metadata: {
                   timestamp: new Date().toISOString(),
                   service: "remitmortgage-backend",
+                  ...encryptionMetadata,
                 },
               },
             })
@@ -215,6 +233,7 @@ export class DatabaseBackupService {
           .on("error", reject);
       });
 
+      void recordApiCapabilityUsage(this.scopeIntegration(), "put_object").catch(() => {});
       return { size: stats.size };
     }
 
@@ -270,12 +289,14 @@ export class DatabaseBackupService {
         Prefix: prefix,
       });
       const response = await this.s3Client.send(command);
+      void recordApiCapabilityUsage(this.scopeIntegration(), "list_objects").catch(() => {});
       return (response.Contents ?? []).map((o) => o.Key!).filter(Boolean);
     }
 
     if (this.options.provider === "gcs" && this.gcsStorage) {
       const bucket = this.gcsStorage.bucket(this.options.bucket);
       const [files] = await bucket.getFiles({ prefix });
+      void recordApiCapabilityUsage(this.scopeIntegration(), "list_objects").catch(() => {});
       return files.map((f) => f.name);
     }
 
@@ -298,19 +319,23 @@ export class DatabaseBackupService {
         StorageClass: "GLACIER",
       });
       await this.s3Client.send(copyCommand);
+      void recordApiCapabilityUsage(this.scopeIntegration(), "copy_object").catch(() => {});
 
       const deleteCommand = new DeleteObjectCommand({
         Bucket: this.options.bucket,
         Key: key,
       });
       await this.s3Client.send(deleteCommand);
+      void recordApiCapabilityUsage(this.scopeIntegration(), "delete_object").catch(() => {});
     } else if (this.options.provider === "gcs" && this.gcsStorage) {
       const bucket = this.gcsStorage.bucket(this.options.bucket);
       const file = bucket.file(key);
       const archiveFile = bucket.file(key.replace("backups/", "cold-storage/"));
 
       await file.copy(archiveFile);
+      void recordApiCapabilityUsage(this.scopeIntegration(), "copy_object").catch(() => {});
       await file.delete();
+      void recordApiCapabilityUsage(this.scopeIntegration(), "delete_object").catch(() => {});
     } else {
       throw new Error(`Unsupported cloud provider: ${this.options.provider}`);
     }
@@ -386,11 +411,13 @@ export class DatabaseBackupService {
           .on("finish", resolve)
           .on("error", reject);
       });
+      void recordApiCapabilityUsage(this.scopeIntegration(), "get_object").catch(() => {});
     } else if (this.options.provider === "gcs" && this.gcsStorage) {
       const bucket = this.gcsStorage.bucket(this.options.bucket);
       const file = bucket.file(key);
 
       await file.download({ destination: outputPath });
+      void recordApiCapabilityUsage(this.scopeIntegration(), "get_object").catch(() => {});
     } else {
       throw new Error(`Unsupported cloud provider: ${this.options.provider}`);
     }

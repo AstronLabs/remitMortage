@@ -16,6 +16,7 @@ import { NarrationProvider } from "@/context/NarrationContext";
 import { ToastContainer } from "@/components/ToastContainer";
 import { HotToaster } from "@/components/HotToaster";
 import WalletBanner from "@/components/WalletBanner";
+import ImpersonationBanner from "@/components/ImpersonationBanner";
 import SkipToContent from "@/components/SkipToContent";
 import Footer from "@/components/Footer";
 import { NextIntlClientProvider } from "next-intl";
@@ -125,6 +126,7 @@ export default async function RootLayout({
       <body className="min-h-screen bg-[#060913] text-slate-100 font-sans antialiased flex flex-col justify-between">
         <SkipToContent />
         <NextIntlClientProvider messages={messages} locale={locale}>
+          <ImpersonationBanner />
           <WalletBanner />
           <ThemeProvider>
             <WalletProvider>

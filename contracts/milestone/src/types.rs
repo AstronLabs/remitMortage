@@ -19,6 +19,10 @@ pub struct MilestoneConfig {
     pub threshold: u32,
     /// Minimum number of ledgers that must elapse between approval and release.
     pub min_delay_ledgers: u32,
+    /// Basis points of a milestone's amount paid as a performance bonus from
+    /// the bonus pool when it qualifies (approved on first submission and
+    /// on or before its deadline). Zero disables bonuses entirely.
+    pub performance_bonus_bps: u32,
 }
 
 /// Milestone status lifecycle.
@@ -31,6 +35,10 @@ pub enum MilestoneStatus {
     Disbursed = 2,
     Disputed = 3,
     Refunded = 4,
+    /// A portion of the milestone amount has been released via
+    /// `partially_approve_milestone`; the remainder is still pending and
+    /// can be completed by further partial or full releases.
+    PartiallyDisbursed = 5,
 }
 
 /// Milestone record stored on-chain.
@@ -57,6 +65,10 @@ pub struct MilestoneRecord {
     pub approved_ledger: u32,
     /// Ledger sequence at which the milestone was disputed (0 if not disputed).
     pub disputed_ledger: u32,
+    /// Amount already released via partial approvals (0 until the first
+    /// partial or full release). `amount - released_amount` is the
+    /// remaining unreleased portion still pending.
+    pub released_amount: i128,
 }
 
 /// A proposal to change the budget for an existing (pending) milestone.

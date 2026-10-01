@@ -107,6 +107,12 @@ pub enum PoolError {
     ApplicationFeeTooHigh = 48,
     /// Withdrawal amount exceeds the pool's configured per-transaction limit.
     WithdrawalExceedsMaxSingleLimit = 50,
+    /// No payoff quote exists for this loan.
+    PayoffQuoteNotFound = 51,
+    /// The payoff quote has expired; request a fresh quote.
+    PayoffQuoteExpired = 52,
+    /// Payoff quotes are disabled (window is zero) or the window is invalid.
+    InvalidQuoteWindow = 53,
 }
 
 #[contracterror]

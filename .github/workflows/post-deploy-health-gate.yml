@@ -1,0 +1,27 @@
+name: Post-Deploy Health Gate Tests
+
+# Unit tests for the script that decides whether a deploy passed its
+# post-deploy health window and should be automatically rolled back.
+
+on:
+  pull_request:
+    paths:
+      - "scripts/post-deploy-health-gate.mjs"
+      - "scripts/post-deploy-health-gate.test.mjs"
+      - ".github/workflows/blue-green-deploy.yml"
+      - ".github/workflows/post-deploy-health-gate.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Health Gate Script Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run unit tests
+        run: node --test scripts/post-deploy-health-gate.test.mjs

@@ -108,6 +108,7 @@ export default function ActiveLoansMapView({
   selectedRegion: externalSelectedRegion,
 }: ActiveLoansMapViewProps) {
   const [internalSelectedRegion, setInternalSelectedRegion] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"All" | "Active" | "Delinquent" | "In Grace">("All");
 
   const activeRegion = externalSelectedRegion !== undefined ? externalSelectedRegion : internalSelectedRegion;
 
@@ -123,7 +124,11 @@ export default function ActiveLoansMapView({
   const clusters = useMemo<RegionCluster[]>(() => {
     const regionMap: Record<string, LoanGeoItem[]> = {};
 
-    loans.forEach((loan) => {
+    const filteredForClusters = loans.filter(
+      (loan) => statusFilter === "All" || loan.status === statusFilter
+    );
+
+    filteredForClusters.forEach((loan) => {
       if (!regionMap[loan.region]) {
         regionMap[loan.region] = [];
       }
@@ -163,12 +168,18 @@ export default function ActiveLoansMapView({
         loans: items,
       };
     });
-  }, [loans]);
+  }, [loans, statusFilter]);
 
   const filteredLoans = useMemo(() => {
-    if (!activeRegion) return loans;
-    return loans.filter((loan) => loan.region === activeRegion);
-  }, [loans, activeRegion]);
+    let result = loans;
+    if (statusFilter !== "All") {
+      result = result.filter((loan) => loan.status === statusFilter);
+    }
+    if (activeRegion) {
+      result = result.filter((loan) => loan.region === activeRegion);
+    }
+    return result;
+  }, [loans, activeRegion, statusFilter]);
 
   return (
     <div className="bg-[var(--bg-card,#0f172a)] rounded-2xl border border-[var(--border-color,#1e293b)] p-6 space-y-6">
@@ -185,6 +196,19 @@ export default function ActiveLoansMapView({
           <p className="text-xs text-[var(--text-muted,#94a3b8)]">
             Click on a region cluster to filter the active loan portfolio list.
           </p>
+          <div className="mt-4 flex items-center gap-2">
+            <span className="text-sm font-semibold text-slate-300">Status:</span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as any)}
+              className="bg-slate-900 border border-slate-700 text-sm text-slate-200 rounded px-2 py-1 outline-none focus:border-cyan-500"
+            >
+              <option value="All">All</option>
+              <option value="Active">Active</option>
+              <option value="In Grace">In Grace</option>
+              <option value="Delinquent">Delinquent</option>
+            </select>
+          </div>
         </div>
 
         <div className="flex items-center gap-4 text-xs font-semibold">

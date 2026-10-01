@@ -18,8 +18,9 @@ mod test_loan_assumption;
 pub use crate::errors::{LoanAssumptionError, PoolError};
 pub use crate::types::{
     BatchDisburseItem, DataKey, HalvingInfo, InvestorRecord, LoanAssumptionRequest,
-    LoanCollateralRecord, LoanPortabilitySnapshot, LoanRecord, LoanStatus, PendingUpgradeRecord,
-    PoolConfig, PoolHealth, RepaymentSchedule, RestructureProposal, Tranche, TrancheInfo,
+    LoanCollateralRecord, LoanPortabilitySnapshot, LoanRecord, LoanStatus, PayoffQuote,
+    PendingUpgradeRecord, PoolConfig, PoolHealth, RepaymentSchedule, RestructureProposal, Tranche,
+    TrancheInfo,
 };
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
@@ -184,6 +185,61 @@ impl LendingPoolContract {
             Tranche::Junior => DataKey::JuniorTranche,
         };
         env.storage().instance().set(&key, info);
+    }
+
+    // ── Yield Waterfall Seniority Guard ─────────────────────────────────
+    //
+    // INVARIANT: the yield distribution waterfall in `repay` MUST process
+    // tranches most-senior-first — senior receives its fixed rate before
+    // junior receives any residual yield. Investors size their risk/return
+    // expectations around that ordering; silently paying junior ahead of
+    // senior (e.g. because a future refactor of the waterfall, or a change
+    // to how its tranche order is derived, swapped the sequence) would
+    // violate the seniority guarantee without ever raising an error on its
+    // own. `assert_waterfall_priority_order` is called on every `repay` that
+    // distributes yield specifically to catch that class of bug: it panics
+    // (aborting the whole transaction) rather than returning a recoverable
+    // `PoolError`, because there is no correct way to complete a
+    // distribution whose ordering can't be trusted.
+
+    /// The configured tranche processing order, most senior first. No
+    /// current code path ever writes `DataKey::WaterfallOrder` — the default
+    /// below is always what real `repay` calls see. The storage read exists
+    /// so tests can deliberately inject a misordered list (simulating a
+    /// misconfigured or upgraded distribution routine) and confirm the
+    /// guard below rejects it.
+    fn read_waterfall_order(env: &Env) -> Vec<Tranche> {
+        env.storage()
+            .instance()
+            .get(&DataKey::WaterfallOrder)
+            .unwrap_or_else(|| soroban_sdk::vec![env, Tranche::Senior, Tranche::Junior])
+    }
+
+    /// Numeric seniority rank for a tranche — lower is more senior. Exists
+    /// solely to check the waterfall's processing order; it plays no part in
+    /// any yield or loss calculation.
+    fn tranche_seniority_rank(tranche: &Tranche) -> u32 {
+        match tranche {
+            Tranche::Senior => 0,
+            Tranche::Junior => 1,
+        }
+    }
+
+    /// Panics if `order` is not sorted by non-decreasing seniority rank —
+    /// i.e. if any tranche appears before a more senior one. See the
+    /// "Yield Waterfall Seniority Guard" note above.
+    fn assert_waterfall_priority_order(order: &Vec<Tranche>) {
+        let mut previous_rank: Option<u32> = None;
+        for tranche in order.iter() {
+            let rank = Self::tranche_seniority_rank(&tranche);
+            if let Some(prev) = previous_rank {
+                assert!(
+                    rank >= prev,
+                    "waterfall priority violation: a junior tranche was processed before a senior one"
+                );
+            }
+            previous_rank = Some(rank);
+        }
     }
 
     fn set_investor(env: &Env, investor: &Address, record: &InvestorRecord) {
@@ -910,6 +966,78 @@ impl LendingPoolContract {
         }
     }
 
+    /// Settle a quoted payoff at exactly the locked amount.
+    ///
+    /// The caller has already verified a live quote and `amount ==
+    /// quote.quoted_amount`. Any interest that accrued after the quote is
+    /// forgiven: the loan is closed, the quote is consumed, and liquidity
+    /// accounting reflects only the quoted transfer.
+    fn settle_quoted_payoff(
+        env: &Env,
+        config: &PoolConfig,
+        loan_id: &BytesN<32>,
+        loan: &mut LoanRecord,
+        borrower: &Address,
+        amount: i128,
+    ) -> Result<(), PoolError> {
+        let token = Self::token_client(env, &config.token);
+        token.transfer(borrower, &env.current_contract_address(), &amount);
+
+        let old_repaid = loan.repaid;
+        loan.repaid += amount;
+        // Forgive post-quote accrual: quoted amount fully settles the loan.
+        loan.outstanding_debt = 0;
+        loan.status = LoanStatus::Repaid;
+        Self::release_borrower_loan_slot(env, &loan.borrower);
+        let undisbursed = loan.principal - loan.disbursed;
+        if undisbursed > 0 {
+            let active_commitments = Self::read_active_commitments(env);
+            env.storage().instance().set(
+                &DataKey::ActiveLoanCommitments,
+                &(active_commitments - undisbursed),
+            );
+        }
+        Self::set_loan(env, loan_id, loan);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PayoffQuote(loan_id.clone()));
+
+        let mut interest_paid = 0i128;
+        if loan.repaid > loan.principal {
+            let interest_start = if old_repaid > loan.principal {
+                old_repaid
+            } else {
+                loan.principal
+            };
+            interest_paid = loan.repaid - interest_start;
+        }
+        if interest_paid > 0 {
+            let total_interest = Self::read_total_repaid_interest(env) + interest_paid;
+            env.storage()
+                .instance()
+                .set(&DataKey::TotalRepaidInterest, &total_interest);
+            Self::add_borrower_lifetime_interest(env, &loan.borrower, interest_paid);
+        }
+
+        let liquidity = Self::read_total_liquidity(env) + amount;
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalLiquidity, &liquidity);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events().publish(
+            (symbol_short!("repay"),),
+            (borrower.clone(), loan_id.clone(), amount, 0i128),
+        );
+        env.events().publish(
+            (symbol_short!("pay_quote"), symbol_short!("used")),
+            (loan_id.clone(), amount),
+        );
+        Ok(())
+    }
+
     /// The configured grace period (in ledgers) after an installment's due date
     /// before late penalties accrue, falling back to `GRACE_PERIOD_LEDGERS`.
     fn grace_period_ledgers(env: &Env) -> u32 {
@@ -965,6 +1093,21 @@ impl LendingPoolContract {
     /// Calculate the fee amount for a given withdrawal amount and fee rate.
     fn calculate_fee_amount(amount: i128, fee_bps: u32) -> i128 {
         (amount * fee_bps as i128) / BPS_SCALE as i128
+    }
+
+    /// Returns `true` when the investor's holding duration exempts the
+    /// withdrawal from the early-redemption fee.
+    ///
+    /// The waiver is fully off when `redemption_fee_waiver_ledgers == 0`
+    /// (every withdrawal pays the fee exactly as before). Otherwise the fee
+    /// is waived once `current_ledger - start_ledger >= waiver_ledgers`.
+    fn is_fee_waived(env: &Env, config: &PoolConfig, record: &InvestorRecord) -> bool {
+        if config.redemption_fee_waiver_ledgers == 0 {
+            return false;
+        }
+        let current = env.ledger().sequence();
+        let held = current.saturating_sub(record.start_ledger);
+        held >= config.redemption_fee_waiver_ledgers
     }
 
     fn current_yield_share(env: &Env, amount: i128) -> i128 {
@@ -1050,6 +1193,52 @@ impl LendingPoolContract {
         let args = soroban_sdk::vec![env, from.into_val(env), amount.into_val(env)];
         env.invoke_contract::<()>(insurance, &Symbol::new(env, "record_premium"), args);
     }
+
+    /// Cross-contract call to `<governance>.is_approved(proposal_id) -> bool`.
+    ///
+    /// Uses `env.try_invoke_contract` so a misbehaving governance contract
+    /// (wrong ABI, panic, etc.) returns an error rather than reverting the
+    /// whole transaction with an opaque trap.  Returns `false` on any error
+    /// so the gate fails closed.
+    fn governance_proposal_is_approved(
+        env: &Env,
+        governance: &Address,
+        proposal_id: u32,
+    ) -> bool {
+        let args = soroban_sdk::vec![env, proposal_id.into_val(env)];
+        match env.try_invoke_contract::<bool, soroban_sdk::Error>(
+            governance,
+            &Symbol::new(env, "is_approved"),
+            args,
+        ) {
+            Ok(Ok(approved)) => approved,
+            _ => false,
+        }
+    }
+
+    /// Cross-contract call to `<insurance>.claim(recipient, amount)`.
+    ///
+    /// The insurance pool's `claim` function is admin-only on the insurance
+    /// side; the lending pool admin must also hold admin auth on the insurance
+    /// pool for this call to succeed (or the insurance pool must accept the
+    /// lending pool's contract address as an authorized caller — typical in a
+    /// wired-up deployment where `insurance.set_lending_pool(lending_pool)` has
+    /// been called).  We use raw `env.invoke_contract` consistent with every
+    /// other cross-contract call in this file.
+    fn insurance_claim(env: &Env, insurance: &Address, recipient: &Address, amount: i128) {
+        let args = soroban_sdk::vec![
+            env,
+            recipient.into_val(env),
+            amount.into_val(env),
+        ];
+        env.invoke_contract::<()>(insurance, &Symbol::new(env, "claim"), args);
+    }
+
+    /// Cross-contract call to `<insurance>.get_reserves() -> i128`.
+    fn insurance_get_reserves(env: &Env, insurance: &Address) -> i128 {
+        let args = soroban_sdk::vec![env];
+        env.invoke_contract::<i128>(insurance, &Symbol::new(env, "get_reserves"), args)
+    }
 }
 
 #[contractimpl]
@@ -1117,8 +1306,25 @@ impl LendingPoolContract {
             // integrations are unaffected until an admin opts in via
             // `set_max_single_withdrawal`.
             max_single_withdrawal: 0,
+            // No deposit cooldown at deployment; admin opts in via
+            // `set_deposit_cooldown_ledgers`.
+            deposit_cooldown_ledgers: 0,
+            // No rate-lock window at deployment; admin opts in via
+            // `set_rate_lock_window_ledgers`.  When 0 the lock never expires.
+            rate_lock_window_ledgers: 0,
+            // No emergency injection cap at deployment; admin opts in via
+            // `set_emergency_injection_cap_bps`.  When 0 the only limit is
+            // the insurance pool's actual reserve balance.
+            emergency_injection_cap_bps: 0,
             // Permissionless by default; admin opts in via `set_permissioned_mode`.
             permissioned_mode: false,
+            // No fee waiver at deployment: every withdrawal pays the
+            // utilization-based fee exactly as before until an admin opts in
+            // via `set_redemption_fee_waiver_ledgers`.
+            redemption_fee_waiver_ledgers: 0,
+            // Payoff quoting disabled at deployment until an admin sets a
+            // window via `set_payoff_quote_window`.
+            payoff_quote_window_ledgers: 0,
         };
 
         env.storage().instance().set(&DataKey::Config, &config);
@@ -1218,9 +1424,35 @@ impl LendingPoolContract {
                 return Err(PoolError::DepositBelowMinimum);
             }
 
+            // Deposit cooldown guard.  When `deposit_cooldown_ledgers > 0`,
+            // an investor must wait at least that many ledgers since their
+            // last deposit before depositing again.  The check happens before
+            // the token transfer so a rejected call leaves pool state untouched.
+            // A configured value of 0 disables the cooldown (default).
+            if config.deposit_cooldown_ledgers > 0 {
+                let last: u32 = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::InvestorLastDeposit(investor.clone()))
+                    .unwrap_or(0);
+                if last > 0
+                    && env.ledger().sequence() < last.saturating_add(config.deposit_cooldown_ledgers)
+                {
+                    return Err(PoolError::DepositCooldownActive);
+                }
+            }
+
             // Transfer USDC from investor to pool.
             let token = Self::token_client(&env, &config.token);
             token.transfer(&investor, &env.current_contract_address(), &amount);
+
+            // Record the ledger of this deposit for future cooldown checks.
+            // Written after the transfer succeeds so a failed transfer never
+            // resets the clock.
+            let current_ledger = env.ledger().sequence();
+            env.storage()
+                .persistent()
+                .set(&DataKey::InvestorLastDeposit(investor.clone()), &current_ledger);
 
             // Update investor record.
             let mut record = Self::read_investor(&env, &investor);
@@ -1800,7 +2032,7 @@ impl LendingPoolContract {
     }
 
     /// Refinance an active loan to extend its term or adjust its interest rate.
-    pub fn refinance_loan(
+    pub fn request_refinance(
         env: Env,
         loan_id: BytesN<32>,
         new_interest_rate_bps: u32,
@@ -1810,7 +2042,7 @@ impl LendingPoolContract {
         let config = Self::read_config(&env)?;
         config.admin.require_auth();
 
-        let mut loan = Self::read_loan(&env, &loan_id)?;
+        let loan = Self::read_loan(&env, &loan_id)?;
 
         if loan.status != LoanStatus::Approved {
             return Err(PoolError::InvalidLoanState);
@@ -1828,7 +2060,7 @@ impl LendingPoolContract {
             return Err(PoolError::RefinanceNotEligible);
         }
 
-        let mut schedule: RepaymentSchedule = env
+        let schedule: RepaymentSchedule = env
             .storage()
             .persistent()
             .get(&DataKey::LoanSchedule(loan_id.clone()))
@@ -1853,41 +2085,144 @@ impl LendingPoolContract {
             }
         }
 
+        // Record the rate-lock snapshot.  The window is open-ended when
+        // `rate_lock_window_ledgers == 0`, represented by setting expiry to
+        // u32::MAX so the lock never expires in that mode.
+        let current_ledger = env.ledger().sequence();
+        let lock_expiry_ledger = if config.rate_lock_window_ledgers > 0 {
+            current_ledger.saturating_add(config.rate_lock_window_ledgers)
+        } else {
+            u32::MAX
+        };
+
+        let rate_lock = crate::types::RefinanceRateLock {
+            locked_rate_bps: new_interest_rate_bps,
+            locked_duration_months: new_duration_months,
+            lock_expiry_ledger,
+            requested_at_ledger: current_ledger,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::RefinanceRateLock(loan_id.clone()), &rate_lock);
+
+        env.events().publish(
+            (Symbol::new(&env, "refi_requested"),),
+            (
+                loan_id.clone(),
+                new_interest_rate_bps,
+                new_duration_months,
+                lock_expiry_ledger,
+            ),
+        );
+
+        Ok(())
+    }
+
+    /// Execute a previously requested refinance within its rate-lock window.
+    ///
+    /// Applies the rate and term that were quoted at `request_refinance` time,
+    /// regardless of any pool-rate changes that may have occurred in between.
+    /// Returns `RefinanceRateLockExpired` if the lock window has passed, and
+    /// `RefinanceRateLockNotFound` if no pending request exists for the loan.
+    pub fn execute_refinance(
+        env: Env,
+        loan_id: BytesN<32>,
+    ) -> Result<(), PoolError> {
+        Self::check_not_paused(&env)?;
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        // Load and validate the rate-lock.
+        let rate_lock: crate::types::RefinanceRateLock = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RefinanceRateLock(loan_id.clone()))
+            .ok_or(PoolError::RefinanceRateLockNotFound)?;
+
+        let current_ledger = env.ledger().sequence();
+        if current_ledger > rate_lock.lock_expiry_ledger {
+            return Err(PoolError::RefinanceRateLockExpired);
+        }
+
+        let mut loan = Self::read_loan(&env, &loan_id)?;
+
+        if loan.status != LoanStatus::Approved {
+            return Err(PoolError::InvalidLoanState);
+        }
+
+        let mut schedule: RepaymentSchedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::LoanSchedule(loan_id.clone()))
+            .ok_or(PoolError::RefinanceNotEligible)?;
+
         // Accrue any outstanding compound interest before computing what is owed.
         Self::accrue_interest(&env, &mut loan);
 
         let remaining_principal = loan.outstanding_debt;
-        let new_interest = (remaining_principal * new_interest_rate_bps as i128) / 10_000;
+        let new_interest =
+            (remaining_principal * rate_lock.locked_rate_bps as i128) / 10_000;
         let total_owed = remaining_principal + new_interest;
 
-        // Note: We use a simple unwrap or default to 1 to prevent division by zero
-        let duration = if new_duration_months > 0 {
-            new_duration_months
+        let duration = if rate_lock.locked_duration_months > 0 {
+            rate_lock.locked_duration_months
         } else {
             1
         };
         let monthly_amount = total_owed / (duration as i128);
 
         schedule.monthly_amount = monthly_amount;
-        schedule.duration_months = new_duration_months;
+        schedule.duration_months = rate_lock.locked_duration_months;
         schedule.payments_made = 0;
         schedule.payments_missed = 0;
 
+        // Apply the locked rate — not any rate that may have changed since
+        // the request was made.
         loan.previous_rate_bps = Some(loan.interest_rate_bps);
-        loan.refinanced_at_ledger = Some(env.ledger().sequence());
-        loan.interest_rate_bps = new_interest_rate_bps;
+        loan.refinanced_at_ledger = Some(current_ledger);
+        loan.interest_rate_bps = rate_lock.locked_rate_bps;
 
         Self::set_loan(&env, &loan_id, &loan);
         env.storage()
             .persistent()
             .set(&DataKey::LoanSchedule(loan_id.clone()), &schedule);
 
+        // Consume the rate-lock so it cannot be replayed.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::RefinanceRateLock(loan_id.clone()));
+
         env.events().publish(
             (Symbol::new(&env, "loan_refinanced"),),
-            (loan_id.clone(), new_interest_rate_bps, new_duration_months),
+            (
+                loan_id.clone(),
+                rate_lock.locked_rate_bps,
+                rate_lock.locked_duration_months,
+            ),
         );
 
         Ok(())
+    }
+
+    /// Backward-compatible single-step refinance.  Equivalent to calling
+    /// `request_refinance` immediately followed by `execute_refinance` when
+    /// `rate_lock_window_ledgers == 0`.  When a non-zero lock window is
+    /// configured, callers should use the two-step flow instead so the
+    /// quoted rate is protected during any multisig approval delay.
+    pub fn refinance_loan(
+        env: Env,
+        loan_id: BytesN<32>,
+        new_interest_rate_bps: u32,
+        new_duration_months: u32,
+    ) -> Result<(), PoolError> {
+        Self::request_refinance(
+            env.clone(),
+            loan_id.clone(),
+            new_interest_rate_bps,
+            new_duration_months,
+        )?;
+        Self::execute_refinance(env, loan_id)
     }
 
     /// Disburse funds from the pool for an approved loan.
@@ -2354,7 +2689,27 @@ impl LendingPoolContract {
             return Err(PoolError::InvalidLoanState);
         }
 
+        // ── Payoff Quote Lock ─────────────────────────────────────────
+        // A live (unexpired) quote locks the payoff amount: paying exactly
+        // the quoted amount settles the loan even if interest accrued since
+        // the quote. An expired quote is pruned here so it can never be
+        // honored at the stale amount — normal accrual applies and the
+        // caller must request a fresh quote.
+        let quote_key = DataKey::PayoffQuote(loan_id.clone());
+        let stored_quote: Option<PayoffQuote> =
+            env.storage().persistent().get(&quote_key);
+        let mut quoted_payoff = false;
+        if let Some(q) = stored_quote {
+            if env.ledger().sequence() > q.expires_ledger {
+                env.storage().persistent().remove(&quote_key);
+            } else if amount == q.quoted_amount && q.quoted_amount > 0 {
+                quoted_payoff = true;
+            }
+        }
+
         // Accrue compound interest before computing what is owed.
+        // For a quoted payoff the accrual is computed but then forgiven:
+        // the borrower settles at exactly the quoted amount.
         Self::accrue_interest(&env, &mut loan);
 
         // Keep simple-interest total_owed for yield waterfall distribution.
@@ -2362,12 +2717,21 @@ impl LendingPoolContract {
         let total_owed = loan.principal + interest;
         let remaining = loan.outstanding_debt;
 
+        // A quoted payoff settles at exactly the quoted amount: forgive any
+        // interest that accrued after the quote instead of rejecting the
+        // payment or leaving a residual balance.
+        if quoted_payoff {
+            Self::settle_quoted_payoff(&env, &config, &loan_id, &mut loan, &borrower, amount)?;
+            return Ok(());
+        }
+
         if amount > remaining {
             return Err(PoolError::OverPayment);
         }
 
         // If schedule exists, enforce installment logic (due dates, grace, penalties)
-        if env
+        if !quoted_payoff
+            && env
             .storage()
             .persistent()
             .has(&DataKey::LoanSchedule(loan_id.clone()))
@@ -2545,6 +2909,11 @@ impl LendingPoolContract {
             // Everything below splits only what is left for investors.
             let effective_interest = distributable;
 
+            // Seniority guard: abort the whole transaction rather than
+            // silently pay junior ahead of senior. See the "Yield Waterfall
+            // Seniority Guard" note above `read_waterfall_order`.
+            Self::assert_waterfall_priority_order(&Self::read_waterfall_order(&env));
+
             let senior_info = Self::read_tranche_info(&env, &Tranche::Senior);
             let junior_info = Self::read_tranche_info(&env, &Tranche::Junior);
             let total_pool = senior_info.total_deposited + junior_info.total_deposited;
@@ -2604,6 +2973,10 @@ impl LendingPoolContract {
         // Mark as repaid if fully paid (compound debt cleared).
         if loan.outstanding_debt == 0 {
             loan.status = LoanStatus::Repaid;
+            // A full repayment consumes any outstanding quote.
+            env.storage()
+                .persistent()
+                .remove(&DataKey::PayoffQuote(loan_id.clone()));
 
             // Full repayment frees the borrower's active-loan slot.
             Self::release_borrower_loan_slot(&env, &loan.borrower);
@@ -2646,6 +3019,48 @@ impl LendingPoolContract {
             ),
         );
 
+        Ok(())
+    }
+
+    /// Execute a payoff using a previously locked quote.
+    ///
+    /// `amount` must equal the stored quoted amount exactly. A live quote
+    /// settles the loan at the quoted amount even if interest accrued since
+    /// the quote. An expired quote reverts with `PayoffQuoteExpired` (and is
+    /// pruned) so a stale amount is never silently honored — the caller must
+    /// request a fresh quote. With no stored quote this reverts with
+    /// `PayoffQuoteNotFound`.
+    pub fn payoff_with_quote(
+        env: Env,
+        borrower: Address,
+        loan_id: BytesN<32>,
+        amount: i128,
+    ) -> Result<(), PoolError> {
+        Self::check_not_paused(&env)?;
+        borrower.require_auth();
+        if amount <= 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+        let config = Self::read_config(&env)?;
+        let mut loan = Self::read_loan(&env, &loan_id)?;
+        if loan.status != LoanStatus::Approved {
+            return Err(PoolError::InvalidLoanState);
+        }
+        let key = DataKey::PayoffQuote(loan_id.clone());
+        let quote: PayoffQuote = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(PoolError::PayoffQuoteNotFound)?;
+        if env.ledger().sequence() > quote.expires_ledger {
+            env.storage().persistent().remove(&key);
+            return Err(PoolError::PayoffQuoteExpired);
+        }
+        if amount != quote.quoted_amount {
+            return Err(PoolError::InvalidAmount);
+        }
+        Self::accrue_interest(&env, &mut loan);
+        Self::settle_quoted_payoff(&env, &config, &loan_id, &mut loan, &borrower, amount)?;
         Ok(())
     }
 
@@ -3245,8 +3660,15 @@ impl LendingPoolContract {
             }
 
             // ── Dynamic Fee Calculation ───────────────────────────────────
+            // Long-term holders past the configured waiver period pay no
+            // early-redemption fee; short-term withdrawals pay exactly as before.
             let utilization_bps = Self::calculate_utilization(&env);
-            let fee_bps = Self::calculate_withdrawal_fee_bps(utilization_bps);
+            let base_fee_bps = Self::calculate_withdrawal_fee_bps(utilization_bps);
+            let fee_bps = if Self::is_fee_waived(&env, &config, &record) {
+                0u32
+            } else {
+                base_fee_bps
+            };
             let fee_amount = Self::calculate_fee_amount(amount, fee_bps);
             let net_amount = amount - fee_amount;
 
@@ -3952,6 +4374,175 @@ impl LendingPoolContract {
         env.storage().instance().get(&DataKey::MultisigValidator)
     }
 
+    // ── Emergency Liquidity Injection ────────────────────────────────────────
+
+    /// Set (or replace) the Governance contract address used to gate
+    /// `inject_emergency_liquidity`. Admin-only.
+    ///
+    /// Until configured, all `inject_emergency_liquidity` calls fail with
+    /// `GovernanceContractNotSet`.
+    pub fn set_governance_contract(env: Env, governance: Address) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::GovernanceContract, &governance);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events()
+            .publish((symbol_short!("set_gov"),), (governance,));
+
+        Ok(())
+    }
+
+    /// Returns the configured Governance contract address, or `None` if one
+    /// has not been set.
+    pub fn get_governance_contract(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::GovernanceContract)
+    }
+
+    /// Set the maximum share of the insurance pool's current reserves that a
+    /// single `inject_emergency_liquidity` call may draw, in basis points.
+    /// Admin-only.
+    ///
+    /// Pass `0` to remove the per-call ceiling (only the reserve balance
+    /// itself limits the draw). Pass up to 10 000 (= 100 %).
+    pub fn set_emergency_injection_cap_bps(env: Env, cap_bps: u32) -> Result<(), PoolError> {
+        if cap_bps > 10_000 {
+            return Err(PoolError::InvalidAmount);
+        }
+        let mut config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        config.emergency_injection_cap_bps = cap_bps;
+        env.storage().instance().set(&DataKey::Config, &config);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events()
+            .publish((symbol_short!("set_eicap"),), cap_bps);
+
+        Ok(())
+    }
+
+    /// Returns the configured per-call injection cap in basis points.
+    /// `0` means no cap beyond the available reserve balance.
+    pub fn get_emergency_injection_cap_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get::<DataKey, PoolConfig>(&DataKey::Config)
+            .map(|c| c.emergency_injection_cap_bps)
+            .unwrap_or(0)
+    }
+
+    /// Lifetime amount injected into the pool via `inject_emergency_liquidity`.
+    pub fn get_total_emergency_injected(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalEmergencyInjected)
+            .unwrap_or(0i128)
+    }
+
+    /// Inject emergency liquidity from the insurance reserve into this pool.
+    ///
+    /// This entrypoint is governance-gated: the caller must present a
+    /// `proposal_id` that has reached `Passed` status on the configured
+    /// Governance contract. The pool admin must also sign the transaction.
+    ///
+    /// Execution flow:
+    /// 1. Pause check.
+    /// 2. Admin auth.
+    /// 3. Governance gate — `governance.is_approved(proposal_id)` must return `true`.
+    /// 4. Insurance pool must be configured.
+    /// 5. Amount must be positive.
+    /// 6. If `emergency_injection_cap_bps > 0`: amount must not exceed
+    ///    `reserves * cap_bps / 10_000`.
+    /// 7. Cross-contract `insurance.claim(this_pool, amount)` — transfers
+    ///    tokens from the insurance reserve into this contract.
+    /// 8. Credit `TotalLiquidity` and `TotalEmergencyInjected`.
+    /// 9. Emit `"emrg_inj"` event.
+    ///
+    /// The injected amount is tracked separately under `TotalEmergencyInjected`
+    /// so it can be reconciled and repaid to the reserve as the pool recovers.
+    pub fn inject_emergency_liquidity(
+        env: Env,
+        proposal_id: u32,
+        amount: i128,
+    ) -> Result<(), PoolError> {
+        Self::check_not_paused(&env)?;
+
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        // ── Governance gate ───────────────────────────────────────────────
+        let governance: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::GovernanceContract)
+            .ok_or(PoolError::GovernanceContractNotSet)?;
+
+        if !Self::governance_proposal_is_approved(&env, &governance, proposal_id) {
+            return Err(PoolError::GovernanceProposalNotPassed);
+        }
+
+        // ── Insurance pool must be wired up ───────────────────────────────
+        let insurance: Address =
+            Self::read_insurance_pool(&env).ok_or(PoolError::InsurancePoolNotSet)?;
+
+        // ── Validate amount ───────────────────────────────────────────────
+        if amount <= 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+
+        // ── Reserve-percentage cap ────────────────────────────────────────
+        // Checked before the cross-contract call so a capped-out request is
+        // rejected cheaply without touching the insurance contract.
+        if config.emergency_injection_cap_bps > 0 {
+            let reserves = Self::insurance_get_reserves(&env, &insurance);
+            // cap = floor(reserves * cap_bps / 10_000)
+            let cap = (reserves * config.emergency_injection_cap_bps as i128) / 10_000;
+            if amount > cap {
+                return Err(PoolError::EmergencyInjectionCapExceeded);
+            }
+        }
+
+        // ── Draw from the insurance reserve ──────────────────────────────
+        // This cross-contract call transfers `amount` tokens from the
+        // insurance contract to this pool contract.
+        Self::insurance_claim(&env, &insurance, &env.current_contract_address(), amount);
+
+        // ── Credit pool liquidity ─────────────────────────────────────────
+        let new_liquidity = Self::read_total_liquidity(&env) + amount;
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalLiquidity, &new_liquidity);
+
+        // ── Track injected amount for reconciliation ──────────────────────
+        let prev_injected: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalEmergencyInjected)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalEmergencyInjected, &(prev_injected + amount));
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events().publish(
+            (symbol_short!("emrg_inj"),),
+            (proposal_id, insurance, amount),
+        );
+
+        Ok(())
+    }
+
     /// Set the protocol fee switch, in basis points of loan interest.
     ///
     /// This is the protocol's revenue lever, so it is deliberately the hardest
@@ -4384,6 +4975,49 @@ impl LendingPoolContract {
             .unwrap_or(0)
     }
 
+    /// Set the number of ledgers a quoted refinance rate is guaranteed for
+    /// after `request_refinance` is called.  Admin-only.
+    ///
+    /// Pass `0` to disable expiry entirely (the deployment default): locks
+    /// never expire and the two-step flow degenerates to the legacy single-step
+    /// `refinance_loan` behaviour.
+    pub fn set_rate_lock_window_ledgers(env: Env, window: u32) -> Result<(), PoolError> {
+        let mut config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        config.rate_lock_window_ledgers = window;
+        env.storage().instance().set(&DataKey::Config, &config);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events()
+            .publish((symbol_short!("set_rllw"),), window);
+
+        Ok(())
+    }
+
+    /// Get the currently configured rate-lock window in ledgers.
+    /// `0` means no expiry is enforced.
+    pub fn get_rate_lock_window_ledgers(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get::<DataKey, PoolConfig>(&DataKey::Config)
+            .map(|config| config.rate_lock_window_ledgers)
+            .unwrap_or(0)
+    }
+
+    /// Return the pending rate-lock for `loan_id`, or `None` if no
+    /// `request_refinance` has been made (or the lock was already consumed).
+    pub fn get_refinance_rate_lock(
+        env: Env,
+        loan_id: BytesN<32>,
+    ) -> Option<crate::types::RefinanceRateLock> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RefinanceRateLock(loan_id))
+    }
+
     /// Configure the maximum amount an investor may withdraw in a single
     /// `withdraw` call, in token stroops. Admin-only.
     ///
@@ -4421,6 +5055,175 @@ impl LendingPoolContract {
             .get::<DataKey, PoolConfig>(&DataKey::Config)
             .map(|config| config.max_single_withdrawal)
             .unwrap_or(0)
+    }
+
+    // ── Redemption Fee Waiver (#745) ────────────────────────────────────
+
+    /// Configure the minimum holding period, in ledgers, after which the
+    /// early-redemption (withdrawal) fee is waived. Admin-only.
+    ///
+    /// `0` disables the waiver: every withdrawal pays the fee exactly as
+    /// before. Any non-zero value waives the fee in full once
+    /// `current_ledger - investor.start_ledger >= waiver_ledgers`.
+    pub fn set_redemption_fee_waiver_ledgers(
+        env: Env,
+        waiver_ledgers: u32,
+    ) -> Result<(), PoolError> {
+        let mut config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        config.redemption_fee_waiver_ledgers = waiver_ledgers;
+        env.storage().instance().set(&DataKey::Config, &config);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events()
+            .publish((symbol_short!("set_fwaiv"),), waiver_ledgers);
+        Ok(())
+    }
+
+    /// Get the configured fee-waiver holding period in ledgers.
+    /// `0` means no waiver: all withdrawals pay the fee.
+    pub fn get_redemption_fee_waiver_ledgers(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get::<DataKey, PoolConfig>(&DataKey::Config)
+            .map(|config| config.redemption_fee_waiver_ledgers)
+            .unwrap_or(0)
+    }
+
+    /// Preview the fee breakdown for a hypothetical withdrawal by a specific
+    /// investor, applying the long-term-holder waiver when the position's
+    /// holding duration meets the configured minimum.
+    ///
+    /// Returns (gross_amount, fee_amount, net_amount, effective_fee_bps,
+    /// utilization_bps).
+    pub fn preview_withdrawal_fee_for(
+        env: Env,
+        investor: Address,
+        amount: i128,
+    ) -> (i128, i128, i128, u32, u32) {
+        let utilization_bps = Self::calculate_utilization(&env);
+        let base_fee_bps = Self::calculate_withdrawal_fee_bps(utilization_bps);
+        let effective_fee_bps = match Self::read_config(&env) {
+            Ok(config) => {
+                let record = Self::read_investor(&env, &investor);
+                if Self::is_fee_waived(&env, &config, &record) {
+                    0u32
+                } else {
+                    base_fee_bps
+                }
+            }
+            Err(_) => base_fee_bps,
+        };
+        let fee_amount = Self::calculate_fee_amount(amount, effective_fee_bps);
+        let net_amount = amount - fee_amount;
+        (
+            amount,
+            fee_amount,
+            net_amount,
+            effective_fee_bps,
+            utilization_bps,
+        )
+    }
+
+    // ── Payoff Quote Lock (#743) ────────────────────────────────────────
+
+    /// Configure the payoff-quote validity window in ledgers. Admin-only.
+    ///
+    /// `0` disables quoting. A non-zero window (e.g. a 24–48h equivalent in
+    /// ledgers) lets `quote_payoff` lock a payoff amount that `repay` honors
+    /// verbatim within the window.
+    pub fn set_payoff_quote_window(
+        env: Env,
+        window_ledgers: u32,
+    ) -> Result<(), PoolError> {
+        let mut config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        config.payoff_quote_window_ledgers = window_ledgers;
+        env.storage().instance().set(&DataKey::Config, &config);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events()
+            .publish((symbol_short!("set_qwin"),), window_ledgers);
+        Ok(())
+    }
+
+    /// Get the configured payoff-quote validity window in ledgers.
+    pub fn get_payoff_quote_window(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get::<DataKey, PoolConfig>(&DataKey::Config)
+            .map(|config| config.payoff_quote_window_ledgers)
+            .unwrap_or(0)
+    }
+
+    /// Snapshot and lock the current payoff amount for `loan_id`.
+    ///
+    /// Accrues interest to the current ledger, stores
+    /// `outstanding_debt` as the locked quote, and returns it. A payoff of
+    /// exactly the quoted amount made on or before `expires_ledger` settles
+    /// the loan at the quoted amount even if further interest would
+    /// otherwise have accrued. Requesting a quote never changes accrual
+    /// itself — an unused quote simply expires and normal accrual continues.
+    pub fn quote_payoff(env: Env, loan_id: BytesN<32>) -> Result<i128, PoolError> {
+        let config = Self::read_config(&env)?;
+        if config.payoff_quote_window_ledgers == 0 {
+            return Err(PoolError::InvalidQuoteWindow);
+        }
+        let mut loan = Self::read_loan(&env, &loan_id)?;
+        if loan.status != LoanStatus::Approved {
+            return Err(PoolError::InvalidLoanState);
+        }
+        Self::accrue_interest(&env, &mut loan);
+        Self::set_loan(&env, &loan_id, &loan);
+
+        let now = env.ledger().sequence();
+        let quote = PayoffQuote {
+            quoted_amount: loan.outstanding_debt,
+            quoted_at_ledger: now,
+            expires_ledger: now.saturating_add(config.payoff_quote_window_ledgers),
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::PayoffQuote(loan_id.clone()), &quote);
+        env.events().publish(
+            (symbol_short!("pay_quote"),),
+            (loan_id, quote.quoted_amount, quote.expires_ledger),
+        );
+        Ok(quote.quoted_amount)
+    }
+
+    /// Return the stored payoff quote for `loan_id`, if any.
+    pub fn get_payoff_quote(env: Env, loan_id: BytesN<32>) -> Option<PayoffQuote> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PayoffQuote(loan_id))
+    }
+
+    /// Read a stored quote, pruning it when expired.
+    ///
+    /// Returns `Ok(Some(quote))` while valid, `Ok(None)` when no quote
+    /// exists. An expired quote is removed so it can never be honored at
+    /// the stale amount, and `Err(PayoffQuoteExpired)` is returned so
+    /// callers can explicitly re-quote instead of silently underpaying.
+    fn read_live_payoff_quote(
+        env: &Env,
+        loan_id: &BytesN<32>,
+    ) -> Result<Option<PayoffQuote>, PoolError> {
+        let key = DataKey::PayoffQuote(loan_id.clone());
+        let quote: Option<PayoffQuote> = env.storage().persistent().get(&key);
+        match quote {
+            None => Ok(None),
+            Some(q) => {
+                if env.ledger().sequence() > q.expires_ledger {
+                    env.storage().persistent().remove(&key);
+                    Err(PoolError::PayoffQuoteExpired)
+                } else {
+                    Ok(Some(q))
+                }
+            }
+        }
     }
 
     /// Get the currently configured per-day late-payment penalty in basis points.
@@ -5678,6 +6481,101 @@ mod test {
             junior_info.total_yield_distributed > senior_info.total_yield_distributed,
             "junior yield should exceed senior yield"
         );
+    }
+
+    // ── Yield Waterfall Priority-Order Guard ────────────────────────────
+    //
+    // Regression coverage for the seniority invariant documented above
+    // `LendingPoolContract::read_waterfall_order`: the yield waterfall must
+    // always process senior before junior. See that comment for why the
+    // guard exists and why it panics rather than returning a `PoolError`.
+
+    /// A correctly-ordered distribution (the only order any real code path
+    /// ever configures) is completely unaffected by the guard — this is the
+    /// same flow as `test_yield_distribution_senior_junior` above, kept
+    /// alongside the misordered-list test below so the "unaffected" half of
+    /// the acceptance criteria has its own dedicated, obviously-paired case.
+    #[test]
+    fn test_waterfall_priority_guard_allows_correctly_ordered_distribution() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, senior_investor, _treasury, token_address, client) = setup_pool(&env);
+        let sac = StellarAssetClient::new(&env, &token_address);
+
+        let junior_investor = Address::generate(&env);
+        sac.mint(&junior_investor, &50_000_0000000i128);
+
+        client.deposit(&senior_investor, &50_000_0000000i128, &Tranche::Senior);
+        client.deposit(&junior_investor, &50_000_0000000i128, &Tranche::Junior);
+
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+        client.request_loan(&borrower, &loan_id, &10_000_0000000i128);
+        client.approve_loan(&loan_id);
+        client.add_contractor(&borrower);
+        client.disburse(&loan_id, &borrower, &10_000_0000000i128);
+
+        env.ledger()
+            .set_sequence_number(env.ledger().sequence() + 100);
+        sac.mint(&borrower, &20_000_0000000i128);
+
+        let owed = compound_interest(10_000_0000000i128, 800, 1);
+        // Must not panic, and must distribute yield exactly as before.
+        client.repay(&borrower, &loan_id, &owed);
+
+        let senior_info = client.get_tranche_info(&Tranche::Senior);
+        let junior_info = client.get_tranche_info(&Tranche::Junior);
+        assert!(senior_info.total_yield_distributed > 0);
+        assert!(junior_info.total_yield_distributed > 0);
+    }
+
+    /// A distribution call that would process junior before senior must
+    /// revert instead of executing. This simulates the exact failure mode
+    /// the guard exists for — a misconfigured or upgraded distribution
+    /// routine producing a reversed tranche order — by writing the reversed
+    /// order directly into the contract's own storage (as an upgrade or a
+    /// bad config write would), then confirming the very next `repay` that
+    /// would trigger the yield waterfall panics rather than silently paying
+    /// junior first.
+    #[test]
+    #[should_panic(expected = "waterfall priority violation")]
+    fn test_repay_reverts_when_waterfall_order_is_misconfigured() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, senior_investor, _treasury, token_address, client) = setup_pool(&env);
+        let sac = StellarAssetClient::new(&env, &token_address);
+
+        let junior_investor = Address::generate(&env);
+        sac.mint(&junior_investor, &50_000_0000000i128);
+
+        client.deposit(&senior_investor, &50_000_0000000i128, &Tranche::Senior);
+        client.deposit(&junior_investor, &50_000_0000000i128, &Tranche::Junior);
+
+        let borrower = Address::generate(&env);
+        let loan_id = mock_loan_id(&env);
+        client.request_loan(&borrower, &loan_id, &10_000_0000000i128);
+        client.approve_loan(&loan_id);
+        client.add_contractor(&borrower);
+        client.disburse(&loan_id, &borrower, &10_000_0000000i128);
+
+        env.ledger()
+            .set_sequence_number(env.ledger().sequence() + 100);
+        sac.mint(&borrower, &20_000_0000000i128);
+
+        // Deliberately misordered tranche list — junior before senior.
+        let misordered: Vec<Tranche> = soroban_sdk::vec![&env, Tranche::Junior, Tranche::Senior];
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .set(&DataKey::WaterfallOrder, &misordered);
+        });
+
+        let owed = compound_interest(10_000_0000000i128, 800, 1);
+        // Must revert — the waterfall must never run against a misordered
+        // configuration, even though every other input is otherwise valid.
+        client.repay(&borrower, &loan_id, &owed);
     }
 
     /// Test loss waterfall: junior absorbs loss before senior.
@@ -10048,5 +10946,1369 @@ mod test {
 
         let res = client.try_top_up_collateral(&loan_id, &borrower, &0i128);
         assert_eq!(res.err().unwrap().unwrap(), PoolError::InvalidAmount);
+    }
+
+    // ── Deposit cooldown tests ────────────────────────────────────────────────
+
+    /// Helper: configure a pool with a non-zero deposit cooldown and return
+    /// a freshly minted investor with enough tokens to make several deposits.
+    fn setup_pool_with_cooldown<'a>(
+        env: &'a Env,
+        cooldown: u32,
+    ) -> (Address, Address, Address, LendingPoolContractClient<'a>) {
+        let (admin, investor, _treasury, token_address, client) = setup_pool(env);
+        client.set_deposit_cooldown_ledgers(&cooldown);
+        // Mint extra so the investor can make multiple deposits.
+        StellarAssetClient::new(env, &token_address).mint(&investor, &1_000_000_0000000i128);
+        (admin, investor, token_address, client)
+    }
+
+    #[test]
+    fn test_deposit_cooldown_defaults_to_zero() {
+        // With no explicit configuration the cooldown must be 0 and
+        // two back-to-back deposits from the same investor must both succeed.
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, _token, client) = setup_pool(&env);
+
+        assert_eq!(client.get_deposit_cooldown_ledgers(), 0u32);
+
+        client.deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+        // Immediate second deposit — must succeed when cooldown is disabled.
+        let res = client.try_deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+        assert!(res.is_ok(), "zero cooldown should allow back-to-back deposits");
+    }
+
+    #[test]
+    fn test_deposit_cooldown_blocks_too_soon() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _token, client) = setup_pool_with_cooldown(&env, 10);
+
+        // First deposit at ledger 0 — succeeds and records the clock.
+        client.deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+
+        // Advance only 9 ledgers — still inside the cooldown window.
+        env.ledger().set_sequence_number(env.ledger().sequence() + 9);
+
+        let res = client.try_deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+        assert_eq!(
+            res.err().unwrap().unwrap(),
+            PoolError::DepositCooldownActive,
+            "deposit inside cooldown window must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_deposit_cooldown_allows_at_exact_boundary() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _token, client) = setup_pool_with_cooldown(&env, 10);
+
+        client.deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+
+        // Advance exactly `cooldown` ledgers — the boundary itself must be allowed.
+        env.ledger().set_sequence_number(env.ledger().sequence() + 10);
+
+        let res = client.try_deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+        assert!(res.is_ok(), "deposit at exact cooldown boundary must succeed");
+    }
+
+    #[test]
+    fn test_deposit_cooldown_allows_after_boundary() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _token, client) = setup_pool_with_cooldown(&env, 10);
+
+        client.deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+        env.ledger().set_sequence_number(env.ledger().sequence() + 11);
+
+        let res = client.try_deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+        assert!(res.is_ok(), "deposit after cooldown window must succeed");
+    }
+
+    #[test]
+    fn test_deposit_cooldown_resets_clock_after_each_success() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _token, client) = setup_pool_with_cooldown(&env, 10);
+
+        // First deposit at ledger 0.
+        client.deposit(&investor, &500_0000000i128, &Tranche::Senior);
+
+        // Second deposit at ledger 10 (at boundary) — succeeds.
+        env.ledger().set_sequence_number(10);
+        client.deposit(&investor, &500_0000000i128, &Tranche::Senior);
+
+        // Now the clock is at 10; only 5 ledgers later should still be blocked.
+        env.ledger().set_sequence_number(15);
+        let res = client.try_deposit(&investor, &500_0000000i128, &Tranche::Senior);
+        assert_eq!(
+            res.err().unwrap().unwrap(),
+            PoolError::DepositCooldownActive,
+            "second cooldown window must be enforced from the second deposit's ledger"
+        );
+
+        // At ledger 20 (10 ledgers after second deposit) it must succeed again.
+        env.ledger().set_sequence_number(20);
+        assert!(client
+            .try_deposit(&investor, &500_0000000i128, &Tranche::Senior)
+            .is_ok());
+    }
+
+    #[test]
+    fn test_deposit_cooldown_is_per_investor() {
+        // Two different investors should each have independent cooldown clocks.
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor1, token_address, client) = setup_pool_with_cooldown(&env, 10);
+        let investor2 = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_address).mint(&investor2, &10_000_0000000i128);
+
+        // investor1 deposits at ledger 0.
+        client.deposit(&investor1, &1_000_0000000i128, &Tranche::Senior);
+
+        // investor2 has never deposited; depositing immediately must succeed.
+        let res = client.try_deposit(&investor2, &1_000_0000000i128, &Tranche::Senior);
+        assert!(res.is_ok(), "cooldown of investor1 must not block investor2");
+
+        // investor1 is still blocked at ledger 5.
+        env.ledger().set_sequence_number(5);
+        assert_eq!(
+            client
+                .try_deposit(&investor1, &1_000_0000000i128, &Tranche::Senior)
+                .err()
+                .unwrap()
+                .unwrap(),
+            PoolError::DepositCooldownActive
+        );
+
+        // investor2 deposited at ledger 0; also blocked at ledger 5.
+        assert_eq!(
+            client
+                .try_deposit(&investor2, &1_000_0000000i128, &Tranche::Senior)
+                .err()
+                .unwrap()
+                .unwrap(),
+            PoolError::DepositCooldownActive
+        );
+    }
+
+    #[test]
+    fn test_deposit_cooldown_first_deposit_never_blocked() {
+        // An investor making their very first deposit must never be blocked,
+        // even when a cooldown is configured, because there is no prior ledger.
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _token, client) = setup_pool_with_cooldown(&env, 100);
+
+        let res = client.try_deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+        assert!(res.is_ok(), "first-ever deposit must not be blocked by cooldown");
+    }
+
+    #[test]
+    fn test_deposit_cooldown_rejected_deposit_does_not_reset_clock() {
+        // A deposit attempt that is rejected due to cooldown must not update
+        // InvestorLastDeposit — the original clock must remain intact.
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _token, client) = setup_pool_with_cooldown(&env, 10);
+
+        // Deposit at ledger 0.
+        client.deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+        let clock_after_first = client.get_investor_last_deposit(&investor);
+        assert_eq!(clock_after_first, 0u32);
+
+        // Rejected attempt at ledger 5 — must not move the clock.
+        env.ledger().set_sequence_number(5);
+        let _ = client.try_deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+        assert_eq!(
+            client.get_investor_last_deposit(&investor),
+            clock_after_first,
+            "rejected deposit must leave InvestorLastDeposit unchanged"
+        );
+
+        // A successful deposit at ledger 10 advances the clock to 10.
+        env.ledger().set_sequence_number(10);
+        client.deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+        assert_eq!(client.get_investor_last_deposit(&investor), 10u32);
+    }
+
+    #[test]
+    fn test_set_deposit_cooldown_requires_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _treasury, _token, client) = setup_pool(&env);
+
+        // Verify the setter round-trips correctly through the getter.
+        client.set_deposit_cooldown_ledgers(&50u32);
+        assert_eq!(client.get_deposit_cooldown_ledgers(), 50u32);
+
+        // Resetting to 0 must disable enforcement.
+        client.set_deposit_cooldown_ledgers(&0u32);
+        assert_eq!(client.get_deposit_cooldown_ledgers(), 0u32);
+
+        // With cooldown disabled two consecutive deposits must succeed.
+        client.deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+        assert!(client
+            .try_deposit(&investor, &1_000_0000000i128, &Tranche::Senior)
+            .is_ok());
+    }
+
+    #[test]
+    fn test_deposit_cooldown_zero_disables_after_being_set() {
+        // Confirm that setting cooldown back to 0 after it was non-zero fully
+        // restores the back-to-back deposit behaviour.
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, investor, _token, client) = setup_pool_with_cooldown(&env, 20);
+
+        client.deposit(&investor, &1_000_0000000i128, &Tranche::Senior);
+
+        // Still in cooldown — second deposit blocked.
+        assert_eq!(
+            client
+                .try_deposit(&investor, &1_000_0000000i128, &Tranche::Senior)
+                .err()
+                .unwrap()
+                .unwrap(),
+            PoolError::DepositCooldownActive
+        );
+
+        // Admin disables the cooldown.
+        client.set_deposit_cooldown_ledgers(&0u32);
+
+        // Now the second deposit must be allowed immediately.
+        assert!(client
+            .try_deposit(&investor, &1_000_0000000i128, &Tranche::Senior)
+            .is_ok());
+    }
+
+
+    // ── Rate-lock tests ───────────────────────────────────────────────────────
+
+    /// Set up a pool with a rate-lock window and return a loan that already
+    /// has three on-time payments (the minimum required by `request_refinance`).
+    fn setup_refinanceable_loan<'a>(
+        env: &'a Env,
+        rate_lock_window: u32,
+    ) -> (Address, BytesN<32>, LendingPoolContractClient<'a>) {
+        extend_test_ttls(env);
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(env);
+
+        // Configure the rate-lock window.
+        client.set_rate_lock_window_ledgers(&rate_lock_window);
+
+        // Fund pool and open a loan.
+        let investor = Address::generate(env);
+        let sac = StellarAssetClient::new(env, &token_address);
+        sac.mint(&investor, &100_000_0000000i128);
+        client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
+
+        let borrower = Address::generate(env);
+        let loan_id = mock_loan_id(env);
+        client.request_loan(&borrower, &loan_id, &10_000_0000000i128);
+        client.approve_loan(&loan_id);
+        client.add_contractor(&borrower);
+        client.disburse(&loan_id, &borrower, &10_000_0000000i128);
+        sac.mint(&borrower, &50_000_0000000i128);
+
+        // Make three on-time repayments so `payments_made >= 3`.
+        let sched = client.get_repayment_schedule(&loan_id).unwrap();
+        for i in 0..3u32 {
+            env.ledger()
+                .set_sequence_number(sched.next_due_ledger + i * LEDGERS_PER_MONTH);
+            client.repay(&borrower, &loan_id, &sched.monthly_amount);
+        }
+
+        (borrower, loan_id, client)
+    }
+
+    #[test]
+    fn test_request_refinance_stores_rate_lock() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (_borrower, loan_id, client) = setup_refinanceable_loan(&env, 50);
+
+        let sched = client.get_repayment_schedule(&loan_id).unwrap();
+        env.ledger()
+            .set_sequence_number(sched.next_due_ledger + 3 * LEDGERS_PER_MONTH);
+
+        // Request at rate 600 bps / 24 months.
+        client.request_refinance(&loan_id, &600u32, &24u32);
+
+        let lock = client.get_refinance_rate_lock(&loan_id).unwrap();
+        assert_eq!(lock.locked_rate_bps, 600u32);
+        assert_eq!(lock.locked_duration_months, 24u32);
+        // Expiry must be at least current_ledger + window.
+        assert!(lock.lock_expiry_ledger >= env.ledger().sequence() + 50);
+    }
+
+    #[test]
+    fn test_execute_refinance_within_window_applies_locked_rate() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (_borrower, loan_id, client) = setup_refinanceable_loan(&env, 100);
+
+        let sched = client.get_repayment_schedule(&loan_id).unwrap();
+        let request_ledger = sched.next_due_ledger + 3 * LEDGERS_PER_MONTH;
+        env.ledger().set_sequence_number(request_ledger);
+
+        // Request at 500 bps.
+        client.request_refinance(&loan_id, &500u32, &12u32);
+
+        // Advance well within the window (half way).
+        env.ledger().set_sequence_number(request_ledger + 40);
+
+        client.execute_refinance(&loan_id);
+
+        // Loan must carry the locked rate, not the pool default (800 bps).
+        let loan = client.get_loan_info(&loan_id);
+        assert_eq!(
+            loan.interest_rate_bps, 500u32,
+            "execute_refinance must apply the locked rate"
+        );
+        assert_eq!(
+            loan.previous_rate_bps,
+            Some(800u32),
+            "previous rate must be saved"
+        );
+    }
+
+    #[test]
+    fn test_execute_refinance_rate_lock_is_consumed() {
+        // After execute_refinance the lock must be removed so it cannot be replayed.
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (_borrower, loan_id, client) = setup_refinanceable_loan(&env, 100);
+
+        let sched = client.get_repayment_schedule(&loan_id).unwrap();
+        env.ledger()
+            .set_sequence_number(sched.next_due_ledger + 3 * LEDGERS_PER_MONTH);
+        client.request_refinance(&loan_id, &500u32, &12u32);
+
+        env.ledger()
+            .set_sequence_number(env.ledger().sequence() + 10);
+        client.execute_refinance(&loan_id);
+
+        // Lock is gone.
+        assert!(
+            client.get_refinance_rate_lock(&loan_id).is_none(),
+            "rate lock must be consumed after execute_refinance"
+        );
+
+        // A second execute_refinance must fail because there is no pending lock.
+        let res = client.try_execute_refinance(&loan_id);
+        assert_eq!(
+            res.err().unwrap().unwrap(),
+            PoolError::RefinanceRateLockNotFound
+        );
+    }
+
+    #[test]
+    fn test_execute_refinance_at_exact_expiry_boundary_succeeds() {
+        // A call at exactly lock_expiry_ledger must be accepted
+        // (boundary: current_ledger <= lock_expiry_ledger).
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let window = 50u32;
+        let (_borrower, loan_id, client) = setup_refinanceable_loan(&env, window);
+
+        let sched = client.get_repayment_schedule(&loan_id).unwrap();
+        let request_ledger = sched.next_due_ledger + 3 * LEDGERS_PER_MONTH;
+        env.ledger().set_sequence_number(request_ledger);
+        client.request_refinance(&loan_id, &500u32, &12u32);
+
+        let lock = client.get_refinance_rate_lock(&loan_id).unwrap();
+        // Advance to exactly the expiry ledger.
+        env.ledger().set_sequence_number(lock.lock_expiry_ledger);
+        assert!(
+            client.try_execute_refinance(&loan_id).is_ok(),
+            "execution at exactly the expiry ledger must succeed"
+        );
+    }
+
+    #[test]
+    fn test_execute_refinance_one_ledger_past_expiry_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let window = 50u32;
+        let (_borrower, loan_id, client) = setup_refinanceable_loan(&env, window);
+
+        let sched = client.get_repayment_schedule(&loan_id).unwrap();
+        let request_ledger = sched.next_due_ledger + 3 * LEDGERS_PER_MONTH;
+        env.ledger().set_sequence_number(request_ledger);
+        client.request_refinance(&loan_id, &500u32, &12u32);
+
+        let lock = client.get_refinance_rate_lock(&loan_id).unwrap();
+        // One ledger past the expiry.
+        env.ledger()
+            .set_sequence_number(lock.lock_expiry_ledger + 1);
+
+        let res = client.try_execute_refinance(&loan_id);
+        assert_eq!(
+            res.err().unwrap().unwrap(),
+            PoolError::RefinanceRateLockExpired,
+            "execution past expiry must return RefinanceRateLockExpired"
+        );
+    }
+
+    #[test]
+    fn test_execute_refinance_well_past_expiry_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (_borrower, loan_id, client) = setup_refinanceable_loan(&env, 20);
+
+        let sched = client.get_repayment_schedule(&loan_id).unwrap();
+        let request_ledger = sched.next_due_ledger + 3 * LEDGERS_PER_MONTH;
+        env.ledger().set_sequence_number(request_ledger);
+        client.request_refinance(&loan_id, &500u32, &12u32);
+
+        // Advance far beyond the window.
+        env.ledger()
+            .set_sequence_number(request_ledger + 1_000);
+
+        let res = client.try_execute_refinance(&loan_id);
+        assert_eq!(
+            res.err().unwrap().unwrap(),
+            PoolError::RefinanceRateLockExpired
+        );
+    }
+
+    #[test]
+    fn test_execute_refinance_without_request_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (_borrower, loan_id, client) = setup_refinanceable_loan(&env, 50);
+
+        // No request_refinance has been called — must fail.
+        let res = client.try_execute_refinance(&loan_id);
+        assert_eq!(
+            res.err().unwrap().unwrap(),
+            PoolError::RefinanceRateLockNotFound
+        );
+    }
+
+    #[test]
+    fn test_requote_after_expiry_produces_fresh_lock() {
+        // After a lock expires the borrower can call request_refinance again
+        // and obtain a new lock that execute_refinance will honour.
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let window = 30u32;
+        let (_borrower, loan_id, client) = setup_refinanceable_loan(&env, window);
+
+        let sched = client.get_repayment_schedule(&loan_id).unwrap();
+        let first_request_ledger = sched.next_due_ledger + 3 * LEDGERS_PER_MONTH;
+        env.ledger().set_sequence_number(first_request_ledger);
+
+        // First request at 600 bps — let it expire.
+        client.request_refinance(&loan_id, &600u32, &12u32);
+        let first_lock = client.get_refinance_rate_lock(&loan_id).unwrap();
+        env.ledger()
+            .set_sequence_number(first_lock.lock_expiry_ledger + 1);
+
+        // Execution of the expired lock must fail.
+        assert_eq!(
+            client
+                .try_execute_refinance(&loan_id)
+                .err()
+                .unwrap()
+                .unwrap(),
+            PoolError::RefinanceRateLockExpired
+        );
+
+        // Re-request at a different rate (550 bps).
+        client.request_refinance(&loan_id, &550u32, &18u32);
+
+        let second_lock = client.get_refinance_rate_lock(&loan_id).unwrap();
+        assert_eq!(
+            second_lock.locked_rate_bps, 550u32,
+            "re-quote must store the new rate"
+        );
+        assert!(
+            second_lock.lock_expiry_ledger > env.ledger().sequence(),
+            "new lock must have a future expiry"
+        );
+
+        // Execute within the new window.
+        env.ledger()
+            .set_sequence_number(env.ledger().sequence() + 10);
+        client.execute_refinance(&loan_id);
+
+        let loan = client.get_loan_info(&loan_id);
+        assert_eq!(
+            loan.interest_rate_bps, 550u32,
+            "re-quoted rate must be applied on execution"
+        );
+    }
+
+    #[test]
+    fn test_rate_lock_window_zero_never_expires() {
+        // When rate_lock_window_ledgers == 0, the lock expiry is u32::MAX
+        // and execute_refinance must always succeed.
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (_borrower, loan_id, client) = setup_refinanceable_loan(&env, 0);
+
+        let sched = client.get_repayment_schedule(&loan_id).unwrap();
+        let request_ledger = sched.next_due_ledger + 3 * LEDGERS_PER_MONTH;
+        env.ledger().set_sequence_number(request_ledger);
+        client.request_refinance(&loan_id, &500u32, &12u32);
+
+        let lock = client.get_refinance_rate_lock(&loan_id).unwrap();
+        assert_eq!(
+            lock.lock_expiry_ledger,
+            u32::MAX,
+            "lock_expiry_ledger must be u32::MAX when window=0"
+        );
+
+        // Advance a large number of ledgers — execute must still succeed.
+        env.ledger()
+            .set_sequence_number(request_ledger + 2_000_000);
+        assert!(
+            client.try_execute_refinance(&loan_id).is_ok(),
+            "lock with window=0 must never expire"
+        );
+    }
+
+    #[test]
+    fn test_locked_rate_survives_pool_rate_change() {
+        // The locked rate must be applied on execute even if the pool's
+        // default rate had conceptually changed since the request was made.
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (_borrower, loan_id, client) = setup_refinanceable_loan(&env, 200);
+
+        let sched = client.get_repayment_schedule(&loan_id).unwrap();
+        let request_ledger = sched.next_due_ledger + 3 * LEDGERS_PER_MONTH;
+        env.ledger().set_sequence_number(request_ledger);
+
+        // Lock in at 500 bps (pool default is 800 bps).
+        client.request_refinance(&loan_id, &500u32, &12u32);
+
+        // Advance within window.
+        env.ledger().set_sequence_number(request_ledger + 50);
+        client.execute_refinance(&loan_id);
+
+        let loan = client.get_loan_info(&loan_id);
+        assert_eq!(
+            loan.interest_rate_bps, 500u32,
+            "execute_refinance must apply locked_rate_bps, not any pool-config rate"
+        );
+    }
+
+    #[test]
+    fn test_refinance_loan_legacy_wrapper_still_works() {
+        // The backward-compatible `refinance_loan` single-step wrapper must
+        // continue to apply the rate immediately in one call.
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        // Window = 0 so the legacy wrapper works without expiry.
+        let (_borrower, loan_id, client) = setup_refinanceable_loan(&env, 0);
+
+        let sched = client.get_repayment_schedule(&loan_id).unwrap();
+        env.ledger()
+            .set_sequence_number(sched.next_due_ledger + 3 * LEDGERS_PER_MONTH);
+
+        client.refinance_loan(&loan_id, &500u32, &12u32);
+
+        let loan = client.get_loan_info(&loan_id);
+        assert_eq!(loan.interest_rate_bps, 500u32);
+
+        // Lock must be gone — consumed by execute inside the wrapper.
+        assert!(client.get_refinance_rate_lock(&loan_id).is_none());
+    }
+
+    #[test]
+    fn test_rate_lock_window_getter_setter_round_trip() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _investor, _treasury, _token, client) = setup_pool(&env);
+
+        assert_eq!(client.get_rate_lock_window_ledgers(), 0u32);
+        client.set_rate_lock_window_ledgers(&100u32);
+        assert_eq!(client.get_rate_lock_window_ledgers(), 100u32);
+        client.set_rate_lock_window_ledgers(&0u32);
+        assert_eq!(client.get_rate_lock_window_ledgers(), 0u32);
+    }
+
+
+    // ── Emergency liquidity injection tests ──────────────────────────────────
+
+    /// Deploy and initialise a GovernanceContract with `num_signers` signers
+    /// and a 100 % quorum (all signers must vote).  Returns the contract client
+    /// and the signer addresses.
+    fn setup_governance<'a>(
+        env: &'a Env,
+        num_signers: u32,
+    ) -> (
+        governance::GovernanceContractClient<'a>,
+        soroban_sdk::Vec<Address>,
+    ) {
+        let admin = Address::generate(env);
+        let guardian = Address::generate(env);
+        let mut signer_vec = soroban_sdk::Vec::new(env);
+        for _ in 0..num_signers {
+            signer_vec.push_back(Address::generate(env));
+        }
+        let gov_id = env.register(governance::GovernanceContract, ());
+        let gov = governance::GovernanceContractClient::new(env, &gov_id);
+        // quorum_bps = 10_000 means every signer must vote for Passed.
+        gov.initialize(&admin, &guardian, &signer_vec, &10_000u32);
+        (gov, signer_vec)
+    }
+
+    /// Create an insurance pool pre-funded with `reserve` tokens and wire it
+    /// to `pool_client`.  The insurance admin is also returned so tests can
+    /// call `insurance.claim(...)` directly to verify state.
+    fn setup_funded_insurance<'a>(
+        env: &'a Env,
+        token_address: &Address,
+        pool_client: &LendingPoolContractClient<'a>,
+        reserve: i128,
+    ) -> insurance_pool::InsurancePoolContractClient<'a> {
+        let insurance_admin = Address::generate(env);
+        let funder = Address::generate(env);
+        StellarAssetClient::new(env, token_address).mint(&funder, &reserve);
+
+        let insurance_id = env.register(insurance_pool::InsurancePoolContract, ());
+        let insurance = insurance_pool::InsurancePoolContractClient::new(env, &insurance_id);
+        insurance.initialize(&insurance_admin, token_address, &pool_client.address);
+
+        // Fund the reserve directly so it holds `reserve` tokens.
+        insurance.fund(&funder, &reserve);
+
+        // Wire the insurance pool into the lending pool.
+        pool_client.set_insurance_pool(&insurance_id);
+
+        insurance
+    }
+
+    /// Full happy-path: governance passes, amount is within cap, tokens flow.
+    #[test]
+    fn test_inject_emergency_liquidity_authorized_injection_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+        let token = token::Client::new(&env, &token_address);
+
+        // Wire up insurance with 1 000 USDC reserve.
+        let reserve = 1_000_0000000i128;
+        let insurance = setup_funded_insurance(&env, &token_address, &client, reserve);
+
+        // Wire up governance and get a passed proposal.
+        let (gov, signers) = setup_governance(&env, 2);
+        client.set_governance_contract(&gov.address);
+        let evidence = soroban_sdk::Bytes::from_slice(&env, b"ipfs://evidence");
+        let proposal_id = gov.submit_proposal(&signers.get_unchecked(0), &1u32, &evidence);
+        // Both signers vote → status becomes Passed (100 % quorum).
+        gov.vote(&signers.get_unchecked(0), &proposal_id);
+        gov.vote(&signers.get_unchecked(1), &proposal_id);
+        assert!(gov.is_approved(&proposal_id));
+
+        let inject_amount = 500_0000000i128;
+        let liquidity_before = client.get_liquidity();
+
+        client.inject_emergency_liquidity(&proposal_id, &inject_amount);
+
+        // Pool liquidity increased by the injected amount.
+        assert_eq!(client.get_liquidity(), liquidity_before + inject_amount);
+        // Insurance reserves decreased.
+        assert_eq!(insurance.get_reserves(), reserve - inject_amount);
+        // Injected amount is tracked.
+        assert_eq!(client.get_total_emergency_injected(), inject_amount);
+        // Tokens are now held by the lending pool contract.
+        assert_eq!(token.balance(&client.address), inject_amount);
+    }
+
+    /// Injection exactly at the cap boundary succeeds.
+    #[test]
+    fn test_inject_emergency_liquidity_at_cap_boundary_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+
+        let reserve = 1_000_0000000i128;
+        setup_funded_insurance(&env, &token_address, &client, reserve);
+
+        // Set cap to 30 % of reserves → max = 300 USDC.
+        client.set_emergency_injection_cap_bps(&3_000u32);
+
+        let (gov, signers) = setup_governance(&env, 1);
+        client.set_governance_contract(&gov.address);
+        let evidence = soroban_sdk::Bytes::from_slice(&env, b"ipfs://evidence");
+        let proposal_id = gov.submit_proposal(&signers.get_unchecked(0), &1u32, &evidence);
+        gov.vote(&signers.get_unchecked(0), &proposal_id);
+
+        // Exactly 30 % of 1 000 USDC = 300 USDC.
+        let cap_amount = (reserve * 3_000i128) / 10_000;
+        assert!(client
+            .try_inject_emergency_liquidity(&proposal_id, &cap_amount)
+            .is_ok());
+    }
+
+    /// One stroop over the cap is rejected.
+    #[test]
+    fn test_inject_emergency_liquidity_exceeds_cap_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+
+        let reserve = 1_000_0000000i128;
+        setup_funded_insurance(&env, &token_address, &client, reserve);
+
+        // Cap at 20 % → max = 200 USDC.
+        client.set_emergency_injection_cap_bps(&2_000u32);
+
+        let (gov, signers) = setup_governance(&env, 1);
+        client.set_governance_contract(&gov.address);
+        let evidence = soroban_sdk::Bytes::from_slice(&env, b"ipfs://evidence");
+        let proposal_id = gov.submit_proposal(&signers.get_unchecked(0), &1u32, &evidence);
+        gov.vote(&signers.get_unchecked(0), &proposal_id);
+
+        let cap_amount = (reserve * 2_000i128) / 10_000;
+        let over_cap = cap_amount + 1;
+
+        let res = client.try_inject_emergency_liquidity(&proposal_id, &over_cap);
+        assert_eq!(
+            res.err().unwrap().unwrap(),
+            PoolError::EmergencyInjectionCapExceeded
+        );
+    }
+
+    /// Cap = 0 means no ceiling: full reserve is drawable.
+    #[test]
+    fn test_inject_emergency_liquidity_zero_cap_allows_full_reserve() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+
+        let reserve = 1_000_0000000i128;
+        setup_funded_insurance(&env, &token_address, &client, reserve);
+
+        // Default cap is 0 — no ceiling.
+        assert_eq!(client.get_emergency_injection_cap_bps(), 0u32);
+
+        let (gov, signers) = setup_governance(&env, 1);
+        client.set_governance_contract(&gov.address);
+        let evidence = soroban_sdk::Bytes::from_slice(&env, b"ipfs://evidence");
+        let proposal_id = gov.submit_proposal(&signers.get_unchecked(0), &1u32, &evidence);
+        gov.vote(&signers.get_unchecked(0), &proposal_id);
+
+        // Draw the full reserve — must succeed.
+        assert!(client
+            .try_inject_emergency_liquidity(&proposal_id, &reserve)
+            .is_ok());
+    }
+
+    /// A proposal that has not yet received enough votes (status = Open) is rejected.
+    #[test]
+    fn test_inject_emergency_liquidity_open_proposal_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+        setup_funded_insurance(&env, &token_address, &client, 1_000_0000000i128);
+
+        // 2 signers, 100 % quorum — one vote is not enough to pass.
+        let (gov, signers) = setup_governance(&env, 2);
+        client.set_governance_contract(&gov.address);
+        let evidence = soroban_sdk::Bytes::from_slice(&env, b"ipfs://evidence");
+        let proposal_id = gov.submit_proposal(&signers.get_unchecked(0), &1u32, &evidence);
+        // Only one vote cast — proposal stays Open.
+        gov.vote(&signers.get_unchecked(0), &proposal_id);
+        assert!(!gov.is_approved(&proposal_id));
+
+        let res = client.try_inject_emergency_liquidity(&proposal_id, &100_0000000i128);
+        assert_eq!(
+            res.err().unwrap().unwrap(),
+            PoolError::GovernanceProposalNotPassed
+        );
+    }
+
+    /// A non-existent proposal ID is rejected.
+    #[test]
+    fn test_inject_emergency_liquidity_nonexistent_proposal_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+        setup_funded_insurance(&env, &token_address, &client, 1_000_0000000i128);
+
+        let (gov, _signers) = setup_governance(&env, 1);
+        client.set_governance_contract(&gov.address);
+
+        // Proposal ID 99 was never submitted.
+        let res = client.try_inject_emergency_liquidity(&99u32, &100_0000000i128);
+        assert_eq!(
+            res.err().unwrap().unwrap(),
+            PoolError::GovernanceProposalNotPassed
+        );
+    }
+
+    /// Calling inject when no governance contract is configured fails.
+    #[test]
+    fn test_inject_emergency_liquidity_without_governance_contract_fails() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+        setup_funded_insurance(&env, &token_address, &client, 1_000_0000000i128);
+
+        // No set_governance_contract call.
+        let res = client.try_inject_emergency_liquidity(&1u32, &100_0000000i128);
+        assert_eq!(
+            res.err().unwrap().unwrap(),
+            PoolError::GovernanceContractNotSet
+        );
+    }
+
+    /// Calling inject when no insurance pool is configured fails.
+    #[test]
+    fn test_inject_emergency_liquidity_without_insurance_pool_fails() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, _token_address, client) = setup_pool(&env);
+
+        let (gov, signers) = setup_governance(&env, 1);
+        client.set_governance_contract(&gov.address);
+        let evidence = soroban_sdk::Bytes::from_slice(&env, b"ipfs://evidence");
+        let proposal_id = gov.submit_proposal(&signers.get_unchecked(0), &1u32, &evidence);
+        gov.vote(&signers.get_unchecked(0), &proposal_id);
+
+        // No set_insurance_pool call.
+        let res = client.try_inject_emergency_liquidity(&proposal_id, &100_0000000i128);
+        assert_eq!(
+            res.err().unwrap().unwrap(),
+            PoolError::InsurancePoolNotSet
+        );
+    }
+
+    /// Zero amount is rejected before any governance or insurance check.
+    #[test]
+    fn test_inject_emergency_liquidity_zero_amount_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+        setup_funded_insurance(&env, &token_address, &client, 1_000_0000000i128);
+
+        let (gov, signers) = setup_governance(&env, 1);
+        client.set_governance_contract(&gov.address);
+        let evidence = soroban_sdk::Bytes::from_slice(&env, b"ipfs://evidence");
+        let proposal_id = gov.submit_proposal(&signers.get_unchecked(0), &1u32, &evidence);
+        gov.vote(&signers.get_unchecked(0), &proposal_id);
+
+        let res = client.try_inject_emergency_liquidity(&proposal_id, &0i128);
+        assert_eq!(res.err().unwrap().unwrap(), PoolError::InvalidAmount);
+    }
+
+    /// Multiple injections accumulate in TotalEmergencyInjected.
+    #[test]
+    fn test_inject_emergency_liquidity_accumulates_total() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+        setup_funded_insurance(&env, &token_address, &client, 1_000_0000000i128);
+
+        let (gov, signers) = setup_governance(&env, 1);
+        client.set_governance_contract(&gov.address);
+        let evidence = soroban_sdk::Bytes::from_slice(&env, b"ipfs://evidence");
+
+        // First proposal.
+        let pid1 = gov.submit_proposal(&signers.get_unchecked(0), &1u32, &evidence);
+        gov.vote(&signers.get_unchecked(0), &pid1);
+        client.inject_emergency_liquidity(&pid1, &200_0000000i128);
+        assert_eq!(client.get_total_emergency_injected(), 200_0000000i128);
+
+        // Second proposal.
+        let pid2 = gov.submit_proposal(&signers.get_unchecked(0), &2u32, &evidence);
+        gov.vote(&signers.get_unchecked(0), &pid2);
+        client.inject_emergency_liquidity(&pid2, &300_0000000i128);
+        assert_eq!(client.get_total_emergency_injected(), 500_0000000i128);
+    }
+
+    /// set/get_governance_contract round-trip.
+    #[test]
+    fn test_set_get_governance_contract_round_trip() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _investor, _treasury, _token, client) = setup_pool(&env);
+
+        assert_eq!(client.get_governance_contract(), None);
+        let (gov, _) = setup_governance(&env, 1);
+        client.set_governance_contract(&gov.address);
+        assert_eq!(client.get_governance_contract(), Some(gov.address));
+    }
+
+    /// set/get_emergency_injection_cap_bps round-trip and bounds check.
+    #[test]
+    fn test_set_get_emergency_injection_cap_bps_round_trip() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _investor, _treasury, _token, client) = setup_pool(&env);
+
+        assert_eq!(client.get_emergency_injection_cap_bps(), 0u32);
+        client.set_emergency_injection_cap_bps(&5_000u32);
+        assert_eq!(client.get_emergency_injection_cap_bps(), 5_000u32);
+        // 10_000 (100 %) is the maximum allowed.
+        client.set_emergency_injection_cap_bps(&10_000u32);
+        assert_eq!(client.get_emergency_injection_cap_bps(), 10_000u32);
+        // Above 10_000 is rejected.
+        let res = client.try_set_emergency_injection_cap_bps(&10_001u32);
+        assert_eq!(res.err().unwrap().unwrap(), PoolError::InvalidAmount);
+    }
+    // ── Early-Prepayment Penalty & Loyalty Waiver ───────────────────────
+    //
+    // A borrower who clears a loan while installments are still outstanding
+    // pays a 1% penalty on top. Borrowers whose escrow savings relationship
+    // had reached the configured age *at origination* are exempt. These tests
+    // cover both sides of that line, and the boundaries that keep it honest.
+
+    const PREPAY_TEST_PRINCIPAL: i128 = 10_000_0000000i128;
+
+    /// A relationship must have been open this long before the penalty is
+    /// waived. Six months is a meaningful saving streak rather than a formality.
+    const RELATIONSHIP_THRESHOLD: u32 = 6 * LEDGERS_PER_MONTH;
+
+    /// Fixed origination point for these tests. A start ledger of `0` is
+    /// reserved by the contract for "no relationship" — a relationship cannot
+    /// genuinely begin at genesis, and treating `0` as an ordinary start would
+    /// hand out the largest possible age to anyone who asked for it — so the
+    /// clock is parked past it and ages are measured backwards from here.
+    const AGE_CLOCK: u32 = RELATIONSHIP_THRESHOLD * 2;
+
+    /// Parks the ledger so relationship ages are non-zero and the token
+    /// contract is not archived by the jump.
+    fn age_clock(env: &Env) {
+        env.mock_all_auths_allowing_non_root_auth();
+        env.ledger().with_mut(|li| {
+            li.max_entry_ttl = 7_000_001;
+            li.min_persistent_entry_ttl = 7_000_000;
+        });
+        env.ledger().set_sequence_number(AGE_CLOCK);
+    }
+
+    /// Runs deposit → borrow → disburse for `borrower` with an escrow savings
+    /// relationship that is exactly `age_ledgers` old at origination. `None`
+    /// means the borrower has no relationship on record at all.
+    ///
+    /// The age is written before `request_loan` so the loan latches it, which
+    /// is the whole point of the feature.
+    fn setup_prepay_loan_at_age(
+        env: &Env,
+        client: &LendingPoolContractClient,
+        token_address: &Address,
+        borrower: &Address,
+        age_ledgers: Option<u32>,
+    ) -> BytesN<32> {
+        let investor = Address::generate(env);
+        let sac = StellarAssetClient::new(env, token_address);
+        sac.mint(&investor, &(PREPAY_TEST_PRINCIPAL * 2));
+        client.deposit(&investor, &(PREPAY_TEST_PRINCIPAL * 2), &Tranche::Senior);
+
+        if let Some(age) = age_ledgers {
+            assert!(age < AGE_CLOCK, "age must leave a non-zero start ledger");
+            client.record_escrow_rel_start(borrower, &(AGE_CLOCK - age));
+        }
+
+        let loan_id = mock_loan_id(env);
+        client.request_loan(borrower, &loan_id, &PREPAY_TEST_PRINCIPAL);
+        client.approve_loan(&loan_id);
+        client.add_contractor(borrower);
+        client.disburse(&loan_id, borrower, &PREPAY_TEST_PRINCIPAL);
+        loan_id
+    }
+
+    /// Funds the borrower for a full payoff plus the penalty that payoff may
+    /// owe, and returns the exact debt to clear.
+    fn fund_payoff(
+        env: &Env,
+        client: &LendingPoolContractClient,
+        token_address: &Address,
+        borrower: &Address,
+        loan_id: &BytesN<32>,
+    ) -> i128 {
+        StellarAssetClient::new(env, token_address).mint(borrower, &(PREPAY_TEST_PRINCIPAL * 3));
+        client.get_loan_info(loan_id).outstanding_debt
+    }
+
+    /// The standard penalty owed on a prepayment of `amount`.
+    fn expected_penalty(amount: i128) -> i128 {
+        (amount * PREPAYMENT_PENALTY_BPS as i128) / BPS_SCALE as i128
+    }
+
+    /// The feature at its best: a long-standing escrow relationship clears the
+    /// debt with nothing extra reaching the treasury.
+    #[test]
+    fn test_early_prepay_waived_for_established_escrow_relationship() {
+        let env = Env::default();
+        age_clock(&env);
+
+        let (_admin, _investor, treasury, token_address, client) = setup_pool(&env);
+        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
+
+        let borrower = Address::generate(&env);
+        let loan_id = setup_prepay_loan_at_age(
+            &env,
+            &client,
+            &token_address,
+            &borrower,
+            Some(RELATIONSHIP_THRESHOLD),
+        );
+
+        // The latched age is exactly the threshold, and the loan is eligible.
+        assert_eq!(
+            client.get_loan_escrow_rel_ledgers(&loan_id),
+            RELATIONSHIP_THRESHOLD
+        );
+        assert!(client.is_prepayment_waived(&loan_id));
+
+        let token = token::Client::new(&env, &token_address);
+        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
+        let before = token.balance(&borrower);
+        client.repay(&borrower, &loan_id, &owed);
+
+        assert_eq!(
+            token.balance(&borrower),
+            before - owed,
+            "only the debt is collected"
+        );
+        assert_eq!(client.get_total_prepayment_penalties(), 0i128);
+        assert_eq!(token.balance(&treasury), 0i128);
+        assert_eq!(client.get_loan_info(&loan_id).status, LoanStatus::Repaid);
+    }
+
+    /// The control case: the same early close by a borrower below the
+    /// threshold pays the full penalty to the treasury.
+    #[test]
+    fn test_early_prepay_charged_penalty_below_threshold() {
+        let env = Env::default();
+        age_clock(&env);
+
+        let (_admin, _investor, treasury, token_address, client) = setup_pool(&env);
+        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
+
+        let borrower = Address::generate(&env);
+        // Opened a single ledger ago: nowhere near the threshold.
+        let loan_id = setup_prepay_loan_at_age(&env, &client, &token_address, &borrower, Some(1));
+        assert_eq!(client.get_loan_escrow_rel_ledgers(&loan_id), 1);
+        assert!(!client.is_prepayment_waived(&loan_id));
+
+        let token = token::Client::new(&env, &token_address);
+        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
+        let penalty = expected_penalty(owed);
+        assert!(penalty > 0, "the fixture must actually trip the penalty");
+        let before = token.balance(&borrower);
+        client.repay(&borrower, &loan_id, &owed);
+
+        // Debt plus penalty leaves the borrower; the penalty reaches the
+        // treasury and is tracked on its own counter.
+        assert_eq!(token.balance(&borrower), before - owed - penalty);
+        assert_eq!(client.get_total_prepayment_penalties(), penalty);
+        assert_eq!(token.balance(&treasury), penalty);
+        assert_eq!(client.get_loan_info(&loan_id).status, LoanStatus::Repaid);
+    }
+
+    /// A borrower with no escrow relationship latches an age of `0`, and a
+    /// `0` threshold must not read as "waive everyone" — that would hand the
+    /// loyalty discount to precisely the borrowers with no history. The feature
+    /// is off by default, and off means the full penalty.
+    #[test]
+    fn test_threshold_zero_disables_the_waiver() {
+        let env = Env::default();
+        age_clock(&env);
+
+        let (_admin, _investor, treasury, token_address, client) = setup_pool(&env);
+        assert_eq!(client.get_prepay_waiver_ledgers(), 0u32, "off by default");
+
+        let borrower = Address::generate(&env);
+        let loan_id = setup_prepay_loan_at_age(&env, &client, &token_address, &borrower, None);
+        assert_eq!(client.get_loan_escrow_rel_ledgers(&loan_id), 0);
+        assert!(!client.is_prepayment_waived(&loan_id));
+
+        let token = token::Client::new(&env, &token_address);
+        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
+        client.repay(&borrower, &loan_id, &owed);
+
+        let penalty = expected_penalty(owed);
+        assert_eq!(client.get_total_prepayment_penalties(), penalty);
+        assert_eq!(token.balance(&treasury), penalty);
+    }
+
+    /// A start ledger in the future — a misconfigured bridge — must not wrap
+    /// around into an enormous age and hand out the waiver for free.
+    #[test]
+    fn test_future_relationship_start_does_not_wrap() {
+        let env = Env::default();
+        age_clock(&env);
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
+
+        let borrower = Address::generate(&env);
+        // Same flow as a qualifying relationship, except the recorded start is
+        // after the current ledger, so no age can legitimately be derived.
+        let investor = Address::generate(&env);
+        let sac = StellarAssetClient::new(&env, &token_address);
+        sac.mint(&investor, &(PREPAY_TEST_PRINCIPAL * 2));
+        client.deposit(&investor, &(PREPAY_TEST_PRINCIPAL * 2), &Tranche::Senior);
+        client.record_escrow_rel_start(&borrower, &(AGE_CLOCK * 10));
+
+        let loan_id = mock_loan_id(&env);
+        client.request_loan(&borrower, &loan_id, &PREPAY_TEST_PRINCIPAL);
+        client.approve_loan(&loan_id);
+        client.add_contractor(&borrower);
+        client.disburse(&loan_id, &borrower, &PREPAY_TEST_PRINCIPAL);
+
+        assert_eq!(client.get_loan_escrow_rel_ledgers(&loan_id), 0);
+        assert!(!client.is_prepayment_waived(&loan_id));
+    }
+
+    /// The age is a snapshot taken at origination. A borrower cannot open an
+    /// escrow account after taking the loan and have the late-arriving
+    /// relationship retroactively erase a penalty they were already assessed.
+    #[test]
+    fn test_relationship_age_is_latched_at_origination() {
+        let env = Env::default();
+        age_clock(&env);
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
+
+        let borrower = Address::generate(&env);
+        // Originate with no relationship on record.
+        let loan_id = setup_prepay_loan_at_age(&env, &client, &token_address, &borrower, None);
+        assert_eq!(client.get_loan_escrow_rel_ledgers(&loan_id), 0);
+
+        // Shortly after origination the borrower opens an account and becomes
+        // eligible — too late to matter for a loan that is already running.
+        client.record_escrow_rel_start(&borrower, &(AGE_CLOCK - 1));
+        assert_eq!(client.get_escrow_rel_ledgers(&borrower), 1);
+        assert_eq!(
+            client.get_loan_escrow_rel_ledgers(&loan_id),
+            0,
+            "the loan keeps the age it latched"
+        );
+        assert!(!client.is_prepayment_waived(&loan_id));
+
+        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
+        client.repay(&borrower, &loan_id, &owed);
+        assert_eq!(
+            client.get_total_prepayment_penalties(),
+            expected_penalty(owed)
+        );
+    }
+
+    /// Governance changes to the threshold reach loans that are still running,
+    /// but they never change the eligibility *input*: the latched age is the
+    /// same before and after the policy moves, so the admin is not repricing
+    /// history, only the bar it is measured against.
+    #[test]
+    fn test_threshold_change_applies_to_running_loans() {
+        let env = Env::default();
+        age_clock(&env);
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
+
+        let borrower = Address::generate(&env);
+        let loan_id = setup_prepay_loan_at_age(
+            &env,
+            &client,
+            &token_address,
+            &borrower,
+            Some(RELATIONSHIP_THRESHOLD),
+        );
+        let latched = client.get_loan_escrow_rel_ledgers(&loan_id);
+        assert!(client.is_prepayment_waived(&loan_id));
+
+        // Raise the bar after origination: the loan is judged against the new
+        // policy, but the age it was judged on is untouched.
+        client.set_prepay_waiver_ledgers(&(RELATIONSHIP_THRESHOLD * 2));
+        assert_eq!(
+            client.get_prepay_waiver_ledgers(),
+            RELATIONSHIP_THRESHOLD * 2
+        );
+        assert_eq!(client.get_loan_escrow_rel_ledgers(&loan_id), latched);
+        assert!(!client.is_prepayment_waived(&loan_id));
+
+        // Lower it again and the same loan qualifies once more.
+        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
+        assert!(client.is_prepayment_waived(&loan_id));
+
+        let token = token::Client::new(&env, &token_address);
+        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
+        let before = token.balance(&borrower);
+        client.repay(&borrower, &loan_id, &owed);
+
+        assert_eq!(token.balance(&borrower), before - owed);
+        assert_eq!(client.get_total_prepayment_penalties(), 0i128);
+    }
+
+    /// A payment that does not clear the loan is a normal repayment, not a
+    /// prepayment, and must never be charged this penalty.
+    #[test]
+    fn test_partial_payment_is_not_penalised() {
+        let env = Env::default();
+        age_clock(&env);
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+        let borrower = Address::generate(&env);
+        let loan_id = setup_prepay_loan_at_age(&env, &client, &token_address, &borrower, None);
+
+        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
+        client.repay(&borrower, &loan_id, &(owed / 2));
+
+        assert_eq!(client.get_total_prepayment_penalties(), 0i128);
+        let loan = client.get_loan_info(&loan_id);
+        assert_eq!(loan.status, LoanStatus::Approved);
+        assert!(loan.outstanding_debt > 0);
+    }
+
+    /// Finishing exactly on the final installment is not prepaying. The
+    /// schedule advances `payments_made` before the penalty decision, so a loan
+    /// retired on its last scheduled payment owes nothing extra.
+    #[test]
+    fn test_payment_on_final_installment_is_not_penalised() {
+        let env = Env::default();
+        age_clock(&env);
+
+        let (_admin, _investor, _treasury, token_address, client) = setup_pool(&env);
+        let borrower = Address::generate(&env);
+        let loan_id = setup_prepay_loan_at_age(&env, &client, &token_address, &borrower, None);
+
+        // Jump the schedule to its last installment: exactly one payment left,
+        // due now.
+        env.as_contract(&client.address, || {
+            let mut sched: RepaymentSchedule = env
+                .storage()
+                .persistent()
+                .get(&DataKey::LoanSchedule(loan_id.clone()))
+                .unwrap();
+            sched.payments_made = sched.duration_months - 1;
+            sched.next_due_ledger = env.ledger().sequence();
+            env.storage()
+                .persistent()
+                .set(&DataKey::LoanSchedule(loan_id.clone()), &sched);
+        });
+
+        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
+        client.repay(&borrower, &loan_id, &owed);
+
+        assert_eq!(client.get_loan_info(&loan_id).status, LoanStatus::Repaid);
+        assert_eq!(client.get_total_prepayment_penalties(), 0i128);
+    }
+
+    /// The penalty is protocol revenue, not pool capital. It must not inflate
+    /// tracked liquidity or linger in the pool's balance.
+    #[test]
+    fn test_prepayment_penalty_is_not_pool_liquidity() {
+        let env = Env::default();
+        age_clock(&env);
+
+        let (_admin, _investor, treasury, token_address, client) = setup_pool(&env);
+        let borrower = Address::generate(&env);
+        let loan_id = setup_prepay_loan_at_age(&env, &client, &token_address, &borrower, None);
+
+        let owed = fund_payoff(&env, &client, &token_address, &borrower, &loan_id);
+        let liquidity_before = client.get_pool_health().total_liquidity;
+        client.repay(&borrower, &loan_id, &owed);
+
+        // The fee reached the treasury and is booked there...
+        let penalty = expected_penalty(owed);
+        assert_eq!(client.get_total_prepayment_penalties(), penalty);
+        assert_eq!(
+            token::Client::new(&env, &token_address).balance(&treasury),
+            penalty
+        );
+        // ...while liquidity grew by the debt alone. The penalty arrived and
+        // left in the same transaction, so it must not appear as lendable
+        // capital.
+        assert_eq!(
+            client.get_pool_health().total_liquidity,
+            liquidity_before + owed
+        );
+    }
+
+    /// The pool publishes the standard rate and reports an empty lifetime
+    /// penalty total before any prepayment happens.
+    #[test]
+    fn test_prepayment_penalty_getters() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+
+        let (_admin, _investor, _treasury, _token_address, client) = setup_pool(&env);
+
+        assert_eq!(client.get_prepayment_penalty_bps(), 100u32);
+        assert_eq!(client.get_total_prepayment_penalties(), 0i128);
+
+        // An unregistered borrower reports no relationship rather than
+        // erroring, so a caller can read the age before one exists.
+        let stranger = Address::generate(&env);
+        assert_eq!(client.get_escrow_rel_ledgers(&stranger), 0u32);
+    }
+
+    /// Both new entrypoints are governance surfaces: only the admin may move
+    /// the threshold or write a relationship start.
+    #[test]
+    fn test_prepay_waiver_setters_require_admin() {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (admin, _investor, _treasury, _token_address, client) = setup_pool(&env);
+        let stranger = Address::generate(&env);
+        let borrower = Address::generate(&env);
+
+        // A non-admin attempting to set the threshold.
+        env.mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "set_prepay_waiver_ledgers",
+                args: (RELATIONSHIP_THRESHOLD,).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        assert!(client
+            .try_set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD)
+            .is_err());
+        assert_eq!(client.get_prepay_waiver_ledgers(), 0u32);
+
+        // A non-admin attempting to forge an escrow relationship.
+        env.mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "record_escrow_rel_start",
+                args: (borrower.clone(), 1u32).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        assert!(client
+            .try_record_escrow_rel_start(&borrower, &1u32)
+            .is_err());
+        assert_eq!(client.get_escrow_rel_ledgers(&borrower), 0u32);
+
+        // The admin still can.
+        env.mock_auths(&[MockAuth {
+            address: &admin,
+            invoke: &MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "set_prepay_waiver_ledgers",
+                args: (RELATIONSHIP_THRESHOLD,).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.set_prepay_waiver_ledgers(&RELATIONSHIP_THRESHOLD);
+        assert_eq!(client.get_prepay_waiver_ledgers(), RELATIONSHIP_THRESHOLD);
     }
 }

@@ -18,6 +18,7 @@ tool included as a dev dependency. No extra binary installation required.
 | `scenarios/loan-status-read.ts` | Indexed read — GET /api/loan/pending |
 | `scenarios/verification-write.ts` | Write-heavy — POST /api/verification/check |
 | `scenarios/mixed-workload.ts` | 70 % reads / 30 % writes concurrent mix |
+| `scenarios/webhook-burst.ts` | Burst webhook delivery — latency, queue depth, retries/DLQ at increasing throughput (scheduled only, needs Redis) |
 
 ## Quick Start
 
@@ -58,6 +59,33 @@ Each scenario prints:
 - **Error rate** non-2xx responses and timeouts
 
 A summary table is printed at the end of `run-all.ts`.
+
+## Webhook Burst Test (scheduled, not per-PR)
+
+`scenarios/webhook-burst.ts` (issue #761) simulates a burst of
+webhook-triggering events and sweeps throughput levels (`50,200,500`
+deliveries by default), reporting per-level delivery latency, max queue
+depth, retries, DLQ arrivals, and sustained throughput — stopping at the
+first level that breaches the p95 SLA. The tested safe ceiling and the
+backpressure rules that follow from it live in
+`docs/WEBHOOK_THROUGHPUT_CEILING.md`.
+
+```bash
+# Needs Redis:
+REDIS_URL=redis://localhost:6379 \
+WEBHOOK_BURST_LEVELS="50,200,500" WEBHOOK_BURST_CONCURRENCY=20 \
+npm run load-test:webhook-burst
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REDIS_URL` | `redis://localhost:6379` | Redis for the isolated burst queue |
+| `WEBHOOK_BURST_LEVELS` | `50,200,500` | Burst sizes swept (stops at first breach) |
+| `WEBHOOK_BURST_CONCURRENCY` | `20` | Worker concurrency (mirrors production) |
+| `SINK_LATENCY_MS` | `25` | Simulated subscriber response latency |
+| `SINK_FAIL_RATE` | `0` | Simulated subscriber 500 rate (exercises retries/DLQ) |
+| `WEBHOOK_BURST_P95_SLA_MS` | `2000` | p95 breach threshold |
+| `ENFORCE_SLA` | `0` | Set `1` in the scheduled run so a moved ceiling fails loudly |
 
 ## Acceptance Thresholds (CI)
 

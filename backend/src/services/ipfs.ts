@@ -4,6 +4,7 @@
 import axios from "axios";
 import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
+import { recordApiCapabilityUsage } from "./apiScopeUsageTracker.js";
 
 export const PINATA_MAX_RETRIES = 3;
 export const PINATA_RETRY_BASE_DELAY_MS = 1000;
@@ -136,6 +137,7 @@ async function pinFileToPinata(fileBuffer: Buffer, fileName: string): Promise<st
       throw new Error("Invalid response received from Pinata API");
     }
 
+    void recordApiCapabilityUsage("pinata", "pin_file").catch(() => {});
     return response.data.IpfsHash;
   } catch (error) {
     console.error(
@@ -174,6 +176,7 @@ async function pinFileToNFTStorage(fileBuffer: Buffer, fileName: string): Promis
       throw new Error("Invalid response from NFT.storage API");
     }
 
+    void recordApiCapabilityUsage("ipfs_secondary", "pin_file").catch(() => {});
     return response.data.value.cid;
   } catch (error) {
     const errorMsg =
@@ -211,6 +214,7 @@ async function pinFileToWeb3Storage(fileBuffer: Buffer, fileName: string): Promi
       throw new Error("Invalid response from Web3.storage API");
     }
 
+    void recordApiCapabilityUsage("ipfs_secondary", "pin_file").catch(() => {});
     return response.data.cid;
   } catch (error) {
     const errorMsg =
@@ -254,6 +258,7 @@ async function pinJSONToPinata(metadata: any): Promise<string> {
       throw new Error("Invalid response received from Pinata API");
     }
 
+    void recordApiCapabilityUsage("pinata", "pin_json").catch(() => {});
     return response.data.IpfsHash;
   } catch (error) {
     console.error(
@@ -446,6 +451,7 @@ export async function unpinFileFromIPFS(cid: string): Promise<UnpinResult> {
       })
     );
 
+    void recordApiCapabilityUsage("pinata", "unpin").catch(() => {});
     return { status: response.status, cid };
   } catch (error) {
     console.error(
