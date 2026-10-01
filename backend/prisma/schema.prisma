@@ -1065,6 +1065,28 @@ model EmailSuppression {
   @@index([permanent])
 }
 
+/// Periodic snapshot of dead-tuple bloat for a table, taken from
+/// pg_stat_user_tables. Gives operators visibility into which tables are
+/// accumulating bloat between autovacuum cycles, and records whether the
+/// monitor triggered a manual VACUUM for it (issue #684).
+model TableBloatSnapshot {
+  id               String    @id @default(uuid())
+  schemaName       String    @default("public")
+  tableName        String
+  liveTuples       BigInt
+  deadTuples       BigInt
+  /// deadTuples / (liveTuples + deadTuples), 0 when the table is empty.
+  deadTupleRatio   Float
+  tableSizeBytes   BigInt
+  lastAutovacuum   DateTime?
+  lastVacuum       DateTime?
+  /// True when this snapshot's ratio crossed the critical threshold and the
+  /// monitor issued a manual VACUUM in response.
+  vacuumTriggered  Boolean   @default(false)
+  capturedAt       DateTime  @default(now())
+
+  @@index([capturedAt])
+  @@index([tableName, capturedAt])
 /// Hardship late-fee waiver request workflow (issue #749).
 ///
 /// A borrower facing genuine hardship (job loss, medical emergency, etc.)

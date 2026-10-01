@@ -16,6 +16,7 @@ import { startAnalyticsRefreshScheduler, stopAnalyticsRefreshScheduler } from ".
 import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
 import { runRateLimitAuditJob } from "./rateLimitAudit.js";
 import { runDeadlockDetectionJob } from "./deadlockDetection.js";
+import { runTableBloatMonitorJob } from "./tableBloatMonitor.js";
 import { runUnusedIndexAuditJob } from "./unusedIndexAudit.js";
 import { runQueryKillerJob } from "./queryKiller.js";
 import { applyDueServicingTransfers } from "../services/loanServicing.js";
@@ -37,6 +38,7 @@ let deadlockDetectionTask: ReturnType<typeof cron.schedule> | null = null;
 let unusedIndexAuditTask: ReturnType<typeof cron.schedule> | null = null;
 let staleFlagAuditTask: ReturnType<typeof cron.schedule> | null = null;
 let servicingTransferTask: ReturnType<typeof cron.schedule> | null = null;
+let tableBloatMonitorTask: ReturnType<typeof cron.schedule> | null = null;
 let queryKillerTask: ReturnType<typeof cron.schedule> | null = null;
 
 export function startScheduler() {
@@ -158,11 +160,21 @@ export function startScheduler() {
     }
   }, { timezone: "UTC" });
 
+  // Every 30 minutes: scan for table bloat and manually VACUUM critical tables
+  const tableBloatSchedule = process.env.TABLE_BLOAT_MONITOR_CRON_SCHEDULE || "*/30 * * * *";
+  tableBloatMonitorTask = cron.schedule(tableBloatSchedule, async () => {
+    try {
+      await runTableBloatMonitorJob();
+    } catch (error) {
+      logger.error("[Scheduler] Table bloat monitor job failed", { error });
+    }
+  }, { timezone: "UTC" });
+
   // Start the materialized view refresh scheduler (every 5 minutes by default)
   startAnalyticsRefreshScheduler();
 
   console.log(
-    "[Scheduler] Started: repayment audit, session token purge, orphaned record cleanup, KYC expiry reminder, escrow reconciliation, application SLA monitor, admin portfolio digest, slow query digest, suspicious activity scan, rate limit audit, deadlock detection, unused index audit, loan servicing transfer, query killer, and analytics refresh jobs scheduled."
+    "[Scheduler] Started: repayment audit, session token purge, orphaned record cleanup, KYC expiry reminder, escrow reconciliation, application SLA monitor, admin portfolio digest, slow query digest, suspicious activity scan, rate limit audit, deadlock detection, loan servicing transfer, table bloat monitor, and analytics refresh jobs scheduled."
   );
 }
 
@@ -223,6 +235,9 @@ export function stopScheduler() {
     servicingTransferTask.stop();
     servicingTransferTask = null;
   }
+  if (tableBloatMonitorTask) {
+    tableBloatMonitorTask.stop();
+    tableBloatMonitorTask = null;
   if (queryKillerTask) {
     queryKillerTask.stop();
     queryKillerTask = null;

@@ -1,0 +1,152 @@
+name: CORS Policy Drift Detection
+
+# Verifies that each deployed environment's actual CORS behavior matches the
+# documented allow-list in backend/config/allowed-origins.json (issue #682).
+# A manually-added debugging origin or an overly permissive wildcard landing
+# in production would otherwise go unnoticed indefinitely.
+
+on:
+  schedule:
+    # Every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Limit check to a single environment (leave blank for all)'
+        required: false
+        default: ''
+        type: choice
+        options:
+          - ''
+          - staging
+          - production
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/config/allowed-origins.json'
+      - 'backend/src/config.ts'
+      - 'backend/src/index.ts'
+      - 'backend/scripts/detect-cors-drift.sh'
+
+jobs:
+  cors-drift:
+    name: CORS Drift Check — ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name != 'workflow_dispatch' ||
+      github.event.inputs.environment == '' ||
+      github.event.inputs.environment == matrix.environment
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [staging, production]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Resolve target URL
+        id: target
+        run: |
+          if [[ "${{ matrix.environment }}" == "production" ]]; then
+            echo "url=${{ secrets.PRODUCTION_API_URL || 'https://api.remitmortgage.com' }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=${{ secrets.STAGING_API_URL || 'https://staging-api.remitmortgage.com' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run CORS drift check
+        id: drift
+        run: |
+          set +e
+          bash ./backend/scripts/detect-cors-drift.sh \
+            --target-url="${{ steps.target.outputs.url }}" \
+            --environment="${{ matrix.environment }}" \
+            --output-dir="."
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          if [[ "$EXIT_CODE" -eq 0 ]]; then
+            echo "drift_detected=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$EXIT_CODE" -eq 2 ]]; then
+            echo "drift_detected=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "drift_detected=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      - name: Upload Drift Summary
+        if: steps.drift.outputs.drift_detected == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cors-drift-summary-${{ matrix.environment }}
+          path: cors-drift-summary.txt
+          retention-days: 30
+
+      - name: Post Drift Notification (Slack/Discord)
+        if: steps.drift.outputs.drift_detected == 'true'
+        run: |
+          SUMMARY=$(cat cors-drift-summary.txt)
+          PAYLOAD=$(jq -n \
+            --arg env "${{ matrix.environment }}" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg summary "$SUMMARY" \
+            '{
+              text: ("⚠️ *CORS Policy Drift Detected* — environment: `" + $env + "`\n" +
+                     "The deployed CORS configuration no longer matches backend/config/allowed-origins.json.\n" +
+                     "Run: " + $run_url + "\n\n```" + $summary + "```")
+            }')
+          curl -sf -X POST \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "${{ secrets.DEVOPS_ALERT_WEBHOOK_URL }}"
+
+      - name: Open GitHub Issue on Drift
+        if: steps.drift.outputs.drift_detected == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('cors-drift-summary.txt', 'utf8');
+            const env = '${{ matrix.environment }}';
+            const runUrl = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Drift] CORS policy drift detected — ${env}`,
+              body: [
+                `## CORS Policy Drift Detected`,
+                ``,
+                `**Environment:** \`${env}\``,
+                `**Detected at:** ${new Date().toISOString()}`,
+                `**Workflow run:** ${runUrl}`,
+                ``,
+                `The deployed CORS configuration no longer matches`,
+                `\`backend/config/allowed-origins.json\` for this environment.`,
+                ``,
+                '```',
+                summary,
+                '```',
+                ``,
+                `### Next Steps`,
+                `- If the origin change is intentional, update \`backend/config/allowed-origins.json\` and redeploy.`,
+                `- If not, treat this as a security incident: identify who/what added the origin and revoke it.`,
+              ].join('\n'),
+              labels: ['security', 'drift', 'needs-review'],
+            });
+
+  summary:
+    name: CORS Drift Detection Summary
+    runs-on: ubuntu-latest
+    needs: [cors-drift]
+    if: always()
+    steps:
+      - name: Report Status
+        run: |
+          RESULT="${{ needs.cors-drift.result }}"
+          echo "cors-drift result: $RESULT"
+          if [[ "$RESULT" == "failure" ]]; then
+            echo "❌ One or more CORS drift checks encountered errors"
+            exit 1
+          else
+            echo "✅ CORS drift checks completed (check individual jobs for drift status)"
+          fi

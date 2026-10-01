@@ -8,11 +8,12 @@ import toast, { Toaster } from "react-hot-toast";
 import { useWallet, OptionalWalletProvider } from "../../context/WalletContext";
 import { EmptyState } from "../../components/EmptyState";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
-import { ClipboardList, Hammer, History } from "lucide-react";
+import { ClipboardList, Hammer, History, MessagesSquare } from "lucide-react";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 import ActiveLoansMapView from "../../components/ActiveLoansMapView";
 import AuditLogViewer from "../../components/AuditLogViewer";
+import ApplicantCommunicationTimeline from "../../components/ApplicantCommunicationTimeline";
 import LoanCommentsPanel from "../../components/LoanCommentsPanel";
 import { LoanKanbanBoard, KanbanLoan } from "../../components/LoanKanbanBoard";
 
@@ -128,8 +129,8 @@ function AdminShell({ children }: { children: React.ReactNode }) {
 
 // ── Dashboard ────────────────────────────────────────────────────────────────
 
-type Tab = "loans" | "milestones" | "audit";
-const TAB_ORDER: Tab[] = ["loans", "milestones", "audit"];
+type Tab = "loans" | "milestones" | "audit" | "communications";
+const TAB_ORDER: Tab[] = ["loans", "milestones", "audit", "communications"];
 
 function AdminDashboard() {
   const [tab, setTab] = useState<Tab>("loans");
@@ -278,6 +279,14 @@ function AdminDashboard() {
           <History className="h-3.5 w-3.5 mr-1.5" aria-hidden="true" />
           Audit Log
         </TabButton>
+        <TabButton
+          id="communications"
+          active={tab === "communications"}
+          onClick={() => setTab("communications")}
+        >
+          <MessagesSquare className="h-3.5 w-3.5 mr-1.5" aria-hidden="true" />
+          Communications
+        </TabButton>
       </div>
 
       <div id="admin-tabpanel" role="tabpanel" aria-labelledby={`admin-tab-${tab}`} tabIndex={0}>
@@ -295,8 +304,10 @@ function AdminDashboard() {
             loading={loading}
             onApprove={(milestone) => setPendingAction({ kind: "approve-milestone", milestone })}
           />
-        ) : (
+        ) : tab === "audit" ? (
           <AuditLogViewer />
+        ) : (
+          <ApplicantCommunicationTimeline />
         )}
       </div>
 

@@ -1,0 +1,6 @@
+{
+  "$comment": "Canonical, documented list of CORS origins per environment (issue #682). backend/src/config.ts loads its default allowedOrigins from this file when ALLOWED_ORIGINS is unset, and scripts/detect-cors-drift.sh checks it against what a live deployment actually allows. Changing production access should mean editing this file, not just the deployment's env var.",
+  "production": ["https://app.remitmortgage.com", "https://www.remitmortgage.com"],
+  "staging": ["https://staging.remitmortgage.com", "https://staging-app.remitmortgage.com"],
+  "development": ["http://localhost:3000", "http://localhost:4000"]
+}
