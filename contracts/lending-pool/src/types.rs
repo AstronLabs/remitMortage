@@ -70,6 +70,36 @@ pub struct PoolConfig {
     /// existing integrations are unaffected until an admin opts in via
     /// `set_application_fee_bps`.
     pub application_fee_bps: u32,
+    /// How long a borrower must have held an escrow savings relationship
+    /// before their early-prepayment penalty is waived, measured in ledgers
+    /// at the moment the loan was originated.
+    ///
+    /// The waiver is a loyalty reward for borrowers who actually built their
+    /// down payment through the escrow savings programme, rather than a
+    /// discount handed to anyone who takes a loan. A borrower whose recorded
+    /// relationship age meets this threshold pays no penalty when `repay`
+    /// closes their loan ahead of schedule; anyone below it is charged the
+    /// standard penalty unchanged. Because it only forgives a fee and never
+    /// touches principal or interest, waiving it does not erode the pool's
+    /// interest revenue.
+    ///
+    /// The age is latched onto the loan at origination
+    /// (`LoanRecord::escrow_relationship_ledgers`) from the relationship start
+    /// recorded by the escrow bridge, so a borrower cannot change their own
+    /// eligibility mid-loan by opening or extending an escrow account. The
+    /// threshold in force at repayment is the one applied, so governance
+    /// changes still take effect on loans that are already running.
+    ///
+    /// `0` — the deployment default — disables the waiver entirely, so every
+    /// borrower is charged the standard penalty until an admin opts in via
+    /// `set_prepay_waiver_ledgers`. `0` cannot mean "waive
+    /// everyone": a borrower with no escrow relationship records an age of
+    /// `0`, and the two must not collide.
+    ///
+    /// Named `prepay_waiver_ledgers` rather than the longer
+    /// `prepayment_penalty_waiver_ledgers` because Soroban caps contract-type
+    /// field names at 30 characters.
+    pub prepay_waiver_ledgers: u32,
     /// Minimum number of ledgers an LP's deposit must remain in the pool
     /// before a withdrawal is allowed. 0 means no lockup.
     pub lockup_duration_ledgers: u32,
@@ -396,6 +426,15 @@ pub enum DataKey {
     PendingAdmin,
     /// Total withdrawal fees collected and routed to treasury.
     TotalWithdrawalFees,
+    /// Ledger at which a borrower's escrow savings relationship began, as
+    /// recorded by the escrow bridge. Used to derive the relationship age that
+    /// gets latched onto a loan at origination, which in turn gates the
+    /// early-prepayment penalty waiver. A missing entry means the borrower has
+    /// no recorded relationship and latches an age of `0`.
+    EscrowRelationshipStart(Address),
+    /// Total early-prepayment penalties collected and routed to treasury.
+    /// Excludes penalties waived for loyalty, which are never charged.
+    TotalPrepaymentPenalties,
     /// Application (processing) fee escrowed for a loan, keyed by loan ID.
     /// Present only while a `Requested` loan is awaiting a final decision;
     /// removed as soon as the fee is settled — retained by `approve_loan`,
