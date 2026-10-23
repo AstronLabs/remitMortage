@@ -25,6 +25,7 @@ import {
   type TransactionModalPhase,
 } from "../lib/transaction-status";
 import TransactionModal from "./tx/TransactionModal";
+import ConfirmationDialog from "./ConfirmationDialog";
 import GasFeeAdjuster from "./tx/GasFeeAdjuster";
 import { useXlmPrice } from "../hooks/useXlmPrice";
 import { baselineFeeStroops, feeToUsd, formatFee } from "../lib/gas-fees";
@@ -43,6 +44,18 @@ function toStroops(amount: string): string {
   return String(Math.round(parsed * 10_000_000));
 }
 
+function formatUsdc(amount: string): string {
+  const parsed = Number.parseFloat(amount);
+  return Number.isFinite(parsed)
+    ? parsed.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : amount;
+}
+
+function shortenAddress(address: string): string {
+  if (!address) return "connected wallet";
+  return `${address.slice(0, 8)}…${address.slice(-6)}`;
+}
+
 export default function DepositModal({ isOpen, onClose }: Props) {
   const { publicKey, usdcBalance, isConnected, wrongNetwork, walletError, connect } =
     useWallet();
@@ -58,6 +71,7 @@ export default function DepositModal({ isOpen, onClose }: Props) {
   const [preview, setPreview] = useState<TransactionPreview | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [showConfirmation, setShowConfirmation] = useState(false);
   const [txPhase, setTxPhase] = useState<TransactionModalPhase>("idle");
   const [txHash, setTxHash] = useState<string | null>(null);
   const [txError, setTxError] = useState<string | null>(null);
@@ -380,7 +394,7 @@ export default function DepositModal({ isOpen, onClose }: Props) {
           </div>
 
           <button
-            onClick={submit}
+            onClick={() => setShowConfirmation(true)}
             disabled={
               !valid ||
               estimating ||
@@ -403,6 +417,16 @@ export default function DepositModal({ isOpen, onClose }: Props) {
           </button>
         </div>
       </div>
+
+      <ConfirmationDialog
+        isOpen={showConfirmation}
+        title="Confirm USDC deposit"
+        description={`Deposit ${formatUsdc(debouncedAmount)} USDC into the escrow contract from ${shortenAddress(publicKey ?? "")}. This financial transaction cannot be reversed after confirmation.`}
+        confirmationText="DEPOSIT"
+        confirmLabel="Confirm and sign"
+        onConfirm={submit}
+        onCancel={() => setShowConfirmation(false)}
+      />
 
       <TransactionModal
         isOpen={txPhase !== "idle"}

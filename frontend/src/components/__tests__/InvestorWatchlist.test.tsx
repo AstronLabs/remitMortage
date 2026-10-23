@@ -108,6 +108,10 @@ describe("InvestorWatchlist (issue #799)", () => {
       await Promise.resolve();
     });
 
+    expect(unwatchOfferingMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Remove offering from watchlist?");
+    fireEvent.click(screen.getByRole("button", { name: "Remove from watchlist" }));
+    await flush();
     expect(unwatchOfferingMock).toHaveBeenCalledWith("loan-2");
   });
 
@@ -118,9 +122,12 @@ describe("InvestorWatchlist (issue #799)", () => {
     const item = screen.getByTestId("watchlist-item-loan-9");
     await act(async () => {
       fireEvent.click(item.querySelector("button")!);
-      await Promise.resolve();
     });
 
+    expect(unwatchOfferingMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Remove offering from watchlist?");
+    fireEvent.click(screen.getByRole("button", { name: "Remove from watchlist" }));
+    await flush();
     expect(unwatchOfferingMock).toHaveBeenCalledWith("loan-9");
   });
 

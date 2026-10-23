@@ -22,6 +22,7 @@ import ColumnManager from "@/components/tables/ColumnManager";
 import ColumnResizeHandle from "@/components/tables/ColumnResizeHandle";
 import { useColumnPreferences } from "@/hooks/useColumnPreferences";
 import type { ColumnDefinition } from "@/lib/column-preferences";
+import ConfirmationDialog from "@/components/ConfirmationDialog";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 
@@ -201,6 +202,7 @@ export default function HistoryClient() {
 
   // Presets
   const [presets, setPresets] = useState<FilterPreset[]>([]);
+  const [pendingPresetDelete, setPendingPresetDelete] = useState<FilterPreset | null>(null);
   const [showPresetModal, setShowPresetModal] = useState(false);
   const [newPresetName, setNewPresetName] = useState("");
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
@@ -895,7 +897,7 @@ export default function HistoryClient() {
                               </svg>
                             </button>
                             <button
-                              onClick={() => handleDeletePreset(p.id)}
+                              onClick={() => setPendingPresetDelete(p)}
                               className="p-1.5 text-red-400/70 hover:text-red-400 bg-red-400/10 hover:bg-red-400/20 rounded-md transition-colors"
                               title="Delete"
                             >
@@ -924,6 +926,17 @@ export default function HistoryClient() {
           </div>
         )}
       </main>
+      <ConfirmationDialog
+        isOpen={pendingPresetDelete !== null}
+        title="Delete saved filter?"
+        description={`Delete the saved filter “${pendingPresetDelete?.name ?? ""}”. This only removes the saved preset; your transactions and current filters are unchanged.`}
+        confirmLabel="Delete preset"
+        destructive={false}
+        onConfirm={() => {
+          if (pendingPresetDelete) handleDeletePreset(pendingPresetDelete.id);
+        }}
+        onCancel={() => setPendingPresetDelete(null)}
+      />
     </div>
   );
 }

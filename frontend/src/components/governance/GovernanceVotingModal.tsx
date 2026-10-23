@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import React, { useState } from "react";
-import { X, Check, XCircle, MinusCircle, AlertCircle } from "lucide-react";
+import { X, Check, XCircle, MinusCircle } from "lucide-react";
 import { GovernanceProposal } from "../../hooks/useGovernanceProposals";
 import { QuorumProgressBar } from "./QuorumProgressBar";
+import ConfirmationDialog from "../ConfirmationDialog";
 
 interface GovernanceVotingModalProps {
   isOpen: boolean;
@@ -19,29 +20,22 @@ export function GovernanceVotingModal({
   proposal,
   onVote,
 }: GovernanceVotingModalProps) {
-  const [isVoting, setIsVoting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [pendingVote, setPendingVote] = useState<"yes" | "no" | "abstain" | null>(null);
 
   if (!isOpen || !proposal) return null;
 
-  const handleVote = async (vote: "yes" | "no" | "abstain") => {
-    setIsVoting(true);
-    setError(null);
-    try {
-      await onVote(proposal.id, vote);
-      onClose();
-    } catch (err: any) {
-      setError(err?.message || "Failed to submit vote");
-    } finally {
-      setIsVoting(false);
-    }
+  const confirmVote = async () => {
+    if (!pendingVote) return;
+    await onVote(proposal.id, pendingVote);
+    onClose();
   };
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-        onClick={isVoting ? undefined : onClose}
+        onClick={onClose}
       />
       
       <div className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
@@ -50,7 +44,6 @@ export function GovernanceVotingModal({
           <h2 className="text-xl font-bold text-white">Cast Your Vote</h2>
           <button
             onClick={onClose}
-            disabled={isVoting}
             className="text-slate-400 hover:text-white transition-colors disabled:opacity-50"
           >
             <X className="w-6 h-6" />
@@ -95,19 +88,13 @@ export function GovernanceVotingModal({
             />
           </div>
 
-          {error && (
-            <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
-              <p className="text-sm text-red-300">{error}</p>
-            </div>
-          )}
         </div>
 
         {/* Footer actions */}
         <div className="p-6 border-t border-slate-800 bg-slate-900/50 grid grid-cols-3 gap-3">
           <button
-            onClick={() => handleVote("yes")}
-            disabled={isVoting || proposal.status !== "pending"}
+            onClick={() => setPendingVote("yes")}
+            disabled={proposal.status !== "pending"}
             className="flex items-center justify-center py-3 px-4 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 font-bold rounded-xl border border-emerald-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Check className="w-5 h-5 mr-1.5" />
@@ -115,8 +102,8 @@ export function GovernanceVotingModal({
           </button>
           
           <button
-            onClick={() => handleVote("no")}
-            disabled={isVoting || proposal.status !== "pending"}
+            onClick={() => setPendingVote("no")}
+            disabled={proposal.status !== "pending"}
             className="flex items-center justify-center py-3 px-4 bg-red-600/20 hover:bg-red-600/30 text-red-400 font-bold rounded-xl border border-red-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <XCircle className="w-5 h-5 mr-1.5" />
@@ -124,8 +111,8 @@ export function GovernanceVotingModal({
           </button>
           
           <button
-            onClick={() => handleVote("abstain")}
-            disabled={isVoting || proposal.status !== "pending"}
+            onClick={() => setPendingVote("abstain")}
+            disabled={proposal.status !== "pending"}
             className="flex items-center justify-center py-3 px-4 bg-slate-700/50 hover:bg-slate-700 text-slate-300 font-bold rounded-xl border border-slate-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <MinusCircle className="w-5 h-5 mr-1.5" />
@@ -134,5 +121,16 @@ export function GovernanceVotingModal({
         </div>
       </div>
     </div>
+    <ConfirmationDialog
+      isOpen={pendingVote !== null}
+      title="Confirm governance vote"
+      description={`Submit a ${pendingVote?.toUpperCase()} vote on “${proposal.title}”. Governance votes are final and cannot be changed after submission.`}
+      confirmationText={pendingVote ? `VOTE ${pendingVote.toUpperCase()}` : undefined}
+      confirmLabel="Submit vote"
+      closeOnConfirm={false}
+      onConfirm={confirmVote}
+      onCancel={() => setPendingVote(null)}
+    />
+    </>
   );
 }

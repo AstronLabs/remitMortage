@@ -9,6 +9,7 @@ import { useToast } from "@/context/ToastContext";
 import { QuorumProgressBar } from "./governance/QuorumProgressBar";
 import { useSignatureQueueStore } from "@/lib/signatureQueueStore";
 import { castMilestoneVote, fetchMilestoneSigningStatus, submitSignedEnvelope } from "@/lib/milestoneSigning";
+import ConfirmationDialog from "./ConfirmationDialog";
 
 export interface SignatureQueueManagerProps {
   proposalId: string;
@@ -44,6 +45,7 @@ export function SignatureQueueManager({
 
   const [isSigning, setIsSigning] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState<"sign" | "submit" | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const hasNotifiedApproval = useRef(false);
 
@@ -110,6 +112,7 @@ export function SignatureQueueManager({
         title: "Vote failed",
         message: err instanceof Error ? err.message : "Could not cast vote.",
       });
+      throw new Error(err instanceof Error ? err.message : "Could not cast vote.");
     } finally {
       setIsSigning(false);
     }
@@ -133,6 +136,7 @@ export function SignatureQueueManager({
         title: "Submission failed",
         message: err instanceof Error ? err.message : "Could not submit transaction.",
       });
+      throw new Error(err instanceof Error ? err.message : "Could not submit transaction.");
     } finally {
       setIsSubmitting(false);
     }
@@ -262,7 +266,7 @@ export function SignatureQueueManager({
               </p>
               <button
                 type="button"
-                onClick={() => void handleSign()}
+                onClick={() => setPendingConfirmation("sign")}
                 disabled={isSigning}
                 className="mt-1 flex w-full items-center justify-center gap-2 rounded-lg bg-cyan-600 py-2.5 text-sm font-bold text-white transition-all hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:px-6"
               >
@@ -306,7 +310,7 @@ export function SignatureQueueManager({
           </p>
           <button
             type="button"
-            onClick={() => void handleSubmit()}
+            onClick={() => setPendingConfirmation("submit")}
             disabled={isSubmitting}
             className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-2.5 text-sm font-bold text-white transition-all hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:px-6"
           >
@@ -336,6 +340,21 @@ export function SignatureQueueManager({
           </p>
         </div>
       )}
+      <ConfirmationDialog
+        isOpen={pendingConfirmation !== null}
+        title={pendingConfirmation === "sign" ? "Confirm milestone approval" : "Submit disbursement"}
+        description={
+          pendingConfirmation === "sign"
+            ? "Sign to approve this milestone proposal. Your signature contributes to authorizing the contractor disbursement and cannot be withdrawn once recorded."
+            : "Submit the approved milestone transaction envelope to the network. This may release funds to the contractor and cannot be reversed."
+        }
+        confirmationText={pendingConfirmation === "sign" ? "APPROVE" : "SUBMIT"}
+        confirmLabel={pendingConfirmation === "sign" ? "Sign approval" : "Submit transaction"}
+        onConfirm={() =>
+          pendingConfirmation === "sign" ? handleSign() : handleSubmit()
+        }
+        onCancel={() => setPendingConfirmation(null)}
+      />
     </div>
   );
 }
