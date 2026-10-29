@@ -17,6 +17,7 @@ import {
 } from "../../lib/transaction-status";
 import { computePayoffCountdown, isFinalPayment } from "../../lib/payoffCountdown";
 import { track } from "../../lib/analytics";
+import ConfirmationDialog from "../../components/ConfirmationDialog";
 
 const Navbar = loadDynamic(() => import("../../components/Navbar"), { ssr: false });
 
@@ -170,6 +171,7 @@ function RepayInner() {
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
   const [paySuccess, setPaySuccess] = useState(false);
+  const [pendingRepayment, setPendingRepayment] = useState<number | null>(null);
 
   // Transaction history
   const [records, setRecords] = useState<TxRecord[]>([]);
@@ -389,11 +391,15 @@ function RepayInner() {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Confirm repayment of ${formatUSDC(amount)} USDC?\n\nThis will sign a transaction via Freighter.`
-    );
-    if (!confirmed) return;
+    setPendingRepayment(amount);
+  }
 
+  async function confirmRepayment() {
+    if (pendingRepayment === null) return;
+    if (pendingRepayment > remaining) {
+      throw new Error("The repayment amount now exceeds the remaining balance.");
+    }
+    const amount = pendingRepayment;
     setPaying(true);
     try {
       // TODO: Build and submit Soroban transaction via Freighter:
@@ -423,7 +429,7 @@ function RepayInner() {
       track("loan_repayment_completed");
       setTimeout(() => setPaySuccess(false), 5000);
     } catch (err: any) {
-      setPayError(err?.message || "Repayment transaction failed.");
+      throw new Error(err?.message || "Repayment transaction failed.");
     } finally {
       setPaying(false);
     }
@@ -436,6 +442,18 @@ function RepayInner() {
       <Navbar />
 
       {isRepaid && <Confetti />}
+
+      {pendingRepayment !== null && (
+        <ConfirmationDialog
+          isOpen
+          title="Confirm loan repayment"
+          description={`Repay ${formatUSDC(pendingRepayment)} USDC toward your loan balance. This financial transaction cannot be reversed after it is confirmed.`}
+          confirmationText="REPAY"
+          confirmLabel="Repay USDC"
+          onConfirm={confirmRepayment}
+          onCancel={() => setPendingRepayment(null)}
+        />
+      )}
 
       <main className="max-w-5xl mx-auto px-6 pt-32 pb-20">
         <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-cyan-500/10 text-cyan-400 text-xs font-semibold uppercase tracking-wider mb-4 border border-cyan-500/20">

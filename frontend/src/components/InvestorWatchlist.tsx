@@ -14,6 +14,7 @@ import {
   type UpcomingOffering,
   type WatchlistItem,
 } from "@/lib/watchlistApi";
+import ConfirmationDialog from "./ConfirmationDialog";
 
 const STATE_LABEL: Record<OfferingState, string> = {
   upcoming: "Upcoming",
@@ -48,6 +49,7 @@ export function InvestorWatchlist() {
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -77,7 +79,7 @@ export function InvestorWatchlist() {
       }
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't update your watchlist.");
+      throw new Error(err instanceof Error ? err.message : "Couldn't update your watchlist.");
     } finally {
       setBusyId(null);
     }
@@ -118,7 +120,15 @@ export function InvestorWatchlist() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => void toggle(offering.id, offering.watched)}
+                      onClick={() => {
+                        if (offering.watched) {
+                          setPendingRemoval(offering.id);
+                        } else {
+                          void toggle(offering.id, false).catch((err) =>
+                            setError(err instanceof Error ? err.message : "Couldn't update your watchlist.")
+                          );
+                        }
+                      }}
                       disabled={busyId === offering.id}
                       aria-pressed={offering.watched}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-cyan-400 disabled:opacity-40"
@@ -167,7 +177,7 @@ export function InvestorWatchlist() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => void toggle(item.loanId, true)}
+                      onClick={() => setPendingRemoval(item.loanId)}
                       disabled={busyId === item.loanId}
                       className="text-xs font-semibold text-slate-400 transition-colors hover:text-rose-300 disabled:opacity-40"
                     >
@@ -182,6 +192,17 @@ export function InvestorWatchlist() {
       )}
 
       {error && <p className="mt-3 text-xs text-rose-400">{error}</p>}
+      <ConfirmationDialog
+        isOpen={pendingRemoval !== null}
+        title="Remove offering from watchlist?"
+        description="This stops tracking the offering and removes it from your watchlist. You can watch it again later."
+        confirmLabel="Remove from watchlist"
+        destructive={false}
+        onConfirm={async () => {
+          if (pendingRemoval) await toggle(pendingRemoval, true);
+        }}
+        onCancel={() => setPendingRemoval(null)}
+      />
     </section>
   );
 }

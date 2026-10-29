@@ -25,6 +25,7 @@ import {
   fetchMilestoneSigningStatus,
   submitSignedEnvelope,
 } from "@/lib/milestoneSigning";
+import ConfirmationDialog from "@/components/ConfirmationDialog";
 
 const toast = {
   success: (msg: string) => console.log("Toast success:", msg),
@@ -139,6 +140,10 @@ export default function GovernanceDashboard() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isVoting, setIsVoting] = useState<string | null>(null);
   const [submittingTx, setSubmittingTx] = useState<string | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    kind: "sign" | "submit";
+    proposalId: string;
+  } | null>(null);
   const [txResults, setTxResults] = useState<Record<string, string>>({});
 
   const cachedProposals = useSignatureQueueStore((s) => s.proposals);
@@ -213,13 +218,11 @@ export default function GovernanceDashboard() {
     try {
       const proposal = proposals.find((p) => p.id === proposalId);
       if (!proposal || !proposal.proposalId) {
-        toast.error("Proposal not found");
-        return;
+        throw new Error("Proposal not found.");
       }
 
       if (!publicKey) {
-        toast.error("Connect your wallet to vote");
-        return;
+        throw new Error("Connect your wallet to vote.");
       }
 
       await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -248,8 +251,9 @@ export default function GovernanceDashboard() {
           };
         })
       );
-    } catch {
+    } catch (error) {
       toast.error("Failed to cast vote. Transaction rejected.");
+      throw new Error(error instanceof Error ? error.message : "Failed to cast vote.");
     } finally {
       setIsVoting(null);
     }
@@ -260,21 +264,20 @@ export default function GovernanceDashboard() {
     try {
       const proposal = proposals.find((p) => p.id === proposalId);
       if (!proposal || !proposal.proposalId) {
-        toast.error("Proposal not found");
-        return;
+        throw new Error("Proposal not found.");
       }
 
       const cached = cachedProposals[proposal.proposalId];
       if (!cached) {
-        toast.error("No cached envelope found");
-        return;
+        throw new Error("No cached envelope found.");
       }
 
       const result = await submitSignedEnvelope(cached.transactionEnvelope);
       setTxResults((prev) => ({ ...prev, [proposalId]: result.txHash }));
       toast.success(`Transaction submitted. TX: ${result.txHash.slice(0, 16)}…`);
-    } catch {
+    } catch (error) {
       toast.error("Failed to submit transaction.");
+      throw new Error(error instanceof Error ? error.message : "Failed to submit transaction.");
     } finally {
       setSubmittingTx(null);
     }
@@ -470,7 +473,9 @@ export default function GovernanceDashboard() {
                               </p>
                               <button
                                 type="button"
-                                onClick={() => void handleApprovalVote(proposal.id)}
+                                onClick={() =>
+                                  setPendingConfirmation({ kind: "sign", proposalId: proposal.id })
+                                }
                                 disabled={isVoting === proposal.id}
                                 className="mt-1 flex w-full items-center justify-center gap-2 rounded-lg bg-cyan-600 py-2.5 text-sm font-bold text-white transition-all hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:px-6"
                               >
@@ -513,7 +518,9 @@ export default function GovernanceDashboard() {
                       </p>
                       <button
                         type="button"
-                        onClick={() => void handleSubmit(proposal.id)}
+                        onClick={() =>
+                          setPendingConfirmation({ kind: "submit", proposalId: proposal.id })
+                        }
                         disabled={submittingTx === proposal.id}
                         className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-2.5 text-sm font-bold text-white transition-all hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:px-6"
                       >
@@ -556,6 +563,29 @@ export default function GovernanceDashboard() {
         onClose={() => setIsDrawerOpen(false)}
         ipfsCid={selectedEvidenceCid || ""}
       />
+      {pendingConfirmation && (
+        <ConfirmationDialog
+          isOpen
+          title={
+            pendingConfirmation.kind === "sign"
+              ? "Confirm milestone approval"
+              : "Submit disbursement transaction"
+          }
+          description={
+            pendingConfirmation.kind === "sign"
+              ? `Sign to approve “${proposals.find((item) => item.id === pendingConfirmation.proposalId)?.milestoneTitle ?? "this milestone"}”. Your signature contributes to authorizing the contractor payment and cannot be withdrawn once recorded.`
+              : "Submit the approved milestone transaction envelope to the network. This may release funds to the contractor and cannot be reversed."
+          }
+          confirmationText={pendingConfirmation.kind === "sign" ? "APPROVE" : "SUBMIT"}
+          confirmLabel={pendingConfirmation.kind === "sign" ? "Sign approval" : "Submit transaction"}
+          onConfirm={() =>
+            pendingConfirmation.kind === "sign"
+              ? handleApprovalVote(pendingConfirmation.proposalId)
+              : handleSubmit(pendingConfirmation.proposalId)
+          }
+          onCancel={() => setPendingConfirmation(null)}
+        />
+      )}
     </div>
   );
 }
