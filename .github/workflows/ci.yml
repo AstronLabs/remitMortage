@@ -40,6 +40,7 @@ jobs:
       - name: Validate PodDisruptionBudgets and topology spread
         run: |
           python3 -m pip install --quiet pyyaml
+          python3 scripts/test_k8s_external_secrets.py
           python3 scripts/test_check_k8s_availability.py
           python3 scripts/check-k8s-availability.py devops/k8s
 
@@ -341,4 +342,3 @@ jobs:
           name: playwright-report-${{ matrix.browser }}
           path: frontend/playwright-report/
           retention-days: 14
-

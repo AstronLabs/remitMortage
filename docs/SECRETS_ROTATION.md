@@ -25,6 +25,23 @@ and `finishSecret`. The `finishSecret` step must promote the new version only
 after `testSecret` succeeds and revoke the old credential after the grace
 window.
 
+## Kubernetes External Secrets Operator
+
+Kubernetes deployments use the namespaced AWS `SecretStore` and `ExternalSecret`
+resources in `devops/k8s/external-secrets/`. External Secrets Operator refreshes
+the generated Secrets every five minutes. The backend and canary Deployments
+are annotated for Stakater Reloader, which starts a rolling restart after
+`remitmortgage-backend-secrets` changes so environment-variable consumers load
+the rotated values.
+
+The Kubernetes integration is not preconfigured with an AWS account, EKS OIDC
+provider, IAM role, region, or environment-specific secret names. Replace the
+documented placeholders only in the deployment environment. Follow
+[`devops/k8s/README.md`](../devops/k8s/README.md) to create the IAM role with
+access restricted to the required secret ARNs, install the pinned operator
+chart with namespace-scoped RBAC, and verify rotation without printing secret
+data. Never add provider credentials or secret values to manifests or logs.
+
 ## JWT session signing keys
 
 Session JWTs are signed and verified through a key ring

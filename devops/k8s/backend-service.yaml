@@ -2,6 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: remitmortgage-backend
+  namespace: remitmortgage
   labels:
     app: remitmortgage-backend
 spec:

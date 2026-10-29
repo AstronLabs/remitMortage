@@ -2,8 +2,11 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: remitmortgage-backend
+  namespace: remitmortgage
   labels:
     app: remitmortgage-backend
+  annotations:
+    secret.reloader.stakater.com/reload: remitmortgage-backend-secrets
 spec:
   # No static replica count: the HPA owns this field once it takes over.
   replicas: 2

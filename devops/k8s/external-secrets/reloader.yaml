@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: remitmortgage-secret-reloader
+  namespace: remitmortgage
+  labels:
+    app.kubernetes.io/name: remitmortgage-secret-reloader
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: remitmortgage-secret-reloader
+  namespace: remitmortgage
+  labels:
+    app.kubernetes.io/name: remitmortgage-secret-reloader
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: remitmortgage-secret-reloader
+  namespace: remitmortgage
+  labels:
+    app.kubernetes.io/name: remitmortgage-secret-reloader
+subjects:
+  - kind: ServiceAccount
+    name: remitmortgage-secret-reloader
+    namespace: remitmortgage
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: remitmortgage-secret-reloader
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remitmortgage-secret-reloader
+  namespace: remitmortgage
+  labels:
+    app: remitmortgage-secret-reloader
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: remitmortgage-secret-reloader
+  template:
+    metadata:
+      labels:
+        app: remitmortgage-secret-reloader
+    spec:
+      serviceAccountName: remitmortgage-secret-reloader
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: reloader
+          image: ghcr.io/stakater/reloader:v1.4.14
+          imagePullPolicy: IfNotPresent
+          args:
+            - --namespace-selector=app.kubernetes.io/name=remitmortgage
+          ports:
+            - name: http
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10

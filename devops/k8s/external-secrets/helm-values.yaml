@@ -1,0 +1,20 @@
+# Install External Secrets Operator with this file. Replace the AWS role ARN
+# only after an EKS workload-identity role and its least-privilege IAM policy
+# have been provisioned. No AWS credentials belong in this file.
+scopedNamespace: remitmortgage
+scopedRBAC: true
+processClusterStore: false
+processClusterExternalSecret: false
+processClusterPushSecret: false
+processClusterGenerator: false
+processPushSecret: false
+processSecretStore: true
+
+serviceAccount:
+  create: true
+  name: external-secrets
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::<AWS_ACCOUNT_ID>:role/<EXTERNAL_SECRETS_ROLE_NAME>"
+
+rbac:
+  serviceAccountTokenCreate: false
