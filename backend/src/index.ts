@@ -73,6 +73,7 @@ import { correlationId } from "./middleware/correlationId.js";
 import { tenantContext } from "./services/tenant.js";
 import { httpMetricsMiddleware } from "./middleware/metricsMiddleware.js";
 import { tracingMiddleware } from "./middleware/tracingMiddleware.js";
+import { tracingBaggageMiddleware } from "./middleware/tracingBaggage.js";
 import { authMiddleware, optionalAuthMiddleware } from "./middleware/auth.js";
 import { readYourWritesMiddleware } from "./middleware/readYourWrites.js";
 import { credentialStuffingGuard } from "./middleware/credentialStuffing.js";
@@ -231,6 +232,9 @@ void (async () => {
 app.use(inFlightRequestTracker());
 app.use(correlationId);
 app.use(tenantContext);
+// Attach user/tenant identity to the tracing baggage right after the tenant is
+// resolved, so every span and downstream hop can be filtered by user or tenant.
+app.use(tracingBaggageMiddleware);
 // HTTP metrics must be first so the timer starts at the earliest possible point.
 app.use(httpMetricsMiddleware);
 app.use(tracingMiddleware);
@@ -299,6 +303,8 @@ const verificationLimiter = rateLimit({
 app.use("/metrics", metricsRouter);
 app.use("/api/health/rpc", rpcHealthRouter);
 app.use("/api/health", healthRouter);
+// Public, cache-backed up/down summary — no authentication, no internal detail.
+app.use("/api/status", statusRouter);
 app.use("/api/verification", verificationLimiter, verificationRouter);
 app.use("/api/verify", verificationLimiter, verifyRouter);
 app.use("/api/borrower", mutationRateLimiter, authMiddleware, readYourWritesMiddleware, borrowerRouter);
