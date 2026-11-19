@@ -289,6 +289,8 @@ const verificationLimiter = rateLimit({
 app.use("/metrics", metricsRouter);
 app.use("/api/health/rpc", rpcHealthRouter);
 app.use("/api/health", healthRouter);
+// Public, cache-backed up/down summary — no authentication, no internal detail.
+app.use("/api/status", statusRouter);
 app.use("/api/verification", verificationLimiter, verificationRouter);
 app.use("/api/verify", verificationLimiter, verifyRouter);
 app.use("/api/borrower", mutationRateLimiter, authMiddleware, readYourWritesMiddleware, borrowerRouter);

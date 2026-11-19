@@ -57,7 +57,7 @@ export function resetShutdownState(): void {
 // ── HTTP: in-flight tracking and request gating ──────────────────────────
 
 /** Paths that must keep answering while draining so probes and scrapes see the truth. */
-const ALWAYS_SERVED = [/^\/api\/health(\/|$)/, /^\/metrics(\/|$)/];
+const ALWAYS_SERVED = [/^\/api\/health(\/|$)/, /^\/api\/status(\/|$)/, /^\/metrics(\/|$)/];
 
 /**
  * Counts requests in flight and, once shutdown has begun, tells clients to drop

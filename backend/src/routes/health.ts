@@ -8,7 +8,9 @@ import { isShuttingDown } from "../services/gracefulShutdown.js";
 
 export const healthRouter = Router();
 
-async function checkDatabaseHealth(): Promise<{ status: string; latencyMs?: number; error?: string }> {
+// Exported so the public status endpoint can reuse this probe as its source of
+// truth instead of duplicating the database health check.
+export async function checkDatabaseHealth(): Promise<{ status: string; latencyMs?: number; error?: string }> {
   const start = Date.now();
   try {
     await prisma.$queryRaw`SELECT 1`;
