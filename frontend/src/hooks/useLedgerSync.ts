@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import { useState, useEffect, useCallback } from 'react';
+import { useDataSaver } from '../context/DataSaverContext';
+import { dataSaverInterval } from '../lib/dataSaver';
 
 export interface SyncMetrics {
   currentLedger: number;
@@ -16,6 +18,7 @@ export interface SyncMetrics {
  * and metrics. Tracks the gap between RPC sequence and backend indexer height.
  */
 export const useLedgerSync = (pollIntervalMs = 5000, toleranceLedgers = 2) => {
+  const { dataSaver } = useDataSaver();
   const [metrics, setMetrics] = useState<SyncMetrics>({
     currentLedger: 0,
     indexerHeight: 0,
@@ -69,10 +72,10 @@ export const useLedgerSync = (pollIntervalMs = 5000, toleranceLedgers = 2) => {
     fetchSyncMetrics();
 
     // Setup polling
-    const interval = setInterval(fetchSyncMetrics, pollIntervalMs);
+    const interval = setInterval(fetchSyncMetrics, dataSaverInterval(pollIntervalMs, Math.max(pollIntervalMs * 4, 20000), dataSaver));
 
     return () => clearInterval(interval);
-  }, [fetchSyncMetrics, pollIntervalMs]);
+  }, [fetchSyncMetrics, pollIntervalMs, dataSaver]);
 
   return { metrics, isLoading, error, refetch: fetchSyncMetrics };
 };

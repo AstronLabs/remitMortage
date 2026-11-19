@@ -259,6 +259,34 @@ function versionProblems(fixture) {
   return problems;
 }
 
+// ── Topic naming convention (issue #857) ────────────────────────────────────
+//
+// Every event identifier is lower_snake_case: the on-chain topic symbol and
+// each literal sub-topic segment in the catalog key. Soroban symbols are at
+// most 32 characters. See docs/EVENT_TOPIC_CONVENTION.md.
+const TOPIC_SEGMENT = /^[a-z][a-z0-9_]{0,31}$/;
+
+/**
+ * Naming-convention problems for one contract's extracted events. Returns an
+ * array of human-readable messages; empty means every event conforms.
+ */
+function conventionProblems(contract, events) {
+  const problems = [];
+  for (const key of Object.keys(events)) {
+    const segments = key.split("/");
+    for (const segment of segments) {
+      if (!TOPIC_SEGMENT.test(segment)) {
+        problems.push(
+          `event "${key}" has a non-conforming topic segment "${segment}" ` +
+            `(expected lower_snake_case, 1-32 chars, starting with a letter)`,
+        );
+      }
+    }
+    if (!contract) problems.push("fixture is missing a contract name");
+  }
+  return problems;
+}
+
 function newFixture(contract, events) {
   return {
     contract,
@@ -314,18 +342,63 @@ function runCli(argv) {
         continue;
       }
       const { breaking, additive } = diffEvents(fx.events, events);
+      const convention = conventionProblems(contract, events);
       for (const msg of breaking) console.error(`${contract}: BREAKING ${msg}`);
       for (const msg of additive) console.error(`${contract}: fixture out of date: ${msg}`);
       for (const msg of versionProblems(fx)) console.error(`${contract}: ${msg}`);
-      if (breaking.length || additive.length || versionProblems(fx).length) failed = true;
+      for (const msg of convention) console.error(`${contract}: CONVENTION ${msg}`);
+      if (
+        breaking.length ||
+        additive.length ||
+        versionProblems(fx).length ||
+        convention.length
+      ) {
+        failed = true;
+      }
     }
     process.exit(failed ? 1 : 0);
+  }
+
+  if (cmd === "catalog") {
+    const rows = [];
+    for (const contract of Object.keys(fixtures).sort()) {
+      const fixture = fixtures[contract];
+      for (const key of Object.keys(fixture.events).sort()) {
+        const shapes = fixture.events[key].map(describe).join("<br>");
+        rows.push(`| ${contract} | \`${key}\` | ${shapes} |`);
+      }
+    }
+    const text = [
+      "# Event Catalog",
+      "",
+      "Generated from `contracts/event-schemas/*.json` by",
+      "`node contracts/event-schemas/schema.cjs catalog`. **Do not edit by hand.**",
+      "Every event follows the naming convention in",
+      "`docs/EVENT_TOPIC_CONVENTION.md`.",
+      "",
+      "| Contract | Event | Topics and payload (positional) |",
+      "|---|---|---|",
+      ...rows,
+      "",
+    ].join("\n");
+    fs.writeFileSync(path.join(SCHEMAS_DIR, "CATALOG.md"), text);
+    console.log(`wrote CATALOG.md (${rows.length} events)`);
+    return;
   }
 
   if (cmd === "update") {
     const i = rest.indexOf("--breaking");
     const reason = i === -1 ? undefined : rest[i + 1];
     if (i !== -1 && !reason) throw new Error("--breaking requires a reason");
+
+    // Refuse to bake a non-conforming topic into the fixtures.
+    for (const [contract, events] of Object.entries(current)) {
+      const problems = conventionProblems(contract, events);
+      if (problems.length) {
+        throw new Error(`${contract}: naming convention violation:\n  - ${problems.join("\n  - ")}`);
+      }
+    }
+
     const next = planUpdate(fixtures, current, reason);
     for (const [contract, fx] of Object.entries(next)) {
       fs.writeFileSync(fixturePath(contract), JSON.stringify(fx, null, 2) + "\n");
@@ -334,7 +407,7 @@ function runCli(argv) {
     return;
   }
 
-  console.error('usage: schema.cjs check | update [--breaking "<reason>"]');
+  console.error('usage: schema.cjs check | catalog | update [--breaking "<reason>"]');
   process.exit(2);
 }
 
@@ -346,6 +419,7 @@ module.exports = {
   loadFixtures,
   diffEvents,
   versionProblems,
+  conventionProblems,
   planUpdate,
   eventKey,
 };

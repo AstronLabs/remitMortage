@@ -108,7 +108,7 @@ impl OraclePriceContract {
     fn median(env: &Env, values: &Vec<i128>) -> i128 {
         let mut remaining = values.clone();
         let mut sorted: Vec<i128> = Vec::new(env);
-        while remaining.len() > 0 {
+        while !remaining.is_empty() {
             let mut min_index: u32 = 0;
             let mut min_value = remaining.get_unchecked(0);
             for i in 1..remaining.len() {
@@ -124,7 +124,7 @@ impl OraclePriceContract {
 
         let len = sorted.len();
         let mid = len / 2;
-        if len % 2 == 0 {
+        if len.is_multiple_of(2) {
             // Average the two middle values. Integer division truncates
             // toward zero, which is an acceptable, documented rounding
             // choice for an even-count median of a price in minor units.
@@ -456,7 +456,9 @@ impl OraclePriceContract {
         }
 
         reporters.push_back(reporter.clone());
-        env.storage().instance().set(&DataKey::Reporters, &reporters);
+        env.storage()
+            .instance()
+            .set(&DataKey::Reporters, &reporters);
 
         env.events()
             .publish((symbol_short!("rep_add"),), (reporter,));
@@ -486,7 +488,9 @@ impl OraclePriceContract {
         }
         let index = found_index.ok_or(OracleError::ReporterNotFound)?;
         reporters.remove(index);
-        env.storage().instance().set(&DataKey::Reporters, &reporters);
+        env.storage()
+            .instance()
+            .set(&DataKey::Reporters, &reporters);
 
         env.events()
             .publish((symbol_short!("rep_rm"),), (reporter,));

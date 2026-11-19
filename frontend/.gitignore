@@ -42,3 +42,6 @@ next-env.d.ts
 
 # axe accessibility reports
 /a11y-report
+
+*storybook.log
+storybook-static

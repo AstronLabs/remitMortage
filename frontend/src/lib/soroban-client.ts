@@ -7,6 +7,7 @@ import {
   Networks,
   BASE_FEE,
   nativeToScVal,
+  scValToNative,
   Address,
   rpc as SorobanRpc,
 } from "@stellar/stellar-sdk";
@@ -17,6 +18,15 @@ import {
   writeCachedSimulation,
 } from "./simulation-cache";
 import { classifyWalletError } from "./wallet-errors";
+import {
+  SimulationBlockedError,
+  buildTransactionPreview,
+  type ParsedOperation,
+  type ParsedTransaction,
+  type PreviewIntent,
+  type SimulationOutcome,
+  type TransactionPreview,
+} from "./transaction-preview";
 
 const DEFAULT_NETWORK = Networks.TESTNET;
 const DEFAULT_GOAL = "savings";
@@ -414,12 +424,205 @@ export class WalletSignatureError extends Error {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Transaction preview (issue #884)
+// ---------------------------------------------------------------------------
+
+/** Decodes one operation of an envelope into the shape the preview reads. */
+function parseOperation(operation: Record<string, unknown>): ParsedOperation {
+  const type = String(operation.type ?? "unknown");
+  const parsed: ParsedOperation = { type };
+
+  if (type === "invokeHostFunction") {
+    try {
+      const invocation = (
+        operation.func as { invokeContract: () => unknown }
+      ).invokeContract() as {
+        contractAddress: () => unknown;
+        functionName: () => { toString: () => string };
+        args: () => unknown[];
+      };
+
+      parsed.contractId = Address.fromScAddress(
+        invocation.contractAddress() as never
+      ).toString();
+      parsed.functionName = invocation.functionName().toString();
+      parsed.args = invocation.args().map((arg) => {
+        try {
+          const native = scValToNative(arg as never);
+          return typeof native === "bigint" ? native.toString() : String(native);
+        } catch {
+          return "(undecodable)";
+        }
+      });
+    } catch {
+      // A host function this SDK cannot decode stays an unnamed contract call,
+      // which the preview reports as unrecognised rather than guessing.
+    }
+    return parsed;
+  }
+
+  if (type === "payment" || type === "pathPaymentStrictSend") {
+    parsed.destination = operation.destination as string | undefined;
+    parsed.amount = operation.amount as string | undefined;
+    const asset = operation.asset as { code?: string } | undefined;
+    parsed.assetCode = asset?.code ?? "XLM";
+    return parsed;
+  }
+
+  if (type === "setOptions") {
+    const signer = operation.signer as
+      | { ed25519PublicKey?: string; weight?: number }
+      | undefined;
+    if (signer?.ed25519PublicKey !== undefined) {
+      parsed.signers = [
+        { key: signer.ed25519PublicKey, weight: Number(signer.weight ?? 0) },
+      ];
+    }
+    parsed.thresholds = {
+      masterWeight: operation.masterWeight as number | undefined,
+      low: operation.lowThreshold as number | undefined,
+      medium: operation.medThreshold as number | undefined,
+      high: operation.highThreshold as number | undefined,
+    };
+    return parsed;
+  }
+
+  return parsed;
+}
+
 /**
- * Sign with Freighter and submit. Wallet-side failures (rejection, wrong
- * network, locked extension) are rethrown as `WalletSignatureError`; network
- * and submission failures keep their plain messages.
+ * Decodes the envelope that is about to be signed.
+ *
+ * Returns null when the XDR cannot be read — the caller treats that as a hard
+ * block, since an envelope nobody can describe must not reach a wallet prompt.
  */
-export async function signAndSubmit(txXdr: string): Promise<string> {
+export function parseTransactionEnvelope(txXdr: string): ParsedTransaction | null {
+  try {
+    const tx = TransactionBuilder.fromXDR(txXdr, networkPassphrase());
+    const operations =
+      "operations" in tx ? (tx.operations as unknown as Record<string, unknown>[]) : [];
+
+    return {
+      source: "source" in tx ? String(tx.source) : "",
+      feeStroops: Number((tx as { fee?: string | number }).fee ?? 0),
+      operations: operations.map(parseOperation),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when the envelope invokes a contract, i.e. when Soroban simulation is
+ * the right pre-check. A classic transaction (payment, setOptions) has nothing
+ * for `simulateTransaction` to run, so simulating it would always "fail" and
+ * would block a perfectly good transaction.
+ */
+function requiresSorobanSimulation(parsed: ParsedTransaction): boolean {
+  return parsed.operations.some((operation) => operation.type === "invokeHostFunction");
+}
+
+/** Simulates `txXdr` and reports only whether the network would accept it. */
+async function simulateForPreview(txXdr: string): Promise<SimulationOutcome> {
+  try {
+    const server = getRpcServer();
+    const tx = TransactionBuilder.fromXDR(txXdr, networkPassphrase());
+    const simulated = await server.simulateTransaction(tx as never);
+
+    const error = getSimulationError(simulated);
+    if (error) return { ok: false, error };
+
+    const raw = simulated as unknown as { minResourceFee?: string | number };
+    return {
+      ok: true,
+      minResourceFeeStroops:
+        raw.minResourceFee === undefined ? undefined : Number(raw.minResourceFee),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export interface PreviewOptions {
+  intent: PreviewIntent;
+  xlmPriceUsd?: number | null;
+}
+
+/**
+ * Simulates a transaction and returns the plain-language preview to show
+ * **before** the wallet prompt (issue #884).
+ *
+ * The preview is derived from the envelope itself, then cross-checked against
+ * `intent` — what the user's form said — so a transaction that does not match
+ * the form is reported rather than silently signed.
+ */
+export async function previewTransaction(
+  txXdr: string,
+  options: PreviewOptions
+): Promise<TransactionPreview> {
+  const parsed = parseTransactionEnvelope(txXdr);
+
+  let simulation: SimulationOutcome;
+  if (!parsed) {
+    simulation = { ok: false, error: "the transaction envelope could not be decoded" };
+  } else if (requiresSorobanSimulation(parsed)) {
+    simulation = await simulateForPreview(txXdr);
+  } else {
+    // Classic operations: the decoded envelope is the whole truth, and there
+    // is no host function to simulate. The effects below still come from the
+    // envelope, so the preview is no less accurate.
+    simulation = { ok: true };
+  }
+
+  return buildTransactionPreview({
+    parsed,
+    simulation,
+    intent: options.intent,
+    xlmPriceUsd: options.xlmPriceUsd ?? null,
+  });
+}
+
+export interface SignAndSubmitOptions {
+  /**
+   * A preview the caller already showed and the user approved. When omitted,
+   * `signAndSubmit` runs the preview itself — so there is no code path to a
+   * wallet prompt that skips simulation.
+   */
+  preview?: TransactionPreview;
+  /** Used only when `preview` is omitted, to build one. */
+  intent?: PreviewIntent;
+}
+
+/**
+ * Sign with Freighter and submit.
+ *
+ * **Simulation is a precondition** (issue #884): the transaction is simulated
+ * and previewed before the wallet is touched, and a preview that is not `ok`
+ * throws `SimulationBlockedError` without ever opening the signing prompt.
+ * Passing an already-approved `preview` reuses it rather than simulating twice.
+ *
+ * Wallet-side failures (rejection, wrong network, locked extension) are
+ * rethrown as `WalletSignatureError`; network and submission failures keep
+ * their plain messages.
+ */
+export async function signAndSubmit(
+  txXdr: string,
+  options: SignAndSubmitOptions = {}
+): Promise<string> {
+  const preview =
+    options.preview ??
+    (await previewTransaction(txXdr, {
+      intent: options.intent ?? { account: "" },
+    }));
+
+  // Deliberately before the dynamic import: a blocked transaction must not
+  // even load the wallet API, let alone prompt.
+  if (!preview.ok) throw new SimulationBlockedError(preview);
+
   let signedXdr: string;
 
   try {

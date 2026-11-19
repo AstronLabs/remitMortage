@@ -47,7 +47,7 @@ erasureRouter.get(
   "/:requestId",
   authMiddleware,
   async (req: AuthenticatedRequest, res) => {
-    const { requestId } = req.params;
+    const requestId = String(req.params.requestId);
     const request = getErasureRequest(requestId);
 
     if (!request) {
@@ -72,7 +72,7 @@ erasureRouter.post(
   authMiddleware,
   requireAdmin,
   (req: AuthenticatedRequest, res) => {
-    const { requestId } = req.params;
+    const requestId = String(req.params.requestId);
     const { reason, expiresAt } = req.body as {
       reason?: LegalHoldReason;
       expiresAt?: string;
@@ -120,7 +120,8 @@ erasureRouter.delete(
   authMiddleware,
   requireAdmin,
   (req: AuthenticatedRequest, res) => {
-    const { requestId, holdId } = req.params;
+    const requestId = String(req.params.requestId);
+    const holdId = String(req.params.holdId);
 
     try {
       const updated = liftLegalHold(requestId, holdId, req.user!.walletAddress);
@@ -144,7 +145,7 @@ erasureRouter.post(
   authMiddleware,
   requireAdmin,
   (req: AuthenticatedRequest, res) => {
-    const { requestId } = req.params;
+    const requestId = String(req.params.requestId);
     const { decision, reason } = req.body as {
       decision?: "approve" | "reject";
       reason?: string;
@@ -183,7 +184,7 @@ erasureRouter.post(
   authMiddleware,
   requireAdmin,
   async (req: AuthenticatedRequest, res) => {
-    const { requestId } = req.params;
+    const requestId = String(req.params.requestId);
 
     try {
       const updated = await executeErasure(requestId, req.user!.walletAddress);

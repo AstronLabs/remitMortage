@@ -7,6 +7,7 @@ import { rpc, scValToNative } from "@stellar/stellar-sdk";
 import { getRpcServer } from "../lib/soroban-rpc";
 import { useWallet } from "../context/WalletContext";
 import { useNotifications, type ToastInput } from "../context/NotificationContext";
+import { safeParseJson } from "../lib/safe-object";
 
 /** Polling cadence for Soroban getEvents, per the feature spec. */
 export const EVENT_POLL_INTERVAL_MS = 10_000;
@@ -285,7 +286,7 @@ export function useContractEvents() {
           if (cancelled) return;
 
           try {
-            const parsed = JSON.parse(event.data as string) as unknown;
+            const parsed = safeParseJson<unknown>(event.data as string);
             for (const record of normalizeStreamPayload(parsed)) {
               emitStreamEvent(record, publicKey as string, notifyRef.current);
             }

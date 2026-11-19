@@ -35,14 +35,20 @@ mod test_attestor_change_timelock;
 #[cfg(test)]
 mod beneficiary_tests;
 
+#[cfg(test)]
+mod test_scheduled_release;
+
 pub use crate::errors::EscrowError;
 use crate::token_utils::get_token_client;
 use crate::types::DataKey;
 pub use crate::types::{
     AutoDepositSchedule, BeneficiaryList, BeneficiarySplit, BorrowerRecord, EscrowConfig,
-    PendingAttestorChangeProposal, PendingPenaltyProposal, PendingUpgradeRecord,
+    HardshipWithdrawalRequest, PendingAttestorChangeProposal, PendingPenaltyProposal,
+    PendingUpgradeRecord, ReleaseSchedule, ReleaseScheduleLimits, TtlKeeperEntry,
 };
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, BytesN, Env, IntoVal, Symbol};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, Address, BytesN, Env, IntoVal, Symbol, Vec,
+};
 
 // Fallback TTL values, used only before `initialize` has stored a config.
 // Live values come from EscrowConfig so each network can be tuned separately.
@@ -51,10 +57,22 @@ const DEFAULT_INSTANCE_LIFETIME_THRESHOLD: u32 = 129_600; // ~7.5 days
 const DEFAULT_PERSISTENT_BUMP_AMOUNT: u32 = 518_400; // ~30 days
 const DEFAULT_PERSISTENT_LIFETIME_THRESHOLD: u32 = 129_600; // ~7.5 days
 
+/// Default limits on rescheduling a goal's release time, used until the admin
+/// calls `set_release_schedule_limits`.
+const DEFAULT_MAX_RESCHEDULES: u32 = 2;
+const DEFAULT_MIN_RESCHEDULE_INTERVAL_SECS: u64 = 86_400; // 1 day
+const DEFAULT_MAX_RELEASE_HORIZON_SECS: u64 = 366 * 86_400; // ~1 year
+const DEFAULT_MAX_RESCHEDULE_SHIFT_SECS: u64 = 90 * 86_400; // ~3 months
+
 /// Default window, in ledgers, within which an admin must approve a
 /// hardship withdrawal request before it expires (~7 days at production
 /// ledger time). Admin-configurable via `set_hardship_approval_window_ledgers`.
 const DEFAULT_HARDSHIP_WINDOW_LEDGERS: u32 = 120_960;
+
+/// Upper bound on the number of records one `extend_ttl_batch` call may touch
+/// (issue #855). Bounds the per-call CPU/ledger footprint so the permissionless
+/// keeper cannot be used to force an unbounded amount of work.
+const MAX_TTL_KEEPER_BATCH: u32 = 20;
 
 // Use a small constant in tests so ledger advances stay well within instance TTL.
 #[cfg(not(test))]
@@ -175,7 +193,9 @@ impl EscrowContract {
     }
 
     fn get_pending_attestor_change(env: &Env) -> Option<PendingAttestorChangeProposal> {
-        env.storage().instance().get(&DataKey::PendingAttestorChange)
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingAttestorChange)
     }
 
     fn attestors(env: &Env) -> Result<crate::types::BeneficiaryAttestorConfig, EscrowError> {
@@ -776,9 +796,10 @@ impl EscrowContract {
             return Err(EscrowError::InvalidAmount);
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::HardshipApprovalWindowLedgers, &approval_window_ledgers);
+        env.storage().instance().set(
+            &DataKey::HardshipApprovalWindowLedgers,
+            &approval_window_ledgers,
+        );
         env.storage()
             .instance()
             .set(&DataKey::HardshipCapPerPeriod, &cap_per_period);
@@ -875,7 +896,11 @@ impl EscrowContract {
 
         env.events().publish(
             (symbol_short!("hs_appr"), goal_id.clone()),
-            (borrower.clone(), config.admin.clone(), request.reason_hash.clone()),
+            (
+                borrower.clone(),
+                config.admin.clone(),
+                request.reason_hash.clone(),
+            ),
         );
 
         Self::extend_instance_ttl(&env);
@@ -1086,6 +1111,16 @@ impl EscrowContract {
                 }
             }
 
+            // Enforce the admin-confirmed scheduled release time, if any.
+            // Goals without a confirmed date skip this check entirely.
+            let schedule_key = DataKey::ReleaseSchedule(borrower.clone(), goal_id.clone());
+            let schedule: Option<ReleaseSchedule> = env.storage().persistent().get(&schedule_key);
+            if let Some(schedule) = &schedule {
+                if env.ledger().timestamp() < schedule.release_time {
+                    return Err(EscrowError::ReleaseTimeNotReached);
+                }
+            }
+
             let mut amount_withdrawn = record.deposited;
             if let Some(vault) = &config.yield_vault {
                 let yield_shares = Self::read_yield_shares(&env, &borrower, &goal_id);
@@ -1140,10 +1175,217 @@ impl EscrowContract {
                 Self::set_borrower(&env, &borrower, &goal_id, &record);
             }
 
+            // The date has been used up; a rolled-over cycle starts without one.
+            if schedule.is_some() {
+                env.storage().persistent().remove(&schedule_key);
+            }
+            env.storage()
+                .persistent()
+                .remove(&DataKey::PendingReleaseTime(
+                    borrower.clone(),
+                    goal_id.clone(),
+                ));
+
             Self::extend_instance_ttl(&env);
 
             Ok(amount_withdrawn)
         }) // non_reentrant
+    }
+
+    fn read_release_schedule_limits(env: &Env) -> ReleaseScheduleLimits {
+        env.storage()
+            .instance()
+            .get(&DataKey::ReleaseScheduleLimits)
+            .unwrap_or(ReleaseScheduleLimits {
+                max_reschedules: DEFAULT_MAX_RESCHEDULES,
+                min_reschedule_interval_secs: DEFAULT_MIN_RESCHEDULE_INTERVAL_SECS,
+                max_horizon_secs: DEFAULT_MAX_RELEASE_HORIZON_SECS,
+                max_shift_secs: DEFAULT_MAX_RESCHEDULE_SHIFT_SECS,
+            })
+    }
+
+    /// Set the limits on how often and how far a goal's release time can be
+    /// rescheduled. Admin-only. See [`ReleaseScheduleLimits`] for the meaning
+    /// of `0`.
+    pub fn set_release_schedule_limits(
+        env: Env,
+        limits: ReleaseScheduleLimits,
+    ) -> Result<(), EscrowError> {
+        let config = Self::get_config(&env)?;
+        config.admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::ReleaseScheduleLimits, &limits);
+        Self::extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    pub fn get_release_schedule_limits(env: Env) -> ReleaseScheduleLimits {
+        Self::read_release_schedule_limits(&env)
+    }
+
+    /// Borrower proposes a release time (ledger timestamp, in seconds) for a
+    /// goal. It has no effect on `release` until the admin confirms it with
+    /// `confirm_release_time`. A new proposal replaces any unconfirmed one.
+    ///
+    /// The proposal is checked against the limits now, so an out-of-bounds
+    /// date is rejected immediately rather than at confirmation:
+    /// - the time must be in the future and within `max_horizon_secs`;
+    /// - if a date is already confirmed, the goal must not have used up its
+    ///   `max_reschedules`, the confirmed date must not have passed, at least
+    ///   `min_reschedule_interval_secs` must have elapsed since it was
+    ///   confirmed, and the move must be within `max_shift_secs`.
+    pub fn propose_release_time(
+        env: Env,
+        borrower: Address,
+        goal_id: Symbol,
+        release_time: u64,
+    ) -> Result<(), EscrowError> {
+        Self::check_not_paused(&env)?;
+        borrower.require_auth();
+
+        let record = Self::get_borrower(&env, &borrower, &goal_id);
+        if record.deposited == 0 {
+            return Err(EscrowError::BorrowerNotFound);
+        }
+        if record.released {
+            return Err(EscrowError::AlreadyReleased);
+        }
+        if record.withdrawn {
+            return Err(EscrowError::AlreadyWithdrawn);
+        }
+        if record.seized {
+            return Err(EscrowError::AlreadySeized);
+        }
+
+        let limits = Self::read_release_schedule_limits(&env);
+        let now = env.ledger().timestamp();
+
+        if release_time <= now {
+            return Err(EscrowError::InvalidReleaseTime);
+        }
+        if limits.max_horizon_secs > 0 && release_time - now > limits.max_horizon_secs {
+            return Err(EscrowError::InvalidReleaseTime);
+        }
+
+        let current: Option<ReleaseSchedule> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ReleaseSchedule(borrower.clone(), goal_id.clone()));
+        if let Some(current) = current {
+            if current.reschedule_count >= limits.max_reschedules
+                || now >= current.release_time
+                || now.saturating_sub(current.confirmed_at) < limits.min_reschedule_interval_secs
+            {
+                return Err(EscrowError::RescheduleLimitReached);
+            }
+            let shift = release_time.abs_diff(current.release_time);
+            if limits.max_shift_secs > 0 && shift > limits.max_shift_secs {
+                return Err(EscrowError::InvalidReleaseTime);
+            }
+        }
+
+        let key = DataKey::PendingReleaseTime(borrower.clone(), goal_id.clone());
+        env.storage().persistent().set(&key, &release_time);
+        Self::extend_persistent_ttl(&env, &key);
+        Self::owner_activity(&env, &borrower, &goal_id);
+
+        env.events().publish(
+            (symbol_short!("rel_prop"), goal_id),
+            (borrower, release_time),
+        );
+        Self::extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Admin confirms the borrower's pending release time, making it binding.
+    /// Re-validates the proposal against the limits at the moment of
+    /// confirmation, since time may have passed since it was proposed.
+    pub fn confirm_release_time(
+        env: Env,
+        borrower: Address,
+        goal_id: Symbol,
+    ) -> Result<u64, EscrowError> {
+        Self::check_not_paused(&env)?;
+        let config = Self::get_config(&env)?;
+        config.admin.require_auth();
+
+        let pending_key = DataKey::PendingReleaseTime(borrower.clone(), goal_id.clone());
+        let release_time: u64 = env
+            .storage()
+            .persistent()
+            .get(&pending_key)
+            .ok_or(EscrowError::NoPendingReleaseTime)?;
+
+        let record = Self::get_borrower(&env, &borrower, &goal_id);
+        if record.deposited == 0 || record.released || record.withdrawn || record.seized {
+            env.storage().persistent().remove(&pending_key);
+            return Err(EscrowError::BorrowerNotFound);
+        }
+
+        let limits = Self::read_release_schedule_limits(&env);
+        let now = env.ledger().timestamp();
+        if release_time <= now
+            || (limits.max_horizon_secs > 0 && release_time - now > limits.max_horizon_secs)
+        {
+            env.storage().persistent().remove(&pending_key);
+            return Err(EscrowError::InvalidReleaseTime);
+        }
+
+        let schedule_key = DataKey::ReleaseSchedule(borrower.clone(), goal_id.clone());
+        let current: Option<ReleaseSchedule> = env.storage().persistent().get(&schedule_key);
+        let reschedule_count = match current {
+            Some(current) => {
+                if current.reschedule_count >= limits.max_reschedules
+                    || now >= current.release_time
+                    || now.saturating_sub(current.confirmed_at)
+                        < limits.min_reschedule_interval_secs
+                {
+                    return Err(EscrowError::RescheduleLimitReached);
+                }
+                if limits.max_shift_secs > 0
+                    && release_time.abs_diff(current.release_time) > limits.max_shift_secs
+                {
+                    return Err(EscrowError::InvalidReleaseTime);
+                }
+                current.reschedule_count + 1
+            }
+            None => 0,
+        };
+
+        let schedule = ReleaseSchedule {
+            release_time,
+            reschedule_count,
+            confirmed_at: now,
+        };
+        env.storage().persistent().set(&schedule_key, &schedule);
+        Self::extend_persistent_ttl(&env, &schedule_key);
+        env.storage().persistent().remove(&pending_key);
+
+        env.events().publish(
+            (symbol_short!("rel_conf"), goal_id),
+            (borrower, release_time, reschedule_count),
+        );
+        Self::extend_instance_ttl(&env);
+        Ok(release_time)
+    }
+
+    /// The admin-confirmed release schedule for a goal, if any.
+    pub fn get_release_schedule(
+        env: Env,
+        borrower: Address,
+        goal_id: Symbol,
+    ) -> Option<ReleaseSchedule> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ReleaseSchedule(borrower, goal_id))
+    }
+
+    /// The borrower's proposed, not yet confirmed release time for a goal.
+    pub fn get_pending_release_time(env: Env, borrower: Address, goal_id: Symbol) -> Option<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PendingReleaseTime(borrower, goal_id))
     }
 
     /// Propose new early withdrawal penalty tiers (timelocked).
@@ -1845,6 +2087,44 @@ impl EscrowContract {
             .get::<DataKey, EscrowConfig>(&DataKey::Config)
             .map(|c| c.permissioned_mode)
             .unwrap_or(false)
+    }
+
+    /// Permissionless TTL keeper (issue #855).
+    ///
+    /// Extends the instance entry's TTL and the persistent TTL of every listed
+    /// borrower/goal record. Any address may call it — a keeper bot, an
+    /// operator, or the borrower themselves — so a dormant record cannot
+    /// archive out from under its owner while there is someone willing to pay
+    /// the ledger fee.
+    ///
+    /// Only records the contract owns are addressable: each entry is a
+    /// `(borrower, goal_id)` pair naming a [`DataKey::Borrower`] entry. A
+    /// record that does not exist is rejected with [`EscrowError::EscrowGoalNotFound`]
+    /// rather than silently extending an unrelated key. The batch must be
+    /// non-empty and at most [`MAX_TTL_KEEPER_BATCH`] entries, otherwise the
+    /// call fails with [`EscrowError::InvalidTtlConfig`] before doing any work.
+    pub fn extend_ttl_batch(env: Env, entries: Vec<TtlKeeperEntry>) -> Result<u32, EscrowError> {
+        let count = entries.len();
+        if count == 0 || count > MAX_TTL_KEEPER_BATCH {
+            return Err(EscrowError::InvalidTtlConfig);
+        }
+
+        // The instance entry backs config and every query, so extend it once
+        // for the whole batch.
+        Self::extend_instance_ttl(&env);
+
+        let mut extended = 0u32;
+        for entry in entries.iter() {
+            let key = DataKey::Borrower(entry.borrower.clone(), entry.goal_id.clone());
+            if !env.storage().persistent().has(&key) {
+                return Err(EscrowError::EscrowGoalNotFound);
+            }
+            Self::extend_persistent_ttl(&env, &key);
+            extended += 1;
+        }
+
+        env.events().publish((symbol_short!("ttl_ext"),), extended);
+        Ok(extended)
     }
 
     /// Internal helper: rejects the call if permissioned mode is on and the

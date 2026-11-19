@@ -1,0 +1,2 @@
+DROP VIEW IF EXISTS "OutboxEventLag";
+DROP TABLE IF EXISTS "OutboxEvent";

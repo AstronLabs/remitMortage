@@ -8,12 +8,17 @@
  * allowlist. Extending the allowlist is a data-only change (edit
  * scripts/license-allowlist.json) — no workflow/script changes required.
  *
+ * A single package can be excepted without allowing its license everywhere by
+ * adding `"name": "reason"` to scripts/license-exceptions.json (next to the
+ * allowlist); a `name@version` key pins the exception to that version.
+ *
  * Usage:
  *   node scripts/license-compliance.js <npm|cargo> <report.json> <allowlist.json>
  */
 "use strict";
 
 const fs = require("fs");
+const path = require("path");
 
 const [format, reportPath, allowlistPath] = process.argv.slice(2);
 if (!format || !reportPath || !allowlistPath) {
@@ -23,6 +28,15 @@ if (!format || !reportPath || !allowlistPath) {
 
 const allow = new Set(JSON.parse(fs.readFileSync(allowlistPath, "utf8")).map((s) => String(s).trim()));
 const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+
+const exceptionsPath = path.join(path.dirname(allowlistPath), "license-exceptions.json");
+const exceptions = fs.existsSync(exceptionsPath) ? JSON.parse(fs.readFileSync(exceptionsPath, "utf8")) : {};
+
+/** True when the package (`name@version`) has a documented exception. */
+function excepted(pkg) {
+  const name = pkg.slice(0, pkg.lastIndexOf("@"));
+  return Object.hasOwn(exceptions, pkg) || Object.hasOwn(exceptions, name);
+}
 
 /** True when every declared license for an entry is in the allowlist. */
 function allowed(licenses) {
@@ -36,11 +50,11 @@ if (format === "npm") {
     // Dependencies that only carry a license file (no SPDX id) are skipped:
     // there is no machine-readable license to compare.
     if (!meta.licenses) continue;
-    if (!allowed(meta.licenses)) violations.push({ pkg, licenses: meta.licenses });
+    if (!allowed(meta.licenses) && !excepted(pkg)) violations.push({ pkg, licenses: meta.licenses });
   }
 } else if (format === "cargo") {
   for (const dep of report) {
-    if (!allowed(dep.license)) violations.push({ pkg: `${dep.name}@${dep.version}`, licenses: dep.license });
+    if (!allowed(dep.license) && !excepted(`${dep.name}@${dep.version}`)) violations.push({ pkg: `${dep.name}@${dep.version}`, licenses: dep.license });
   }
 } else {
   console.error(`unknown report format: ${format}`);

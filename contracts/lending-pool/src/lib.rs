@@ -18,12 +18,26 @@ mod test_loan_assumption;
 #[cfg(test)]
 mod test_credit_line;
 
+#[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
+mod test_deposit_caps;
+
+#[cfg(test)]
+mod test_late_fee_cap;
+
+#[cfg(test)]
+mod test_yield_mode;
+
 pub use crate::errors::{LoanAssumptionError, PoolError};
 pub use crate::types::{
-    BatchDisburseItem, CreditLine, DataKey, FeatureKey, HalvingInfo, InvestorRecord,
-    LoanAssumptionRequest, LoanCollateralRecord, LoanPortabilitySnapshot, LoanRecord, LoanStatus,
-    PauseGroup, PayoffQuote, PendingUpgradeRecord, PoolConfig, PoolHealth, RepaymentSchedule,
-    RestructureProposal, Tranche, TrancheInfo,
+    BatchDisburseItem, CreditLine, DataKey, FeatureKey, HalvingInfo, InvestorLockupPosition,
+    InvestorRecord, LoanAssumptionRequest, LoanCollateralRecord, LoanIntroConfig, LoanPhase,
+    LoanPortabilitySnapshot, LoanRecord, LoanStatus, LockupTier, PauseGroup, PayoffQuote,
+    PendingCapChange, PendingHaircutChange, PendingUpgradeRecord, PendingWindDown, PoolConfig,
+    PoolHealth, RepaymentSchedule, RestructureProposal, ScheduleView, Tranche, TrancheInfo,
+    WindDownStatus, YieldMode,
 };
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
@@ -70,6 +84,10 @@ const LEDGERS_PER_YEAR: u32 = 12 * LEDGERS_PER_MONTH;
 const LEDGERS_PER_DAY: u32 = 17_280; // ~1 day
 #[cfg(test)]
 const LEDGERS_PER_DAY: u32 = 100;
+/// Deposit-cap changes are always timelocked: the delay defaults to one day
+/// and can be raised, but never lowered below this floor, so the timelock
+/// cannot be switched off by setting the delay to zero.
+const MIN_CAP_CHANGE_DELAY_LEDGERS: u32 = LEDGERS_PER_DAY;
 const GRACE_PERIOD_LEDGERS: u32 = 120_960; // ~7 days (default grace period)
 #[allow(dead_code)]
 const LATE_PENALTY_BPS: u32 = 50; // 50 bps = 0.5% (legacy flat late penalty)
@@ -113,6 +131,15 @@ const FEE_HIGH_BPS: u32 = 200;
 /// coerced proposal can never route the entire yield stream away from the
 /// investors who funded the loans.
 const MAX_FEE_SWITCH_BPS: u32 = 5_000;
+
+// ── Loan Assumption Fee Constants ────────────────────────────────────
+/// Hard ceiling on the loan assumption fee: 2% (200 bps) of the loan's
+/// outstanding principal.
+///
+/// Enforced both when the fee is configured and when it is charged, so a
+/// misconfigured or malicious admin parameter can never confiscate a
+/// meaningful share of the loan from the incoming borrower.
+const MAX_ASSUMPTION_FEE_BPS: u32 = 200;
 
 // ── Dynamic Interest Rate Constants ────────────────────────────────────
 /// Excellent tier (score 80–100): 4% APR.
@@ -372,45 +399,39 @@ impl LendingPoolContract {
     fn read_investor_lockup(env: &Env, investor: &Address) -> Option<InvestorLockupPosition> {
         env.storage()
             .persistent()
-            .get(&DataKey::InvestorLockup(investor.clone()))
+            .get(&FeatureKey::InvestorLockup(investor.clone()))
     }
 
     fn set_investor_lockup(env: &Env, investor: &Address, pos: &InvestorLockupPosition) {
         env.storage()
             .persistent()
-            .set(&DataKey::InvestorLockup(investor.clone()), pos);
-    }
-
-    fn remove_investor_lockup(env: &Env, investor: &Address) {
-        env.storage()
-            .persistent()
-            .remove(&DataKey::InvestorLockup(investor.clone()));
+            .set(&FeatureKey::InvestorLockup(investor.clone()), pos);
     }
 
     fn read_lockup_bonus_pool(env: &Env) -> i128 {
         env.storage()
             .instance()
-            .get(&DataKey::LockupBonusPool)
+            .get(&FeatureKey::LockupBonusPool)
             .unwrap_or(0i128)
     }
 
     fn set_lockup_bonus_pool(env: &Env, amount: i128) {
         env.storage()
             .instance()
-            .set(&DataKey::LockupBonusPool, &amount);
+            .set(&FeatureKey::LockupBonusPool, &amount);
     }
 
     fn read_lockup_bonus_fee_share_bps(env: &Env) -> u32 {
         env.storage()
             .instance()
-            .get(&DataKey::LockupBonusFeeShareBps)
+            .get(&FeatureKey::LockupBonusFeeShareBps)
             .unwrap_or(0u32)
     }
 
     fn set_lockup_bonus_fee_share_bps_storage(env: &Env, bps: u32) {
         env.storage()
             .instance()
-            .set(&DataKey::LockupBonusFeeShareBps, &bps);
+            .set(&FeatureKey::LockupBonusFeeShareBps, &bps);
     }
 
     /// Total bonus accrued on `record`'s current deposit under `lockup`'s
@@ -441,34 +462,34 @@ impl LendingPoolContract {
     fn read_loan_extension_count(env: &Env, loan_id: &BytesN<32>) -> u32 {
         env.storage()
             .persistent()
-            .get(&DataKey::LoanExtensionCount(loan_id.clone()))
+            .get(&FeatureKey::LoanExtensionCount(loan_id.clone()))
             .unwrap_or(0u32)
     }
 
     fn set_loan_extension_count(env: &Env, loan_id: &BytesN<32>, count: u32) {
         env.storage()
             .persistent()
-            .set(&DataKey::LoanExtensionCount(loan_id.clone()), &count);
+            .set(&FeatureKey::LoanExtensionCount(loan_id.clone()), &count);
     }
 
     fn read_max_extensions_per_loan(env: &Env) -> u32 {
         env.storage()
             .instance()
-            .get(&DataKey::MaxExtensionsPerLoan)
+            .get(&FeatureKey::MaxExtensionsPerLoan)
             .unwrap_or(2u32)
     }
 
     fn read_max_extension_months(env: &Env) -> u32 {
         env.storage()
             .instance()
-            .get(&DataKey::MaxExtensionMonths)
+            .get(&FeatureKey::MaxExtensionMonths)
             .unwrap_or(12u32)
     }
 
     fn read_extension_fee_bps(env: &Env) -> u32 {
         env.storage()
             .instance()
-            .get(&DataKey::ExtensionFeeBps)
+            .get(&FeatureKey::ExtensionFeeBps)
             .unwrap_or(100u32)
     }
 
@@ -477,19 +498,19 @@ impl LendingPoolContract {
     fn read_loan_intro_config(env: &Env, loan_id: &BytesN<32>) -> Option<LoanIntroConfig> {
         env.storage()
             .persistent()
-            .get(&DataKey::LoanInterestOnly(loan_id.clone()))
+            .get(&FeatureKey::LoanInterestOnly(loan_id.clone()))
     }
 
     fn set_loan_intro_config(env: &Env, loan_id: &BytesN<32>, config: &LoanIntroConfig) {
         env.storage()
             .persistent()
-            .set(&DataKey::LoanInterestOnly(loan_id.clone()), config);
+            .set(&FeatureKey::LoanInterestOnly(loan_id.clone()), config);
     }
 
     fn read_max_interest_only_months(env: &Env) -> u32 {
         env.storage()
             .instance()
-            .get(&DataKey::MaxInterestOnlyMonths)
+            .get(&FeatureKey::MaxInterestOnlyMonths)
             .unwrap_or(24u32)
     }
 
@@ -513,7 +534,7 @@ impl LendingPoolContract {
         principal: i128,
     ) -> Result<(i128, i128), PoolError> {
         if config.origination_fee_bps > MAX_ORIGINATION_FEE_BPS {
-            return Err(PoolError::OriginationFeeTooHigh);
+            return Err(PoolError::FeeTooHigh);
         }
         let fee = principal
             .checked_mul(config.origination_fee_bps as i128)
@@ -551,7 +572,7 @@ impl LendingPoolContract {
     /// application fee, which is the deployment default.
     fn calculate_application_fee(config: &PoolConfig, principal: i128) -> Result<i128, PoolError> {
         if config.application_fee_bps > MAX_APPLICATION_FEE_BPS {
-            return Err(PoolError::ApplicationFeeTooHigh);
+            return Err(PoolError::FeeTooHigh);
         }
         if principal <= 0 || config.application_fee_bps == 0 {
             return Ok(0);
@@ -1394,6 +1415,248 @@ impl LendingPoolContract {
         record.claimed_yield = Self::current_yield_share(env, record.deposited);
     }
 
+    // ── Deposit Caps ────────────────────────────────────────────────────
+
+    fn deposit_cap_delay(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::DepositCapChangeDelay)
+            .unwrap_or(MIN_CAP_CHANGE_DELAY_LEDGERS)
+    }
+
+    fn read_tranche_deposit_cap(env: &Env, tranche: &Tranche) -> i128 {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::TrancheDepositCap(tranche.clone()))
+            .unwrap_or(0)
+    }
+
+    fn read_investor_deposit_cap(env: &Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::InvestorDepositCap)
+            .unwrap_or(0)
+    }
+
+    /// Rejects a deposit of `amount` that would push the investor's position
+    /// (`current_position + amount`) past the per-investor cap, or the
+    /// tranche's total past the tranche cap. Each rejection carries its own
+    /// error so callers can tell which limit they hit; when both would be
+    /// exceeded, the per-investor cap is reported. A cap of `0` is no cap, and
+    /// landing exactly on a cap is allowed.
+    fn check_deposit_caps(
+        env: &Env,
+        tranche: &Tranche,
+        current_position: i128,
+        amount: i128,
+    ) -> Result<(), PoolError> {
+        let investor_cap = Self::read_investor_deposit_cap(env);
+        if investor_cap > 0 && current_position.saturating_add(amount) > investor_cap {
+            return Err(PoolError::InvestorCapExceeded);
+        }
+        let tranche_cap = Self::read_tranche_deposit_cap(env, tranche);
+        if tranche_cap > 0 {
+            let total = Self::read_tranche_info(env, tranche).total_deposited;
+            if total.saturating_add(amount) > tranche_cap {
+                return Err(PoolError::TrancheCapExceeded);
+            }
+        }
+        Ok(())
+    }
+
+    /// Timelocked cap change shared by the tranche and investor caps.
+    ///
+    /// - No pending change: queues `cap`, executable after the configured
+    ///   delay, and emits `cap_prop`.
+    /// - Pending but not yet due: returns `TimelockActive`.
+    /// - Pending and due: applies the *queued* value (the `cap` argument is
+    ///   ignored, so what was announced is exactly what takes effect) and
+    ///   emits `cap_set`.
+    fn change_cap_with_timelock(
+        env: &Env,
+        live_key: FeatureKey,
+        pending_key: FeatureKey,
+        scope: Symbol,
+        cap: i128,
+    ) -> Result<(), PoolError> {
+        if cap < 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+        let now = env.ledger().sequence();
+        let pending: Option<PendingCapChange> = env.storage().instance().get(&pending_key);
+        match pending {
+            None => {
+                let proposal = PendingCapChange {
+                    cap,
+                    execute_after: now.saturating_add(Self::deposit_cap_delay(env)),
+                };
+                env.storage().instance().set(&pending_key, &proposal);
+                env.events().publish(
+                    (symbol_short!("cap_prop"), scope),
+                    (cap, proposal.execute_after),
+                );
+            }
+            Some(pending) => {
+                if now < pending.execute_after {
+                    return Err(PoolError::TimelockActive);
+                }
+                let old: i128 = env.storage().instance().get(&live_key).unwrap_or(0);
+                env.storage().instance().remove(&pending_key);
+                env.storage().instance().set(&live_key, &pending.cap);
+                env.events()
+                    .publish((symbol_short!("cap_set"), scope), (old, pending.cap));
+            }
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Ok(())
+    }
+
+    fn tranche_scope(tranche: &Tranche) -> Symbol {
+        match tranche {
+            Tranche::Senior => symbol_short!("senior"),
+            Tranche::Junior => symbol_short!("junior"),
+        }
+    }
+
+    // ── Late Fee Cap ────────────────────────────────────────────────────
+
+    /// The ceiling on late fees for one billing period (one installment
+    /// cycle), or `None` when no cap is configured. When both the absolute
+    /// and the percentage-of-installment limits are set, the lower applies.
+    fn late_fee_cap_per_period(env: &Env, installment: i128) -> Option<i128> {
+        let abs: i128 = env
+            .storage()
+            .instance()
+            .get(&FeatureKey::LateFeeCapAbs)
+            .unwrap_or(0);
+        let bps: u32 = env
+            .storage()
+            .instance()
+            .get(&FeatureKey::LateFeeCapBps)
+            .unwrap_or(0);
+        let mut cap: Option<i128> = None;
+        if abs > 0 {
+            cap = Some(abs);
+        }
+        if bps > 0 {
+            let by_pct = installment.saturating_mul(bps as i128) / BPS_SCALE as i128;
+            cap = Some(cap.map_or(by_pct, |c| c.min(by_pct)));
+        }
+        cap
+    }
+
+    /// Applies the per-period late-fee cap to `uncapped`, the fee accrued over
+    /// `overdue_ledgers` past the grace deadline.
+    ///
+    /// Fees accrue per billing period: each full `LEDGERS_PER_MONTH` of
+    /// lateness is one period, and the leftover is a final partial period
+    /// (rounded up to whole days exactly as the uncapped fee is). Each period
+    /// is capped on its own, so several missed installments pay up to one cap
+    /// each and the cap resets with the next period. The uncapped remainder is
+    /// simply never charged — nothing is stored or carried forward.
+    ///
+    /// With no cap configured the uncapped fee is returned untouched.
+    fn apply_late_fee_cap(
+        env: &Env,
+        loan_id: &BytesN<32>,
+        installment: i128,
+        daily_bps: u32,
+        overdue_ledgers: u32,
+        uncapped: i128,
+    ) -> i128 {
+        let cap = match Self::late_fee_cap_per_period(env, installment) {
+            Some(cap) => cap,
+            None => return uncapped,
+        };
+        let fee_for_days = |days: u32| -> i128 {
+            installment
+                .saturating_mul(daily_bps as i128)
+                .saturating_mul(days as i128)
+                / BPS_SCALE as i128
+        };
+        let full_periods = overdue_ledgers / LEDGERS_PER_MONTH;
+        let days_per_period = LEDGERS_PER_MONTH / LEDGERS_PER_DAY;
+        let partial_days = (overdue_ledgers % LEDGERS_PER_MONTH) / LEDGERS_PER_DAY + 1;
+
+        let capped = fee_for_days(days_per_period)
+            .min(cap)
+            .saturating_mul(full_periods as i128)
+            .saturating_add(fee_for_days(partial_days).min(cap))
+            .min(uncapped);
+
+        if capped < uncapped {
+            env.events().publish(
+                (symbol_short!("fee_capd"), loan_id.clone()),
+                (uncapped, capped, cap),
+            );
+        }
+        capped
+    }
+
+    // ── Investor Yield Mode ─────────────────────────────────────────────
+
+    fn read_yield_mode(env: &Env, investor: &Address) -> YieldMode {
+        env.storage()
+            .persistent()
+            .get(&FeatureKey::YieldMode(investor.clone()))
+            .unwrap_or(YieldMode::Claim)
+    }
+
+    /// Yield earned since the position's last checkpoint, i.e. everything
+    /// beyond the already-banked `accrued_yield`.
+    fn fresh_yield(env: &Env, record: &InvestorRecord) -> i128 {
+        let share = Self::current_yield_share(env, record.deposited);
+        (share - record.claimed_yield).max(0)
+    }
+
+    /// Banks the yield earned since the last checkpoint as claimable cash in
+    /// `accrued_yield`. Unlike `settle_accrued_yield` it does not re-add what
+    /// is already banked.
+    fn bank_fresh_yield(env: &Env, record: &mut InvestorRecord) {
+        record.accrued_yield += Self::fresh_yield(env, record);
+        record.claimed_yield = Self::current_yield_share(env, record.deposited);
+    }
+
+    /// Adds the yield earned since the last checkpoint to the position's
+    /// principal, in the position's own tranche, and returns the amount. The
+    /// tokens never leave the pool, so liquidity is unchanged; the bookkeeping
+    /// mirrors a deposit of the same size, except that no token transfer
+    /// happens and the deposit caps do not apply (it is growth, not new
+    /// capital). The caller must persist `record`.
+    fn compound_fresh_yield(env: &Env, investor: &Address, record: &mut InvestorRecord) -> i128 {
+        let amount = Self::fresh_yield(env, record);
+        if amount <= 0 {
+            return 0;
+        }
+        let tranche = record.tranche.clone();
+
+        record.deposited += amount;
+
+        let debt_balance = Self::read_debt_balance(env, investor, &tranche) + amount;
+        Self::set_debt_balance(env, investor, &tranche, debt_balance);
+        let debt_supply = Self::read_debt_total_supply(env, &tranche) + amount;
+        Self::set_debt_total_supply(env, &tranche, debt_supply);
+
+        let mut tranche_info = Self::read_tranche_info(env, &tranche);
+        tranche_info.total_deposited += amount;
+        Self::set_tranche_info(env, &tranche, &tranche_info);
+
+        let total_dep = Self::read_total_deposited(env) + amount;
+        Self::set_total_deposited(env, total_dep);
+
+        // Checkpoint against the enlarged principal so the same yield is not
+        // paid again.
+        record.claimed_yield = Self::current_yield_share(env, record.deposited);
+
+        env.events().publish(
+            (symbol_short!("y_comp"), investor.clone()),
+            (amount, record.deposited),
+        );
+        amount
+    }
+
     /// Map an anchored verification score to the corresponding interest rate tier.
     fn interest_rate_from_score(score: u32) -> u32 {
         if score >= 80 {
@@ -1660,6 +1923,10 @@ impl LendingPoolContract {
     /// Transfers USDC from the investor to this contract and updates the investor's
     /// record, per-tranche totals, and the pool's total liquidity.
     /// Supports an optional `first_loss_cap_bps` for junior tranche deposits to cap loss exposure.
+    ///
+    /// Rejected with `InvestorCapExceeded` if the investor's resulting position
+    /// would exceed the per-investor deposit cap, or `TrancheCapExceeded` if the
+    /// tranche's resulting total would exceed that tranche's cap.
     pub fn deposit_with_cap(
         env: Env,
         investor: Address,
@@ -1726,6 +1993,7 @@ impl LendingPoolContract {
                 // Investor already has a position in a different tranche.
                 return Err(PoolError::TrancheMismatch);
             }
+            Self::check_deposit_caps(&env, &tranche, record.deposited, amount)?;
             record.deposited += amount;
             if tranche == Tranche::Junior {
                 record.first_loss_cap_bps = first_loss_cap_bps;
@@ -1763,6 +2031,115 @@ impl LendingPoolContract {
         tranche: Tranche,
     ) -> Result<(), PoolError> {
         Self::deposit_with_cap(env, investor, amount, tranche, None)
+    }
+
+    // ── Deposit Cap Administration ──────────────────────────────────────
+
+    /// Set the number of ledgers a deposit-cap change must wait between being
+    /// proposed and being executed. Cannot be set below one day, so the
+    /// timelock cannot be disabled. Admin-only.
+    pub fn set_deposit_cap_delay(env: Env, delay_ledgers: u32) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        if delay_ledgers < MIN_CAP_CHANGE_DELAY_LEDGERS {
+            return Err(PoolError::InvalidAmount);
+        }
+        env.storage()
+            .instance()
+            .set(&FeatureKey::DepositCapChangeDelay, &delay_ledgers);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Ok(())
+    }
+
+    /// Propose, then later execute, a new maximum total deposit for a tranche
+    /// (`0` removes the cap). Timelocked: the first call queues the value and
+    /// emits `cap_prop`; a call once the delay has elapsed applies the queued
+    /// value and emits `cap_set`; a call in between returns `TimelockActive`.
+    /// Lowering a cap below the tranche's current total is allowed — it just
+    /// blocks further deposits until the total falls below it. Admin-only.
+    pub fn set_tranche_deposit_cap(env: Env, tranche: Tranche, cap: i128) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        Self::change_cap_with_timelock(
+            &env,
+            FeatureKey::TrancheDepositCap(tranche.clone()),
+            FeatureKey::PendingTrancheCap(tranche.clone()),
+            Self::tranche_scope(&tranche),
+            cap,
+        )
+    }
+
+    /// Propose, then later execute, a new maximum position size per investor
+    /// (`0` removes the cap). Same timelock flow as `set_tranche_deposit_cap`.
+    /// Admin-only.
+    pub fn set_investor_deposit_cap(env: Env, cap: i128) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        Self::change_cap_with_timelock(
+            &env,
+            FeatureKey::InvestorDepositCap,
+            FeatureKey::PendingInvestorCap,
+            symbol_short!("investor"),
+            cap,
+        )
+    }
+
+    /// Discard a queued tranche-cap change before it executes. A no-op when
+    /// nothing is pending. Admin-only.
+    pub fn cancel_tranche_cap_change(env: Env, tranche: Tranche) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        let key = FeatureKey::PendingTrancheCap(tranche.clone());
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+            env.events().publish(
+                (symbol_short!("cap_canc"), Self::tranche_scope(&tranche)),
+                (),
+            );
+        }
+        Ok(())
+    }
+
+    /// Discard a queued per-investor cap change before it executes. A no-op
+    /// when nothing is pending. Admin-only.
+    pub fn cancel_investor_cap_change(env: Env) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        let key = FeatureKey::PendingInvestorCap;
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+            env.events()
+                .publish((symbol_short!("cap_canc"), symbol_short!("investor")), ());
+        }
+        Ok(())
+    }
+
+    /// The live maximum total deposit for a tranche; `0` means uncapped.
+    pub fn get_tranche_deposit_cap(env: Env, tranche: Tranche) -> i128 {
+        Self::read_tranche_deposit_cap(&env, &tranche)
+    }
+
+    /// The live maximum position size per investor; `0` means uncapped.
+    pub fn get_investor_deposit_cap(env: Env) -> i128 {
+        Self::read_investor_deposit_cap(&env)
+    }
+
+    pub fn get_pending_tranche_cap_change(env: Env, tranche: Tranche) -> Option<PendingCapChange> {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::PendingTrancheCap(tranche))
+    }
+
+    pub fn get_pending_investor_cap_change(env: Env) -> Option<PendingCapChange> {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::PendingInvestorCap)
+    }
+
+    pub fn get_deposit_cap_delay(env: Env) -> u32 {
+        Self::deposit_cap_delay(&env)
     }
 
     /// Investor deposits capital with a chosen commitment lockup tier.
@@ -1803,6 +2180,7 @@ impl LendingPoolContract {
             } else if record.tranche != tranche {
                 return Err(PoolError::TrancheMismatch);
             }
+            Self::check_deposit_caps(&env, &tranche, record.deposited, amount)?;
             record.deposited += amount;
             Self::set_investor(&env, &investor, &record);
 
@@ -1815,13 +2193,14 @@ impl LendingPoolContract {
             let duration = Self::lockup_tier_duration_ledgers(&tier);
             let unlock_ledger = current_seq + duration;
 
-            let mut pos = Self::read_investor_lockup(&env, &investor).unwrap_or(InvestorLockupPosition {
-                tier,
-                unlock_ledger,
-                bonus_bps: tier.bonus_bps(),
-                bonus_start_ledger: current_seq,
-                claimed_bonus: 0,
-            });
+            let mut pos =
+                Self::read_investor_lockup(&env, &investor).unwrap_or(InvestorLockupPosition {
+                    tier,
+                    unlock_ledger,
+                    bonus_bps: tier.bonus_bps(),
+                    bonus_start_ledger: current_seq,
+                    claimed_bonus: 0,
+                });
             if tier != LockupTier::None {
                 let adopting_new_tier = pos.tier == LockupTier::None;
                 pos.tier = tier;
@@ -2147,6 +2526,14 @@ impl LendingPoolContract {
 
         if loan.status != LoanStatus::Requested {
             return Err(PoolError::InvalidLoanState);
+        }
+
+        // The introductory period may not exceed the configured maximum or
+        // the loan's own duration.
+        if interest_only_months
+            > Self::read_max_interest_only_months(&env).min(DEFAULT_DURATION_MONTHS)
+        {
+            return Err(PoolError::InvalidAmount);
         }
 
         // Re-check the aggregate exposure cap at approval: other loans may
@@ -2538,7 +2925,7 @@ impl LendingPoolContract {
 
         let max_ext_months = Self::read_max_extension_months(&env);
         if additional_months > max_ext_months {
-            return Err(PoolError::ExtensionTermTooLong);
+            return Err(PoolError::ExtensionCapExceeded);
         }
 
         let current_extensions = Self::read_loan_extension_count(&env, &loan_id);
@@ -2629,13 +3016,13 @@ impl LendingPoolContract {
         }
         env.storage()
             .instance()
-            .set(&DataKey::MaxExtensionsPerLoan, &max_extensions);
+            .set(&FeatureKey::MaxExtensionsPerLoan, &max_extensions);
         env.storage()
             .instance()
-            .set(&DataKey::MaxExtensionMonths, &max_extension_months);
+            .set(&FeatureKey::MaxExtensionMonths, &max_extension_months);
         env.storage()
             .instance()
-            .set(&DataKey::ExtensionFeeBps, &extension_fee_bps);
+            .set(&FeatureKey::ExtensionFeeBps, &extension_fee_bps);
         Ok(())
     }
 
@@ -2769,7 +3156,7 @@ impl LendingPoolContract {
             .storage()
             .persistent()
             .get(&FeatureKey::RefinanceRateLock(loan_id.clone()))
-            .ok_or(PoolError::RefinanceRateLockNotFound)?;
+            .ok_or(PoolError::RefinanceRateLockExpired)?;
 
         let current_ledger = env.ledger().sequence();
         if current_ledger > rate_lock.lock_expiry_ledger {
@@ -3409,8 +3796,17 @@ impl LendingPoolContract {
                 let overdue_ledgers = current_ledger - grace_deadline;
                 let days_overdue = (overdue_ledgers / LEDGERS_PER_DAY) + 1;
                 let daily_bps = Self::daily_penalty_bps(&env);
-                let penalty =
+                let uncapped_penalty =
                     (sched.monthly_amount * daily_bps as i128 * days_overdue as i128) / 10_000;
+                // Late fees stop at the configured per-period cap, if any.
+                let penalty = Self::apply_late_fee_cap(
+                    &env,
+                    &loan_id,
+                    sched.monthly_amount,
+                    daily_bps,
+                    overdue_ledgers,
+                    uncapped_penalty,
+                );
                 let required = sched.monthly_amount + penalty;
 
                 if amount < required {
@@ -3859,7 +4255,7 @@ impl LendingPoolContract {
     fn read_asset_class_haircut(env: &Env, asset_class: &Symbol) -> u32 {
         env.storage()
             .instance()
-            .get(&DataKey::AssetClassHaircut(asset_class.clone()))
+            .get(&FeatureKey::AssetClassHaircut(asset_class.clone()))
             .unwrap_or(0)
     }
 
@@ -4051,7 +4447,7 @@ impl LendingPoolContract {
 
         env.storage()
             .instance()
-            .set(&DataKey::HaircutChangeDelay, &delay_ledgers);
+            .set(&FeatureKey::HaircutChangeDelay, &delay_ledgers);
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
@@ -4079,29 +4475,28 @@ impl LendingPoolContract {
         config.admin.require_auth();
 
         if haircut_bps > MAX_HAIRCUT_BPS {
-            return Err(PoolError::InvalidHaircutBps);
+            return Err(PoolError::InvalidCollateralRatio);
         }
 
         let delay: u32 = env
             .storage()
             .instance()
-            .get(&DataKey::HaircutChangeDelay)
+            .get(&FeatureKey::HaircutChangeDelay)
             .unwrap_or(0u32);
         let current_ledger = env.ledger().sequence();
 
         if delay == 0 {
-            env.storage()
-                .instance()
-                .set(&DataKey::AssetClassHaircut(asset_class.clone()), &haircut_bps);
-            env.events().publish(
-                (symbol_short!("hcut_set"), asset_class),
-                (haircut_bps,),
+            env.storage().instance().set(
+                &FeatureKey::AssetClassHaircut(asset_class.clone()),
+                &haircut_bps,
             );
+            env.events()
+                .publish((symbol_short!("hcut_set"), asset_class), (haircut_bps,));
         } else {
             let maybe_pending: Option<PendingHaircutChange> = env
                 .storage()
                 .instance()
-                .get(&DataKey::PendingHaircutChange(asset_class.clone()));
+                .get(&FeatureKey::PendingHaircutChange(asset_class.clone()));
 
             match maybe_pending {
                 None => {
@@ -4110,7 +4505,7 @@ impl LendingPoolContract {
                         execute_after: current_ledger + delay,
                     };
                     env.storage().instance().set(
-                        &DataKey::PendingHaircutChange(asset_class.clone()),
+                        &FeatureKey::PendingHaircutChange(asset_class.clone()),
                         &proposal,
                     );
                     env.events().publish(
@@ -4120,13 +4515,13 @@ impl LendingPoolContract {
                 }
                 Some(pending) => {
                     if current_ledger < pending.execute_after {
-                        return Err(PoolError::HaircutChangeTimelockActive);
+                        return Err(PoolError::TimelockActive);
                     }
                     env.storage()
                         .instance()
-                        .remove(&DataKey::PendingHaircutChange(asset_class.clone()));
+                        .remove(&FeatureKey::PendingHaircutChange(asset_class.clone()));
                     env.storage().instance().set(
-                        &DataKey::AssetClassHaircut(asset_class.clone()),
+                        &FeatureKey::AssetClassHaircut(asset_class.clone()),
                         &pending.haircut_bps,
                     );
                     env.events().publish(
@@ -4156,7 +4551,7 @@ impl LendingPoolContract {
     ) -> Option<PendingHaircutChange> {
         env.storage()
             .instance()
-            .get(&DataKey::PendingHaircutChange(asset_class))
+            .get(&FeatureKey::PendingHaircutChange(asset_class))
     }
 
     /// Trigger an on-chain liquidation for a defaulted loan.
@@ -4299,7 +4694,7 @@ impl LendingPoolContract {
 
         if loan.status != LoanStatus::Approved {
             if loan.status == LoanStatus::Defaulted {
-                return Err(PoolError::AlreadyDefaulted);
+                return Err(PoolError::InvalidLoanState);
             }
             return Err(PoolError::InvalidLoanState);
         }
@@ -4637,7 +5032,7 @@ impl LendingPoolContract {
                 if lockup.tier != LockupTier::None {
                     let current_ledger = env.ledger().sequence();
                     if current_ledger < lockup.unlock_ledger {
-                        return Err(PoolError::TieredLockupActive);
+                        return Err(PoolError::LockupPeriodActive);
                     }
                 }
             }
@@ -4742,7 +5137,15 @@ impl LendingPoolContract {
             return Err(PoolError::InsufficientBalance);
         }
 
-        let pending_yield = Self::calculate_pending_yield(&env, &record);
+        // A compounding position pays out only what was banked as cash before
+        // it switched (see `set_yield_mode`); yield earned while compounding
+        // stays put and is added to principal by `compound_yield`.
+        let compounding = Self::read_yield_mode(&env, &investor) == YieldMode::Compound;
+        let pending_yield = if compounding {
+            record.accrued_yield
+        } else {
+            Self::calculate_pending_yield(&env, &record)
+        };
         if pending_yield <= 0 {
             return Ok(0);
         }
@@ -4752,7 +5155,9 @@ impl LendingPoolContract {
         // Update state
         let spend_accrued = pending_yield.min(record.accrued_yield);
         record.accrued_yield -= spend_accrued;
-        record.claimed_yield = Self::current_yield_share(&env, record.deposited);
+        if !compounding {
+            record.claimed_yield = Self::current_yield_share(&env, record.deposited);
+        }
         Self::set_investor(&env, &investor, &record);
 
         let liquidity = Self::read_total_liquidity(&env) - pending_yield;
@@ -4769,6 +5174,80 @@ impl LendingPoolContract {
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
         Ok(pending_yield)
+    }
+
+    /// Choose what the position does with the yield it earns: `Claim` (pay it
+    /// out via `claim_yield`, the default) or `Compound` (add it to principal
+    /// in the same tranche via `compound_yield`).
+    ///
+    /// A change applies from the next accrual period. Everything earned up to
+    /// this call is settled under the *old* mode first — banked as claimable
+    /// cash if the position was claiming, added to principal if it was
+    /// compounding — so switching can neither cash out yield that was meant to
+    /// compound nor redirect yield already earned. Only yield from later
+    /// repayments follows the new mode.
+    pub fn set_yield_mode(env: Env, investor: Address, mode: YieldMode) -> Result<(), PoolError> {
+        Self::check_not_paused(&env)?;
+        investor.require_auth();
+
+        let mut record = Self::read_investor(&env, &investor);
+        if record.deposited == 0 {
+            return Err(PoolError::InsufficientBalance);
+        }
+
+        let current = Self::read_yield_mode(&env, &investor);
+        if current == mode {
+            return Ok(());
+        }
+
+        match current {
+            YieldMode::Claim => Self::bank_fresh_yield(&env, &mut record),
+            YieldMode::Compound => {
+                Self::compound_fresh_yield(&env, &investor, &mut record);
+            }
+        }
+        Self::set_investor(&env, &investor, &record);
+        env.storage()
+            .persistent()
+            .set(&FeatureKey::YieldMode(investor.clone()), &mode);
+
+        env.events()
+            .publish((symbol_short!("y_mode"), investor), mode as u32);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Ok(())
+    }
+
+    /// The position's current yield mode (`Claim` unless changed).
+    pub fn get_yield_mode(env: Env, investor: Address) -> YieldMode {
+        Self::read_yield_mode(&env, &investor)
+    }
+
+    /// Add the yield a compounding position has earned to its principal, in
+    /// the same tranche, and return the amount compounded. The position's
+    /// principal — and therefore its share of future yield — grows by that
+    /// amount; no tokens move. A no-op returning `0` for a position that is
+    /// in `Claim` mode or has nothing new to compound.
+    pub fn compound_yield(env: Env, investor: Address) -> Result<i128, PoolError> {
+        Self::check_not_paused(&env)?;
+        investor.require_auth();
+
+        if Self::read_yield_mode(&env, &investor) != YieldMode::Compound {
+            return Ok(0);
+        }
+        let mut record = Self::read_investor(&env, &investor);
+        if record.deposited == 0 {
+            return Ok(0);
+        }
+        let amount = Self::compound_fresh_yield(&env, &investor, &mut record);
+        if amount > 0 {
+            Self::set_investor(&env, &investor, &record);
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Ok(amount)
     }
 
     // ── Query Functions ──────────────────────────────────────────────────
@@ -5351,6 +5830,23 @@ impl LendingPoolContract {
             }
         }
 
+        // Assumption fee: paid by the incoming borrower to the treasury,
+        // capped at MAX_ASSUMPTION_FEE_BPS of the outstanding principal.
+        let fee = Self::assumption_fee_for(&env, &loan);
+        if fee > 0 {
+            let config =
+                Self::read_config(&env).map_err(|_| LoanAssumptionError::NotInitialized)?;
+            Self::token_client(&env, &config.token).transfer(
+                &new_borrower,
+                &config.treasury_address,
+                &fee,
+            );
+            env.events().publish(
+                (symbol_short!("assm_fee"),),
+                (loan_id.clone(), new_borrower.clone(), fee),
+            );
+        }
+
         // Exposure follows the loan to the new borrower.
         Self::release_borrower_exposure(&env, &loan.borrower, loan.principal);
         let assumed = Self::read_borrower_exposure(&env, &new_borrower);
@@ -5365,6 +5861,51 @@ impl LendingPoolContract {
             .persistent()
             .remove(&DataKey::LoanAssumption(loan_id));
         Ok(())
+    }
+
+    /// The fee `assume_loan` charges for `loan`: the configured bps of its
+    /// outstanding principal, never more than `MAX_ASSUMPTION_FEE_BPS`.
+    fn assumption_fee_for(env: &Env, loan: &LoanRecord) -> i128 {
+        let configured: u32 = env
+            .storage()
+            .instance()
+            .get(&FeatureKey::AssumptionFeeBps)
+            .unwrap_or(0);
+        let bps = configured.min(MAX_ASSUMPTION_FEE_BPS) as i128;
+        let outstanding = loan.principal.saturating_sub(loan.repaid).max(0);
+        outstanding.saturating_mul(bps) / BPS_SCALE as i128
+    }
+
+    /// Configure the loan assumption fee, in basis points of the loan's
+    /// outstanding principal. Rejects anything above the hard cap
+    /// (`MAX_ASSUMPTION_FEE_BPS`). `0` disables the fee. Admin-only.
+    pub fn set_assumption_fee(env: Env, fee_bps: u32) -> Result<(), LoanAssumptionError> {
+        let config = Self::read_config(&env).map_err(|_| LoanAssumptionError::NotInitialized)?;
+        config.admin.require_auth();
+        if fee_bps > MAX_ASSUMPTION_FEE_BPS {
+            return Err(LoanAssumptionError::AssumptionFeeCapExceeded);
+        }
+        env.storage()
+            .instance()
+            .set(&FeatureKey::AssumptionFeeBps, &fee_bps);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events().publish((symbol_short!("assm_cfg"),), fee_bps);
+        Ok(())
+    }
+
+    /// The configured loan assumption fee in basis points (0 when unset).
+    pub fn get_assumption_fee(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::AssumptionFeeBps)
+            .unwrap_or(0)
+    }
+
+    /// The hard on-chain ceiling for the loan assumption fee, in basis points.
+    pub fn get_max_assumption_fee(_env: Env) -> u32 {
+        MAX_ASSUMPTION_FEE_BPS
     }
 
     /// Cancel a pending loan assumption request. Initiated by current borrower.
@@ -5639,7 +6180,7 @@ impl LendingPoolContract {
         signers: Vec<Address>,
     ) -> Result<(), PoolError> {
         if new_bps > MAX_FEE_SWITCH_BPS {
-            return Err(PoolError::FeeSwitchTooHigh);
+            return Err(PoolError::FeeTooHigh);
         }
 
         let mut config = Self::read_config(&env)?;
@@ -5675,7 +6216,7 @@ impl LendingPoolContract {
     /// loan principal and repayment obligations remain gross. Admin-only.
     pub fn set_origination_fee_bps(env: Env, new_bps: u32) -> Result<(), PoolError> {
         if new_bps > MAX_ORIGINATION_FEE_BPS {
-            return Err(PoolError::OriginationFeeTooHigh);
+            return Err(PoolError::FeeTooHigh);
         }
 
         let mut config = Self::read_config(&env)?;
@@ -5708,7 +6249,7 @@ impl LendingPoolContract {
     /// escrowed against pending applications remain refundable.
     pub fn set_application_fee_bps(env: Env, new_bps: u32) -> Result<(), PoolError> {
         if new_bps > MAX_APPLICATION_FEE_BPS {
-            return Err(PoolError::ApplicationFeeTooHigh);
+            return Err(PoolError::FeeTooHigh);
         }
 
         let mut config = Self::read_config(&env)?;
@@ -5934,6 +6475,46 @@ impl LendingPoolContract {
         env.events()
             .publish((symbol_short!("set_penlt"),), daily_bps);
         Ok(())
+    }
+
+    /// Configure the ceiling on late fees per billing period (one installment
+    /// cycle), as an absolute amount in token stroops (`max_abs`) and/or as a
+    /// percentage of the installment in basis points (`max_bps`). When both are
+    /// set the lower applies. `0` disables a limb; `(0, 0)` — the default —
+    /// disables the cap and keeps late fees exactly as before. Admin-only.
+    pub fn set_late_fee_cap(env: Env, max_abs: i128, max_bps: u32) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        if max_abs < 0 || max_bps > BPS_SCALE {
+            return Err(PoolError::InvalidAmount);
+        }
+        env.storage()
+            .instance()
+            .set(&FeatureKey::LateFeeCapAbs, &max_abs);
+        env.storage()
+            .instance()
+            .set(&FeatureKey::LateFeeCapBps, &max_bps);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events()
+            .publish((symbol_short!("fee_cap"),), (max_abs, max_bps));
+        Ok(())
+    }
+
+    /// The configured late-fee cap per billing period as
+    /// `(max_abs, max_bps)`; `0` in a slot means that limb is disabled.
+    pub fn get_late_fee_cap(env: Env) -> (i128, u32) {
+        (
+            env.storage()
+                .instance()
+                .get(&FeatureKey::LateFeeCapAbs)
+                .unwrap_or(0),
+            env.storage()
+                .instance()
+                .get(&FeatureKey::LateFeeCapBps)
+                .unwrap_or(0),
+        )
     }
 
     /// Configure the smallest deposit the pool will accept, in token stroops.
@@ -6296,7 +6877,7 @@ impl LendingPoolContract {
     pub fn quote_payoff(env: Env, loan_id: BytesN<32>) -> Result<i128, PoolError> {
         let config = Self::read_config(&env)?;
         if config.payoff_quote_window_ledgers == 0 {
-            return Err(PoolError::InvalidQuoteWindow);
+            return Err(PoolError::InvalidAmount);
         }
         let mut loan = Self::read_loan(&env, &loan_id)?;
         if loan.status != LoanStatus::Approved {
@@ -6592,7 +7173,7 @@ impl LendingPoolContract {
                 }
                 Some(pending) => {
                     if current_ledger < pending.execute_after {
-                        return Err(PoolError::UpgradeTimelockActive);
+                        return Err(PoolError::TimelockActive);
                     }
                     env.storage().instance().remove(&DataKey::PendingUpgrade);
                     let ver: u32 = env
@@ -6691,7 +7272,7 @@ impl LendingPoolContract {
                 .get(&DataKey::LoanSchedule(loan_id.clone()))
                 .unwrap();
             if schedule.payments_missed > 0 {
-                return Err(PoolError::MissedPaymentsPreventRebate);
+                return Err(PoolError::LoanNotGoodStanding);
             }
         }
 
@@ -6828,8 +7409,8 @@ impl LendingPoolContract {
 
         let config = Self::read_config(&env)?;
         Self::non_reentrant(&env, || {
-            let mut line = Self::read_credit_line(&env, &borrower)
-                .ok_or(PoolError::CreditLineNotFound)?;
+            let mut line =
+                Self::read_credit_line(&env, &borrower).ok_or(PoolError::CreditLineNotFound)?;
 
             // Accrue before checking capacity so a draw against a line that
             // has been accruing for a while is measured against the true
@@ -8485,7 +9066,7 @@ mod test {
 
         // Attempting execution before delay elapses must return UpgradeTimelockActive = 12.
         let result = client.try_upgrade(&dummy_hash);
-        assert_eq!(result.unwrap_err(), Ok(PoolError::UpgradeTimelockActive));
+        assert_eq!(result.unwrap_err(), Ok(PoolError::TimelockActive));
     }
 
     #[test]
@@ -8872,7 +9453,7 @@ mod test {
             assert!(!client.is_function_paused(&group));
         }
         assert_eq!(
-            probe_groups(&env, &client, &investor, &borrower, &loan_id, &token, 0x01),
+            probe_groups(&env, &client, &investor, &borrower, &loan_id, &token, 0x11),
             [true; 4]
         );
     }
@@ -9631,7 +10212,7 @@ mod test {
         assert_eq!(client.get_origination_fee_bps(), 0);
 
         let result = client.try_set_origination_fee_bps(&(BPS_SCALE + 1));
-        assert_eq!(result.unwrap_err(), Ok(PoolError::OriginationFeeTooHigh));
+        assert_eq!(result.unwrap_err(), Ok(PoolError::FeeTooHigh));
     }
 
     // ── Per-Borrower Active-Loan Cap ─────────────────────────────────────
@@ -11054,7 +11635,7 @@ mod test {
         assert_eq!(client.get_application_fee_bps(), 0);
 
         let result = client.try_set_application_fee_bps(&(BPS_SCALE + 1));
-        assert_eq!(result.unwrap_err(), Ok(PoolError::ApplicationFeeTooHigh));
+        assert_eq!(result.unwrap_err(), Ok(PoolError::FeeTooHigh));
 
         client.set_application_fee_bps(&250);
         assert_eq!(client.get_application_fee_bps(), 250);
@@ -11303,10 +11884,7 @@ mod test {
         });
 
         let result = client.try_claim_maturity_rebate(&loan_id);
-        assert_eq!(
-            result.unwrap_err(),
-            Ok(PoolError::MissedPaymentsPreventRebate)
-        );
+        assert_eq!(result.unwrap_err(), Ok(PoolError::LoanNotGoodStanding));
     }
 
     #[test]
@@ -11535,7 +12113,7 @@ mod test {
         client.set_multisig_validator(&validator_addr);
 
         let result = client.try_set_fee_switch_bps(&(MAX_FEE_SWITCH_BPS + 1), &signers);
-        assert_eq!(result.unwrap_err(), Ok(PoolError::FeeSwitchTooHigh));
+        assert_eq!(result.unwrap_err(), Ok(PoolError::FeeTooHigh));
         assert_eq!(client.get_fee_switch_bps(), 0u32);
 
         // The cap itself is still reachable.
@@ -12692,7 +13270,12 @@ mod test {
         let contractor = Address::generate(&env);
         client.add_contractor(&contractor);
         client.disburse(&loan_id, &contractor, &principal);
-        client.set_loan_collateral(&loan_id, &initial_collateral, &3_000u32, &Symbol::new(&env, "real_estate")); // 30% min ratio
+        client.set_loan_collateral(
+            &loan_id,
+            &initial_collateral,
+            &3_000u32,
+            &Symbol::new(&env, "real_estate"),
+        ); // 30% min ratio
 
         // Before any repayment, releasable collateral is 0
         let (releasable, remaining_c, ratio) = client.get_releasable_collateral(&loan_id);
@@ -12799,7 +13382,12 @@ mod test {
         client.disburse(&loan_id, &contractor, &principal);
 
         // Set a strict 60% minimum collateral ratio (6000 bps)
-        client.set_loan_collateral(&loan_id, &30_000_0000000i128, &6_000u32, &Symbol::new(&env, "real_estate"));
+        client.set_loan_collateral(
+            &loan_id,
+            &30_000_0000000i128,
+            &6_000u32,
+            &Symbol::new(&env, "real_estate"),
+        );
 
         let sac = token::StellarAssetClient::new(&env, &token_address);
         sac.mint(&borrower, &50_000_0000000i128);
@@ -12827,7 +13415,12 @@ mod test {
         client.request_loan(&borrower, &loan_id, &70_000_0000000i128);
         client.approve_loan(&loan_id);
         // 10k against 70k is ~14.28%, below the 30% minimum.
-        client.set_loan_collateral(&loan_id, &10_000_0000000i128, &3_000u32, &Symbol::new(&env, "real_estate"));
+        client.set_loan_collateral(
+            &loan_id,
+            &10_000_0000000i128,
+            &3_000u32,
+            &Symbol::new(&env, "real_estate"),
+        );
         let (_, _, ratio_before) = client.get_releasable_collateral(&loan_id);
         assert_eq!(ratio_before, 1_428u32);
 
@@ -12867,7 +13460,12 @@ mod test {
         client.deposit(&investor, &100_000_0000000i128, &Tranche::Senior);
         client.request_loan(&borrower, &loan_id, &70_000_0000000i128);
         client.approve_loan(&loan_id);
-        client.set_loan_collateral(&loan_id, &30_000_0000000i128, &3_000u32, &Symbol::new(&env, "real_estate"));
+        client.set_loan_collateral(
+            &loan_id,
+            &30_000_0000000i128,
+            &3_000u32,
+            &Symbol::new(&env, "real_estate"),
+        );
 
         StellarAssetClient::new(&env, &token_address).mint(&borrower, &7_000_0000000i128);
         let ratio = client.top_up_collateral(&loan_id, &borrower, &7_000_0000000i128);
@@ -12897,7 +13495,9 @@ mod test {
     fn test_identical_face_value_counts_for_less_in_a_higher_haircut_class() {
         let env = Env::default();
         env.mock_all_auths_allowing_non_root_auth();
-        let (_admin, investor, _treasury, _token_address, client) = setup_pool(&env);
+        let (_admin, investor, _treasury, token_address, client) = setup_pool(&env);
+        // The fixture funds the investor with 100k; this test needs 200k.
+        StellarAssetClient::new(&env, &token_address).mint(&investor, &100_000_0000000i128);
 
         let stable_class = Symbol::new(&env, "stablecoin");
         let volatile_class = Symbol::new(&env, "volatile_token");
@@ -12953,7 +13553,7 @@ mod test {
 
         // Too early.
         let res = client.try_set_asset_class_haircut(&asset_class, &4_000u32);
-        assert_eq!(res, Err(Ok(PoolError::HaircutChangeTimelockActive)));
+        assert_eq!(res, Err(Ok(PoolError::TimelockActive)));
 
         env.ledger().with_mut(|li| li.sequence_number += 50);
         client.set_asset_class_haircut(&asset_class, &4_000u32);
@@ -12969,7 +13569,7 @@ mod test {
         let asset_class = Symbol::new(&env, "volatile_token");
 
         let res = client.try_set_asset_class_haircut(&asset_class, &(MAX_HAIRCUT_BPS + 1));
-        assert_eq!(res, Err(Ok(PoolError::InvalidHaircutBps)));
+        assert_eq!(res, Err(Ok(PoolError::InvalidCollateralRatio)));
     }
 
     #[test]
@@ -13385,7 +13985,7 @@ mod test {
         let res = client.try_execute_refinance(&loan_id);
         assert_eq!(
             res.err().unwrap().unwrap(),
-            PoolError::RefinanceRateLockNotFound
+            PoolError::RefinanceRateLockExpired
         );
     }
 
@@ -13468,7 +14068,7 @@ mod test {
         let res = client.try_execute_refinance(&loan_id);
         assert_eq!(
             res.err().unwrap().unwrap(),
-            PoolError::RefinanceRateLockNotFound
+            PoolError::RefinanceRateLockExpired
         );
     }
 

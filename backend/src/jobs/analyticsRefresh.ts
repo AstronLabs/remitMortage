@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import cron from "node-cron";
+import { scheduledJob } from "../services/jobLeaderElection.js";
 import { prisma } from "../services/db.js";
 import logger from "../utils/logger.js";
 
@@ -54,9 +55,14 @@ export function startAnalyticsRefreshScheduler(): void {
 
   refreshTask = cron.schedule(
     REFRESH_SCHEDULE,
-    async () => {
-      await refreshMaterializedViews();
-    },
+    scheduledJob(
+      "analytics-refresh",
+      async () => {
+        await refreshMaterializedViews();
+      },
+      // Runs every few minutes: dedupe only the near-simultaneous ticks.
+      { minIntervalMs: 10_000 },
+    ),
     { timezone: "UTC" },
   );
 

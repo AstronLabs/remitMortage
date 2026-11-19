@@ -6,6 +6,7 @@ import React, { useState } from "react";
 import { BellRing, Check, CheckCheck, X, Trash2, CheckCircle2, AlertCircle, Info, AlertTriangle } from "lucide-react";
 import { useNotifications, ToastVariant } from "@/context/NotificationContext";
 import { EmptyState } from "@/components/EmptyState";
+import ConfirmationDialog from "./ConfirmationDialog";
 
 function formatRelativeTime(createdAt: number) {
   const diffMs = Date.now() - createdAt;
@@ -47,6 +48,7 @@ export function NotificationDrawer() {
   } = useNotifications();
 
   const [activeTab, setActiveTab] = useState<"all" | "unread">("all");
+  const [confirmClear, setConfirmClear] = useState(false);
 
   // Display items in reverse-chronological order (newest first)
   const itemsInOrder = [...notificationHistory].reverse();
@@ -144,8 +146,9 @@ export function NotificationDrawer() {
               )}
               <button
                 type="button"
-                onClick={clearHistory}
+                onClick={() => setConfirmClear(true)}
                 title="Clear notification list"
+                aria-label="Clear notification history"
                 className="rounded-lg border border-slate-800 p-1.5 text-slate-400 transition-colors hover:border-rose-500/40 hover:text-rose-300 cursor-pointer"
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -240,6 +243,15 @@ export function NotificationDrawer() {
           </div>
         </div>
       </aside>
+      <ConfirmationDialog
+        isOpen={confirmClear}
+        title="Clear notification history?"
+        description="This permanently removes all notifications from your inbox. This cannot be undone."
+        confirmationText="CLEAR"
+        confirmLabel="Clear history"
+        onConfirm={clearHistory}
+        onCancel={() => setConfirmClear(false)}
+      />
     </>
   );
 }

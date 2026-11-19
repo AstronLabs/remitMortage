@@ -30,10 +30,12 @@ import { analyticsRouter } from "./routes/analytics.js";
 import { auditRouter } from "./routes/audit.js";
 import { kycRouter } from "./routes/kyc.js";
 import { watchlistRouter } from "./routes/watchlist.js";
+import { investorRouter, investorAdminRouter } from "./routes/investor.js";
 import { notificationsRouter } from "./routes/notifications.js";
 import { didRouter } from "./routes/did.js";
 import { adminRouter } from "./routes/admin.js";
 import { adminAuthRouter } from "./routes/adminAuth.js";
+import { adminDevicesRouter } from "./routes/adminDevices.js";
 import { impersonationRouter } from "./routes/impersonation.js";
 import { workspaceRouter } from "./routes/workspace.js";
 import { userRouter } from "./routes/user.js";
@@ -52,6 +54,7 @@ import { loanImportRouter } from "./routes/loanImport.js";
 import { exportsRouter } from "./routes/exports.js";
 import { apiKeyUsageRouter } from "./routes/apiKeyUsage.js";
 import { authRouter } from "./routes/auth.js";
+import { captchaRouter } from "./routes/captcha.js";
 import {
   feeWaiverLoanRouter,
   feeWaiverAdminRouter,
@@ -64,6 +67,8 @@ import { errorHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { logMasker } from "./middleware/logMasker.js";
 import { payloadLimits } from "./middleware/payloadLimits.js";
+import { prototypePollutionGuard } from "./middleware/prototypePollutionGuard.js";
+import { freezeCriticalPrototypes } from "./utils/safeObject.js";
 import { correlationId } from "./middleware/correlationId.js";
 import { tenantContext } from "./services/tenant.js";
 import { httpMetricsMiddleware } from "./middleware/metricsMiddleware.js";
@@ -93,6 +98,7 @@ import {
 } from "./middleware/rateLimit.js";
 import { issueCsrfToken, csrfProtection, CSRF_COOKIE } from "./middleware/csrf.js";
 import { adminIpAllowlist, resolveTrustProxy } from "./middleware/adminIpAllowlist.js";
+import { requireBoundDevice } from "./middleware/adminDeviceBinding.js";
 import { notFoundHandler } from "./middleware/notFound.js";
 import { startEventListener } from "./services/eventListener.js";
 import { startNotificationScheduler } from "./services/notification.js";
@@ -251,6 +257,10 @@ app.use(cors({
 }));
 // Per-route body size / JSON depth / array length limits (issue #828).
 app.use(payloadLimits());
+// Strip `__proto__` / `constructor` / `prototype` from every parsed body and
+// query string before any handler reads them (issue #885). Must sit directly
+// after body parsing and before anything that merges request data.
+app.use(prototypePollutionGuard());
 app.use(logMasker);
 app.use(cookieParser());
 
@@ -309,14 +319,23 @@ app.use("/api/did", sensitiveRateLimiter, didRouter);
 // operator API key on token issuance/decryption), so it is mounted bare.
 app.use("/api/kyc", kycRouter);
 app.use("/api/watchlist", authMiddleware, readYourWritesMiddleware, watchlistRouter);
+app.use("/api/investor", mutationRateLimiter, authMiddleware, readYourWritesMiddleware, investorRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/referral", referralRouter);
 app.use("/api/tenant", tenantRouter);
-app.use("/api/admin", authMiddleware, readYourWritesMiddleware, adminRouter);
-app.use("/api/admin", authMiddleware, readYourWritesMiddleware, feeWaiverAdminRouter);
-app.use("/api/admin", authMiddleware, readYourWritesMiddleware, rateSheetAdminRouter);
-app.use("/api/admin", authMiddleware, readYourWritesMiddleware, notificationTemplatesAdminRouter);
-app.use("/api/admin", authMiddleware, readYourWritesMiddleware, adminSearchRouter);
+// Device binding for admin sessions (issue #886): a session cookie alone is
+// never enough to reach an admin handler — every request must also carry a
+// signature from the device the session was bound to. Mounted before the admin
+// routers (and after authMiddleware, which decodes the `dbk` claim).
+// POST /api/admin/devices/enroll is exempt, since it is how a session becomes
+// bound in the first place.
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminDevicesRouter);
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminRouter);
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), feeWaiverAdminRouter);
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), rateSheetAdminRouter);
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), notificationTemplatesAdminRouter);
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminSearchRouter);
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), investorAdminRouter);
 app.use("/api/admin", adminAuthRouter);
 // Bare (no outer authMiddleware): impersonation/start and /end authenticate
 // via the admin's own token through requireAdmin regardless of whether an
@@ -334,6 +353,7 @@ app.use("/api/webhooks/email-events", emailEventsRouter);
 app.use("/api/webhooks", authMiddleware, webhooksRouter);
 app.use("/api/user", userRouter);
 app.use("/api/waitlist", waitlistRouter);
+app.use("/api/captcha", captchaRouter);
 app.use("/api/auth", credentialStuffingGuard, authRouter);
 // Swagger UI — excluded from rate limits so developers can inspect freely
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
@@ -374,6 +394,12 @@ const server = app.listen(PORT, () => {
   // degradation, downtime or failover through the existing webhook mechanism.
   startRpcHealthMonitor();
   feeEstimator.start();
+
+  // Last startup step on purpose (issue #885): every module and every
+  // instrumentation library has finished patching by now, so sealing the
+  // shared prototypes cannot break them. Set PROTOTYPE_FREEZE=off to skip.
+  const frozenPrototypes = freezeCriticalPrototypes();
+  logger.info("Critical prototypes frozen", { prototypes: frozenPrototypes });
 });
 
 // ── Graceful Shutdown (issue #827) ──────────────────────────────────────

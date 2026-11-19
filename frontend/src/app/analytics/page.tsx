@@ -18,8 +18,11 @@ import {
   Pie,
   Cell,
 } from "recharts";
+import { useDataSaver } from "@/context/DataSaverContext";
+import AccessibleChart from "@/components/charts/AccessibleChart";
 import ChartExportControls from "@/components/charts/ChartExportControls";
 import type { ChartExportData, ChartSeries } from "@/lib/chart-export";
+import { summarizeShares, summarizeTrend } from "@/lib/chart-summary";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 const RateBenchmarkWidget = dynamic(() => import("../../components/RateBenchmarkWidget"), {
@@ -102,6 +105,7 @@ interface VolumeData {
 }
 
 export default function AnalyticsPage() {
+  const { dataSaver } = useDataSaver();
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [loanPerformance, setLoanPerformance] = useState<LoanPerformanceData[]>([]);
   const [volumeData, setVolumeData] = useState<VolumeData[]>([]);
@@ -140,6 +144,31 @@ export default function AnalyticsPage() {
     [loanPerformance]
   );
 
+  const volumeSummary = useMemo(
+    () =>
+      [
+        summarizeTrend(
+          "Deposits",
+          volumeData.map((d) => ({ label: d.month, value: d.deposits })),
+          (v) => `$${v.toLocaleString("en-US")}`
+        ),
+        summarizeTrend(
+          "Repayments",
+          volumeData.map((d) => ({ label: d.month, value: d.repayments })),
+          (v) => `$${v.toLocaleString("en-US")}`
+        ),
+      ].join(" "),
+    [volumeData]
+  );
+  const performanceSummary = useMemo(
+    () =>
+      summarizeShares(
+        "Loan performance",
+        loanPerformance.map((d) => ({ label: d.name, value: d.value }))
+      ),
+    [loanPerformance]
+  );
+
   useEffect(() => {
     setMounted(true);
 
@@ -150,9 +179,9 @@ export default function AnalyticsPage() {
 
         // Call GET /api/analytics/overview, /api/loans, and /api/volume?months=12 concurrently
         const [overviewRes, loansRes, volumeRes] = await Promise.all([
-          fetch("/api/analytics/overview"),
-          fetch("/api/loans"),
-          fetch("/api/volume?months=12"),
+          fetch(`/api/analytics/overview${dataSaver ? "?compact=1" : ""}`, { headers: dataSaver ? { "Save-Data": "on" } : undefined }),
+          fetch(`/api/loans${dataSaver ? "?limit=10" : ""}`, { headers: dataSaver ? { "Save-Data": "on" } : undefined }),
+          fetch(`/api/volume?months=${dataSaver ? 3 : 12}`, { headers: dataSaver ? { "Save-Data": "on" } : undefined }),
         ]);
 
         if (!overviewRes.ok || !loansRes.ok || !volumeRes.ok) {
@@ -177,7 +206,7 @@ export default function AnalyticsPage() {
     }
 
     fetchData();
-  }, []);
+  }, [dataSaver]);
 
   return (
     <div>
@@ -320,28 +349,23 @@ export default function AnalyticsPage() {
             </div>
 
             {/* Charts Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-10">
+            {dataSaver ? (
+              <div className="glass-card p-6 mb-10" role="status">
+                <h3 className="text-lg font-bold text-[var(--text-primary)]">Charts paused in data-saver mode</h3>
+                <p className="mt-2 text-sm text-[var(--text-secondary)]">The summarized metrics above remain available. Turn data saver off to load interactive charts.</p>
+              </div>
+            ) : <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-10">
               {/* Volume Area Chart */}
               <div className="glass-card p-6 lg:col-span-2 flex flex-col justify-between">
-                <div className="mb-4 flex items-start justify-between gap-4">
-                  <div>
-                    <h3 className="text-lg font-bold text-[var(--text-primary)]">
-                      Volume Trends (USDC)
-                    </h3>
-                    <p className="text-xs text-[var(--text-secondary)]">
-                      Monthly deposit, repayment, and disbursement volumes
-                    </p>
-                  </div>
-                  <ChartExportControls
-                    chartTitle="Volume Trends (USDC)"
-                    fileBase="volume-trends"
-                    data={volumeExportData}
-                    legend={volumeLegend}
-                    getChartContainer={() => volumeChartRef.current}
-                    disabled={!mounted || volumeData.length === 0}
-                  />
+                <div className="mb-4">
+                  <h3 className="text-lg font-bold text-[var(--text-primary)]">
+                    Volume Trends (USDC)
+                  </h3>
+                  <p className="text-xs text-[var(--text-secondary)]">
+                    Monthly deposit, repayment, and disbursement volumes
+                  </p>
                 </div>
-                <div ref={volumeChartRef} className="h-[300px] w-full">
+                <div className="h-[300px] w-full">
                   {mounted && volumeData.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
                       <AreaChart
@@ -386,6 +410,7 @@ export default function AnalyticsPage() {
                           fillOpacity={1}
                           fill="url(#colorDeposits)"
                           strokeWidth={2}
+                          strokeDasharray="6 3"
                         />
                         <Area
                           type="monotone"
@@ -395,6 +420,7 @@ export default function AnalyticsPage() {
                           fillOpacity={1}
                           fill="url(#colorDisbursements)"
                           strokeWidth={2}
+                          strokeDasharray="2 3"
                         />
                         <Area
                           type="monotone"
@@ -404,6 +430,7 @@ export default function AnalyticsPage() {
                           fillOpacity={1}
                           fill="url(#colorRepayments)"
                           strokeWidth={2}
+                          strokeDasharray="10 3 2 3"
                         />
                       </AreaChart>
                     </ResponsiveContainer>
@@ -413,6 +440,85 @@ export default function AnalyticsPage() {
                     </div>
                   )}
                 </div>
+                <AccessibleChart
+                  chartTitle="Volume Trends (USDC)"
+                  summary={volumeSummary}
+                  data={volumeExportData}
+                  filterDescription="Monthly volumes for the last 12 months."
+                >
+                  <div ref={volumeChartRef} className="h-[300px] w-full">
+                    {mounted && volumeData.length > 0 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart
+                          data={volumeData}
+                          margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+                        >
+                          <defs>
+                            <linearGradient id="colorDeposits" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#6366f1" stopOpacity={0.4} />
+                              <stop offset="95%" stopColor="#6366f1" stopOpacity={0.0} />
+                            </linearGradient>
+                            <linearGradient id="colorDisbursements" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.4} />
+                              <stop offset="95%" stopColor="#06b6d4" stopOpacity={0.0} />
+                            </linearGradient>
+                            <linearGradient id="colorRepayments" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                              <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
+                          <XAxis dataKey="month" stroke="#64748b" style={{ fontSize: "11px" }} />
+                          <YAxis
+                            stroke="#64748b"
+                            style={{ fontSize: "11px" }}
+                            tickFormatter={(tick) => `$${tick.toLocaleString()}`}
+                          />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: "#111827",
+                              borderColor: "rgba(99, 102, 241, 0.15)",
+                              borderRadius: "8px",
+                              color: "#f1f5f9",
+                            }}
+                            formatter={(value) => [`$${value.toLocaleString()}`, ""]}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="deposits"
+                            name="Deposits"
+                            stroke="#6366f1"
+                            fillOpacity={1}
+                            fill="url(#colorDeposits)"
+                            strokeWidth={2}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="disbursements"
+                            name="Disbursed"
+                            stroke="#06b6d4"
+                            fillOpacity={1}
+                            fill="url(#colorDisbursements)"
+                            strokeWidth={2}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="repayments"
+                            name="Repayments"
+                            stroke="#10b981"
+                            fillOpacity={1}
+                            fill="url(#colorRepayments)"
+                            strokeWidth={2}
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-sm text-[var(--text-secondary)]">
+                        Loading chart...
+                      </div>
+                    )}
+                  </div>
+                </AccessibleChart>
               </div>
 
               {/* Loan Performance Pie Chart */}
@@ -435,56 +541,66 @@ export default function AnalyticsPage() {
                     disabled={!mounted || loanPerformance.length === 0}
                   />
                 </div>
-                <div
-                  ref={performanceChartRef}
-                  className="h-[240px] flex items-center justify-center relative"
+                <AccessibleChart
+                  chartTitle="Loan Performance"
+                  summary={performanceSummary}
+                  data={performanceExportData}
+                  filterDescription="Share of the loan pool by status."
+                  formatCell={(value, col) =>
+                    col === 1 && typeof value === "number" ? `${value}%` : String(value)
+                  }
                 >
-                  {mounted && loanPerformance.length > 0 ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={loanPerformance}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={65}
-                          outerRadius={85}
-                          paddingAngle={5}
-                          dataKey="value"
-                        >
-                          {loanPerformance.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: "#111827",
-                            borderColor: "rgba(99, 102, 241, 0.15)",
-                            borderRadius: "8px",
-                            color: "#f1f5f9",
-                          }}
-                          formatter={(value) => [`${value}%`, ""]}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="text-sm text-[var(--text-secondary)]">Loading chart...</div>
-                  )}
-                  {/* Center Text */}
-                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                    <span className="text-2xl font-black text-[var(--text-primary)]">
-                      {loanPerformance.find((d) => d.name === "Active")?.value || 0}%
-                    </span>
-                    <span className="text-[10px] uppercase tracking-wider text-[var(--text-secondary)]">
-                      Active Pool
-                    </span>
+                  <div
+                    ref={performanceChartRef}
+                    className="h-[240px] flex items-center justify-center relative"
+                  >
+                    {mounted && loanPerformance.length > 0 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={loanPerformance}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={65}
+                            outerRadius={85}
+                            paddingAngle={5}
+                            dataKey="value"
+                          >
+                            {loanPerformance.map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: "#111827",
+                              borderColor: "rgba(99, 102, 241, 0.15)",
+                              borderRadius: "8px",
+                              color: "#f1f5f9",
+                            }}
+                            formatter={(value) => [`${value}%`, ""]}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="text-sm text-[var(--text-secondary)]">Loading chart...</div>
+                    )}
+                    {/* Center Text */}
+                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                      <span className="text-2xl font-black text-[var(--text-primary)]">
+                        {loanPerformance.find((d) => d.name === "Active")?.value || 0}%
+                      </span>
+                      <span className="text-[10px] uppercase tracking-wider text-[var(--text-secondary)]">
+                        Active Pool
+                      </span>
+                    </div>
                   </div>
-                </div>
+                </AccessibleChart>
                 {/* Custom Legend */}
                 <div className="flex justify-around text-xs border-t border-[var(--border-color)] pt-4">
                   {loanPerformance.map((item, i) => (
                     <div key={i} className="flex items-center gap-1.5">
                       <span
-                        className="w-2.5 h-2.5 rounded-full"
+                        className={`chart-legend-marker w-2.5 h-2.5 rounded-full ${i === 0 ? "border-dashed" : i === 1 ? "border-dotted" : "border-double"}`}
                         style={{ backgroundColor: item.color }}
                       />
                       <span className="text-[var(--text-secondary)] font-medium">
@@ -494,7 +610,7 @@ export default function AnalyticsPage() {
                   ))}
                 </div>
               </div>
-            </div>
+            </div>}
 
             {/* Rate Benchmark Widget */}
             <div className="mb-10">

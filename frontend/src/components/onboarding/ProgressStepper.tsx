@@ -70,7 +70,7 @@ export default function ProgressStepper({ steps, currentStep }: ProgressStepperP
             <div key={label} className="text-center">
               <span
                 className={`text-[10px] sm:text-xs font-semibold leading-tight transition-colors duration-300 block
-                  ${isActive ? "text-cyan-400 font-bold" : isCompleted ? "text-slate-300" : "text-slate-500"}
+                  ${isActive ? "text-cyan-400 font-bold" : isCompleted ? "text-slate-300" : "text-slate-400"}
                 `}
               >
                 {label}

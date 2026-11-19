@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useDataSaver } from "../context/DataSaverContext";
 import { rpc } from "@stellar/stellar-sdk";
 import { fetchTransactionStatus, POLL_INTERVAL_MS } from "../lib/soroban-rpc";
 import {
@@ -40,6 +41,7 @@ const INITIAL_STATE: TransactionMonitorState = {
 };
 
 export function useTransactionMonitor(hash: string | undefined) {
+  const { dataSaver } = useDataSaver();
   const [state, setState] = useState<TransactionMonitorState>(INITIAL_STATE);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollCountRef = useRef(0);
@@ -101,12 +103,12 @@ export function useTransactionMonitor(hash: string | undefined) {
     void poll();
     intervalRef.current = setInterval(() => {
       void poll();
-    }, POLL_INTERVAL_MS);
+    }, dataSaver ? POLL_INTERVAL_MS * 2 : POLL_INTERVAL_MS);
 
     return () => {
       stopPolling();
     };
-  }, [hash, poll, stopPolling]);
+  }, [hash, poll, stopPolling, dataSaver]);
 
   return state;
 }

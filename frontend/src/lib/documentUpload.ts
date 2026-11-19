@@ -12,6 +12,8 @@
  * upload can be retried without re-selecting it.
  */
 
+import { safeParseJson } from "./safe-object";
+
 export type UploadErrorKind = "network" | "file_too_large" | "unsupported_type" | "server";
 
 export type UploadState =
@@ -118,7 +120,7 @@ export function uploadWithProgress<T = unknown>(
       }
       try {
         onProgress(100);
-        resolve(JSON.parse(xhr.responseText) as T);
+        resolve(safeParseJson<T>(xhr.responseText));
       } catch {
         reject(new UploadError("server"));
       }

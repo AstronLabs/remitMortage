@@ -14,6 +14,7 @@
     "test:security": "jest src/__tests__/sessionFixationAndReplay.test.ts",
     "test:integration": "jest --testPathPattern='prismaSchemaDrift' --no-coverage",
     "test:drift": "jest src/__tests__/prismaSchemaDrift.test.ts --no-coverage",
+    "test:openapi": "jest src/__tests__/openapiResponseValidation.test.ts --no-coverage",
     "drift:check": "bash ./scripts/detect-prisma-drift.sh",
     "drift:check:ci": "bash ./scripts/detect-prisma-drift.sh --exit-code",
     "drift:sync": "bash ./scripts/sync-production-schema.sh --from-schema=prisma/schema.prisma",

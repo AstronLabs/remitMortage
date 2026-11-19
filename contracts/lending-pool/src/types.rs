@@ -14,7 +14,7 @@ pub struct PendingUpgradeRecord {
 }
 
 /// A pending, timelocked change to an asset class's collateral haircut.
-/// The asset class itself is the storage key (`DataKey::PendingHaircutChange`),
+/// The asset class itself is the storage key (`FeatureKey::PendingHaircutChange`),
 /// not stored redundantly here.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -23,6 +23,30 @@ pub struct PendingHaircutChange {
     pub haircut_bps: u32,
     /// The ledger sequence after which this change may execute.
     pub execute_after: u32,
+}
+
+/// A pending, timelocked change to a deposit cap (per tranche or per
+/// investor). Which cap it applies to is encoded in the storage key it is
+/// held under (`FeatureKey::PendingTrancheCap` / `PendingInvestorCap`).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingCapChange {
+    /// The cap value queued to take effect. `0` removes the cap.
+    pub cap: i128,
+    /// The ledger sequence after which this change may be executed.
+    pub execute_after: u32,
+}
+
+/// What an investor's position does with the yield it earns.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum YieldMode {
+    /// Yield is paid out to the investor by `claim_yield`. The default.
+    Claim = 0,
+    /// Yield is added to the position's principal, in the same tranche, by
+    /// `compound_yield`.
+    Compound = 1,
 }
 
 /// Lifecycle state of the pool's orderly wind-down process.
@@ -542,21 +566,6 @@ pub enum DataKey {
     LoanAssumption(BytesN<32>),
     /// Locked payoff quote for a loan, keyed by loan ID.
     PayoffQuote(BytesN<32>),
-    /// Configured collateral haircut (bps) for an asset class. Absent means
-    /// no haircut (0 bps) — face value counts in full toward ratio checks.
-    AssetClassHaircut(Symbol),
-    /// Pending timelocked haircut change for an asset class.
-    PendingHaircutChange(Symbol),
-    /// Ledgers that must elapse between proposing and executing a haircut
-    /// change. `0` disables the timelock (changes apply immediately).
-    HaircutChangeDelay,
-    /// The pool's wind-down lifecycle state. Absent means `Active`.
-    WindDownStatus,
-    /// Pending timelocked wind-down start.
-    PendingWindDown,
-    /// Ledgers that must elapse between proposing and executing wind-down.
-    /// `0` disables the timelock (wind-down starts immediately).
-    WindDownDelay,
 }
 
 /// Storage keys for newer pool features.
@@ -610,6 +619,64 @@ pub enum FeatureKey {
     FunctionPaused(PauseGroup),
     /// Revolving credit line keyed by borrower address.
     CreditLine(Address),
+    /// Lockup-tier position for an investor.
+    InvestorLockup(Address),
+    /// Accumulated funds reserved to pay lockup bonuses.
+    LockupBonusPool,
+    /// Share (bps) of the protocol fee routed to the lockup bonus pool.
+    LockupBonusFeeShareBps,
+    /// Number of extensions already granted to a loan.
+    LoanExtensionCount(BytesN<32>),
+    /// Maximum number of extensions a single loan may receive.
+    MaxExtensionsPerLoan,
+    /// Maximum term, in months, of a single loan extension.
+    MaxExtensionMonths,
+    /// Extension fee, in basis points.
+    ExtensionFeeBps,
+    /// Interest-only intro configuration for a loan.
+    LoanInterestOnly(BytesN<32>),
+    /// Maximum permitted interest-only intro period, in months.
+    MaxInterestOnlyMonths,
+    /// Admin-set maximum total deposits for a tranche, in token stroops.
+    /// Absent or zero means uncapped.
+    TrancheDepositCap(Tranche),
+    /// Admin-set maximum position size of a single investor, in token
+    /// stroops. Absent or zero means uncapped.
+    InvestorDepositCap,
+    /// Pending timelocked change to a tranche's deposit cap.
+    PendingTrancheCap(Tranche),
+    /// Pending timelocked change to the per-investor deposit cap.
+    PendingInvestorCap,
+    /// Ledgers that must elapse between proposing and executing a deposit
+    /// cap change. Absent means `DEFAULT_CAP_CHANGE_DELAY_LEDGERS`.
+    DepositCapChangeDelay,
+    /// Ceiling on late fees per billing period, as an absolute amount in
+    /// token stroops. Absent or zero disables this limb of the cap.
+    LateFeeCapAbs,
+    /// Ceiling on late fees per billing period, in basis points of the
+    /// installment. Absent or zero disables this limb of the cap.
+    LateFeeCapBps,
+    /// Fee charged to the incoming borrower on `assume_loan`, in basis points
+    /// of the loan's outstanding principal. Absent or zero means no fee.
+    /// Never above `MAX_ASSUMPTION_FEE_BPS`.
+    AssumptionFeeBps,
+    /// An investor's yield mode. Absent means `YieldMode::Claim`.
+    YieldMode(Address),
+    /// Configured collateral haircut (bps) for an asset class. Absent means
+    /// no haircut (0 bps) — face value counts in full toward ratio checks.
+    AssetClassHaircut(Symbol),
+    /// Pending timelocked haircut change for an asset class.
+    PendingHaircutChange(Symbol),
+    /// Ledgers that must elapse between proposing and executing a haircut
+    /// change. `0` disables the timelock (changes apply immediately).
+    HaircutChangeDelay,
+    /// The pool's wind-down lifecycle state. Absent means `Active`.
+    WindDownStatus,
+    /// Pending timelocked wind-down start.
+    PendingWindDown,
+    /// Ledgers that must elapse between proposing and executing wind-down.
+    /// `0` disables the timelock (wind-down starts immediately).
+    WindDownDelay,
 }
 
 /// Function groups that can be paused independently of the global pause.
@@ -653,7 +720,7 @@ pub struct LoanCollateralRecord {
     /// collateral.
     pub min_collateral_ratio_bps: u32,
     /// The collateral's asset class, used to look up its configured haircut
-    /// (`DataKey::AssetClassHaircut`) when computing collateralization ratios.
+    /// (`FeatureKey::AssetClassHaircut`) when computing collateralization ratios.
     /// Does not affect the face-value amounts above — only how much of that
     /// face value counts toward meeting `min_collateral_ratio_bps`.
     pub asset_class: Symbol,

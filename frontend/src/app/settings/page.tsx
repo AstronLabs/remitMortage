@@ -5,6 +5,7 @@
 import dynamic from "next/dynamic";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { getProductTourStore } from "@/hooks/useProductTourState";
+import { useDataSaver } from "@/context/DataSaverContext";
 import { useThemeStore } from "@/app/stores/useThemeStore";
 import ThemeModeSettings from "@/components/ThemeModeSettings";
 import NotificationFrequencyControl, {
@@ -18,11 +19,21 @@ const PushNotificationPanel = dynamic(
   () => import("../../components/PushNotificationPanel"),
   { ssr: false }
 );
+const RecoveryCodesManager = dynamic(() => import("../../components/RecoveryCodesManager"), {
+  ssr: false,
+});
 const ReferralInvitePanel = dynamic(() => import("../../components/ReferralInvitePanel"), {
   ssr: false,
 });
 
-type SettingsTab = "profile" | "wallets" | "notifications" | "referrals" | "contractor" | "appearance";
+type SettingsTab =
+  | "profile"
+  | "wallets"
+  | "notifications"
+  | "security"
+  | "referrals"
+  | "contractor"
+  | "appearance";
 
 type NotificationKey =
   | "emailAlerts"
@@ -43,6 +54,7 @@ const tabs: { id: SettingsTab; label: string }[] = [
   { id: "profile", label: "Profile" },
   { id: "wallets", label: "Wallets" },
   { id: "notifications", label: "Notifications & Alerts" },
+  { id: "security", label: "Security" },
   { id: "referrals", label: "Referrals" },
   { id: "contractor", label: "Developer/Contractor" },
   { id: "appearance", label: "Appearance" },
@@ -165,6 +177,7 @@ async function readFreighterPublicKey() {
 }
 
 export default function SettingsPage() {
+  const { dataSaver, highContrast, setDataSaver, setHighContrast } = useDataSaver();
   const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
   const [displayName, setDisplayName] = useState("Ada Remit");
   const [email, setEmail] = useState("ada@example.com");
@@ -453,6 +466,17 @@ export default function SettingsPage() {
                       </button>
                     </div>
                   </div>
+                  <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-5">
+                    <h3 className="text-sm font-semibold text-white">Accessibility & data use</h3>
+                    <label className="flex items-start justify-between gap-4 text-sm text-slate-200">
+                      <span><span className="font-semibold">Data saver</span><span className="block text-xs text-slate-400 mt-1">Honors your browser&apos;s Save-Data hint, reduces polling and chart payloads, and defers heavy visuals.</span></span>
+                      <input aria-label="Data saver" type="checkbox" checked={dataSaver} onChange={(event) => setDataSaver(event.target.checked)} className="mt-1 h-5 w-5 accent-cyan-500" />
+                    </label>
+                    <label className="flex items-start justify-between gap-4 text-sm text-slate-200">
+                      <span><span className="font-semibold">High-contrast palette</span><span className="block text-xs text-slate-400 mt-1">Uses stronger borders and focus indicators in addition to Windows forced-colors support.</span></span>
+                      <input aria-label="High contrast palette" type="checkbox" checked={highContrast} onChange={(event) => setHighContrast(event.target.checked)} className="mt-1 h-5 w-5 accent-cyan-500" />
+                    </label>
+                  </div>
                 </section>
               )}
 
@@ -672,6 +696,18 @@ export default function SettingsPage() {
                     <span>Active Notification Rules:</span>
                     <span className="font-bold text-white">{enabledNotificationCount} of 7 enabled</span>
                   </div>
+                </section>
+              )}
+
+              {activeTab === "security" && (
+                <section role="tabpanel" aria-label="Security settings" className="space-y-6">
+                  <div>
+                    <h2 className="text-2xl font-bold text-white">Security</h2>
+                    <p className="text-slate-400 text-sm mt-1">
+                      Manage two-factor authentication recovery so you can always get back into your account.
+                    </p>
+                  </div>
+                  <RecoveryCodesManager />
                 </section>
               )}
 

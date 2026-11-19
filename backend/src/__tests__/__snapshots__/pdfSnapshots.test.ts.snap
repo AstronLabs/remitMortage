@@ -1,0 +1,792 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`PDF Snapshot Tests should maintain layout and text rendering for edge cases (long text, missing fields): pdf-edge-text-calls 1`] = `
+[
+  [
+    "Remit",
+    50,
+    28,
+    {
+      "continued": true,
+    },
+  ],
+  [
+    "Mortgage",
+  ],
+  [
+    "Remittance-Backed Property Financing on Stellar",
+    50,
+    58,
+  ],
+  [
+    "VERIFICATION REPORT",
+    50,
+    72,
+    {
+      "align": "right",
+    },
+  ],
+  [
+    "Remittance Eligibility Analysis",
+    {
+      "align": "center",
+    },
+  ],
+  [
+    "Report ID: test-edge-case-report",
+    {
+      "align": "center",
+    },
+  ],
+  [
+    "Generated: Mon, 15 Jan 2024 10:00:00 GMT",
+    {
+      "align": "center",
+    },
+  ],
+  [
+    "✗  NOT ELIGIBLE",
+    0,
+    33,
+    {
+      "align": "center",
+    },
+  ],
+  [
+    "Wallet Addresses",
+  ],
+  [
+    "Sender Address",
+    55,
+    95,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVERY_LONG_STELLAR_ADDRESS_THAT_EXCEEDS_NORMAL_LENGTH",
+    230,
+    95,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Recipient Address",
+    55,
+    114,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "GTEST_RECIPIENT",
+    230,
+    114,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Payment History Summary",
+  ],
+  [
+    "Total Payments",
+    55,
+    149,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "0",
+    230,
+    149,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Total Volume (USDC)",
+    55,
+    168,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "$1,234,567.89",
+    230,
+    168,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Average Payment (USDC)",
+    55,
+    187,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "$0",
+    230,
+    187,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "First Payment",
+    55,
+    206,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "—",
+    230,
+    206,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Last Payment",
+    55,
+    225,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "—",
+    230,
+    225,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Payment Span",
+    55,
+    244,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "0 months",
+    230,
+    244,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Eligibility Assessment",
+  ],
+  [
+    "Verdict",
+    55,
+    279,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "Does not meet requirements",
+    230,
+    279,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Reason",
+    55,
+    298,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "Missing history and very long reason string very long reason string very long reason string very long reason string very long reason string very long reason string very long reason string very long reason string very long reason string very long reason string ",
+    230,
+    298,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Minimum Requirements",
+  ],
+  [
+    "Minimum Payments",
+    55,
+    333,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "6 payments",
+    230,
+    333,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Minimum Duration",
+    55,
+    352,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "3 months",
+    230,
+    352,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Asset",
+    55,
+    371,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "USDC (Stellar)",
+    230,
+    371,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "On-Chain Anchor Hash (SHA-256)",
+    50,
+    688,
+  ],
+  [
+    "mocked-hash-edge",
+    50,
+    700,
+    {
+      "width": 500,
+    },
+  ],
+  [
+    "DISCLAIMER: This report is generated for informational purposes only and does not constitute legal, financial, or mortgage advice. The hash above may be anchored on-chain in the RemitMortgage verification registry contract for auditability.",
+    50,
+    720,
+    {
+      "align": "justify",
+      "width": 500,
+    },
+  ],
+  [
+    "© 2026 RemitMortgage · Built on Stellar · MIT License",
+    50,
+    752,
+    {
+      "align": "center",
+    },
+  ],
+]
+`;
+
+exports[`PDF Snapshot Tests should maintain layout and text rendering for happy path: pdf-color-calls 1`] = `
+[
+  [
+    "#6366f1",
+  ],
+  [
+    "#ffffff",
+  ],
+  [
+    "#94a3b8",
+  ],
+  [
+    "#ffffff",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#64748b",
+  ],
+  [
+    "#ffffff",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#475569",
+  ],
+  [
+    "#1e293b",
+  ],
+  [
+    "#64748b",
+  ],
+  [
+    "#374151",
+  ],
+  [
+    "#94a3b8",
+  ],
+  [
+    "#cbd5e1",
+  ],
+]
+`;
+
+exports[`PDF Snapshot Tests should maintain layout and text rendering for happy path: pdf-rect-calls 1`] = `
+[
+  [
+    0,
+    0,
+    600,
+    90,
+  ],
+  [
+    50,
+    91,
+    500,
+    18,
+  ],
+  [
+    50,
+    145,
+    500,
+    18,
+  ],
+  [
+    50,
+    183,
+    500,
+    18,
+  ],
+  [
+    50,
+    221,
+    500,
+    18,
+  ],
+  [
+    50,
+    275,
+    500,
+    18,
+  ],
+  [
+    50,
+    329,
+    500,
+    18,
+  ],
+  [
+    50,
+    367,
+    500,
+    18,
+  ],
+]
+`;
+
+exports[`PDF Snapshot Tests should maintain layout and text rendering for happy path: pdf-text-calls 1`] = `
+[
+  [
+    "Remit",
+    50,
+    28,
+    {
+      "continued": true,
+    },
+  ],
+  [
+    "Mortgage",
+  ],
+  [
+    "Remittance-Backed Property Financing on Stellar",
+    50,
+    58,
+  ],
+  [
+    "VERIFICATION REPORT",
+    50,
+    72,
+    {
+      "align": "right",
+    },
+  ],
+  [
+    "Remittance Eligibility Analysis",
+    {
+      "align": "center",
+    },
+  ],
+  [
+    "Report ID: test-report-456",
+    {
+      "align": "center",
+    },
+  ],
+  [
+    "Generated: Mon, 15 Jan 2024 10:00:00 GMT",
+    {
+      "align": "center",
+    },
+  ],
+  [
+    "✓  ELIGIBLE",
+    0,
+    33,
+    {
+      "align": "center",
+    },
+  ],
+  [
+    "Wallet Addresses",
+  ],
+  [
+    "Sender Address",
+    55,
+    95,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "GTEST_SENDER",
+    230,
+    95,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Recipient Address",
+    55,
+    114,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "GTEST_RECIPIENT",
+    230,
+    114,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Payment History Summary",
+  ],
+  [
+    "Total Payments",
+    55,
+    149,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "12",
+    230,
+    149,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Total Volume (USDC)",
+    55,
+    168,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "$6000",
+    230,
+    168,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Average Payment (USDC)",
+    55,
+    187,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "$500",
+    230,
+    187,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "First Payment",
+    55,
+    206,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "Sun Jan 01 2023",
+    230,
+    206,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Last Payment",
+    55,
+    225,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "Mon Jan 01 2024",
+    230,
+    225,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Payment Span",
+    55,
+    244,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "12 months",
+    230,
+    244,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Eligibility Assessment",
+  ],
+  [
+    "Verdict",
+    55,
+    279,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "Passes minimum requirements",
+    230,
+    279,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Reason",
+    55,
+    298,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "Meets minimum requirements",
+    230,
+    298,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Minimum Requirements",
+  ],
+  [
+    "Minimum Payments",
+    55,
+    333,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "6 payments",
+    230,
+    333,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Minimum Duration",
+    55,
+    352,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "3 months",
+    230,
+    352,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "Asset",
+    55,
+    371,
+    {
+      "width": 170,
+    },
+  ],
+  [
+    "USDC (Stellar)",
+    230,
+    371,
+    {
+      "width": 320,
+    },
+  ],
+  [
+    "On-Chain Anchor Hash (SHA-256)",
+    50,
+    688,
+  ],
+  [
+    "mocked-hash",
+    50,
+    700,
+    {
+      "width": 500,
+    },
+  ],
+  [
+    "DISCLAIMER: This report is generated for informational purposes only and does not constitute legal, financial, or mortgage advice. The hash above may be anchored on-chain in the RemitMortgage verification registry contract for auditability.",
+    50,
+    720,
+    {
+      "align": "justify",
+      "width": 500,
+    },
+  ],
+  [
+    "© 2026 RemitMortgage · Built on Stellar · MIT License",
+    50,
+    752,
+    {
+      "align": "center",
+    },
+  ],
+]
+`;

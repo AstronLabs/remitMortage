@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 export type LoanType = "purchase" | "construction";
 export type DocumentChecklistStatus =
   | "missing"

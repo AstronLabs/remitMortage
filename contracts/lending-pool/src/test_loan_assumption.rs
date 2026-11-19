@@ -162,3 +162,97 @@ fn test_assume_loan_fails_not_active() {
         LoanAssumptionError::LoanNotActive
     );
 }
+
+// ── Assumption fee cap (#717) ─────────────────────────────────────────────
+
+fn assumption_fee_loan<'a>(
+    env: &'a Env,
+    investor: &Address,
+    client: &LendingPoolContractClient<'a>,
+    token: &Address,
+    borrower_b_funds: i128,
+) -> (BytesN<32>, Address) {
+    let borrower_a = Address::generate(env);
+    let borrower_b = Address::generate(env);
+    let loan_id = BytesN::from_array(env, &[61u8; 32]);
+    StellarAssetClient::new(env, token).mint(&borrower_b, &borrower_b_funds);
+    client.deposit(investor, &100_000_0000000i128, &Tranche::Senior);
+    client.request_loan(&borrower_a, &loan_id, &50_000_0000000i128);
+    client.approve_loan(&loan_id);
+    client.request_loan_assumption(&loan_id, &borrower_b);
+    (loan_id, borrower_b)
+}
+
+#[test]
+fn test_assumption_fee_at_cap_boundary_charges_exactly_cap() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (_admin, investor, treasury, token, client) = setup_pool_for_assumption(&env);
+
+    let cap = client.get_max_assumption_fee();
+    client.set_assumption_fee(&cap);
+    assert_eq!(client.get_assumption_fee(), cap);
+
+    let (loan_id, borrower_b) =
+        assumption_fee_loan(&env, &investor, &client, &token, 10_000_0000000i128);
+    let token_client = soroban_sdk::token::TokenClient::new(&env, &token);
+    let treasury_before = token_client.balance(&treasury);
+    client.assume_loan(&loan_id, &borrower_b);
+
+    let expected = 50_000_0000000i128 * cap as i128 / 10_000;
+    assert_eq!(token_client.balance(&treasury) - treasury_before, expected);
+    assert_eq!(
+        token_client.balance(&borrower_b),
+        10_000_0000000i128 - expected
+    );
+}
+
+#[test]
+fn test_set_assumption_fee_above_cap_reverts() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (_admin, _investor, _treasury, _token, client) = setup_pool_for_assumption(&env);
+
+    let cap = client.get_max_assumption_fee();
+    let res = client.try_set_assumption_fee(&(cap + 1));
+    assert_eq!(
+        res.err().unwrap().unwrap(),
+        LoanAssumptionError::AssumptionFeeCapExceeded
+    );
+    let res = client.try_set_assumption_fee(&10_000u32);
+    assert_eq!(
+        res.err().unwrap().unwrap(),
+        LoanAssumptionError::AssumptionFeeCapExceeded
+    );
+    assert_eq!(client.get_assumption_fee(), 0);
+}
+
+#[test]
+fn test_assumption_fee_well_under_cap() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (_admin, investor, treasury, token, client) = setup_pool_for_assumption(&env);
+
+    client.set_assumption_fee(&50u32);
+    let (loan_id, borrower_b) =
+        assumption_fee_loan(&env, &investor, &client, &token, 10_000_0000000i128);
+    let token_client = soroban_sdk::token::TokenClient::new(&env, &token);
+    let treasury_before = token_client.balance(&treasury);
+    client.assume_loan(&loan_id, &borrower_b);
+
+    let expected = 50_000_0000000i128 * 50 / 10_000;
+    assert_eq!(token_client.balance(&treasury) - treasury_before, expected);
+}
+
+#[test]
+fn test_assumption_without_configured_fee_is_free() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+    let (_admin, investor, treasury, token, client) = setup_pool_for_assumption(&env);
+
+    let (loan_id, borrower_b) = assumption_fee_loan(&env, &investor, &client, &token, 0);
+    let token_client = soroban_sdk::token::TokenClient::new(&env, &token);
+    let treasury_before = token_client.balance(&treasury);
+    client.assume_loan(&loan_id, &borrower_b);
+    assert_eq!(token_client.balance(&treasury), treasury_before);
+}

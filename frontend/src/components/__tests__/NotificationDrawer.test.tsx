@@ -92,4 +92,17 @@ describe("NotificationDrawer Component", () => {
     fireEvent.click(screen.getByTestId("mark-all-read-btn"));
     expect(mockMarkAllRead).toHaveBeenCalledTimes(1);
   });
+
+  it("requires typed confirmation before clearing notification history", () => {
+    render(<NotificationDrawer />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear notification history" }));
+    expect(mockClearHistory).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("textbox", { name: /type clear to continue/i }), {
+      target: { value: "CLEAR" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Clear history" }));
+
+    expect(mockClearHistory).toHaveBeenCalledTimes(1);
+  });
 });

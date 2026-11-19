@@ -1,0 +1,15 @@
+{
+  "environment": "production",
+  "collectedAt": "2026-10-01T00:00:00.000Z",
+  "config": {
+    "image.tag": "v1.7.2",
+    "service.url": "prod.example.awsapprunner.com",
+    "runtime.cpu": "2048",
+    "runtime.memory": "4096",
+    "env.OTEL_TRACES_SAMPLER_RATIO": "0.1",
+    "env.REDIS_URL": "redis://prod-cache:6379",
+    "env.LOG_LEVEL": "debug",
+    "env.INVITE_CODE_REQUIRED": "false",
+    "flag.risk-based-pricing": "45"
+  }
+}

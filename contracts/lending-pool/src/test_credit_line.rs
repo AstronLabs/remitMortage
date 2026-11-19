@@ -198,7 +198,8 @@ fn test_interest_accrues_only_against_drawn_balance() {
     client.draw_credit(&borrower, &2_000_0000000i128);
 
     // Advance 3 full compounding periods without any further draw or repay.
-    env.ledger().set_sequence_number(env.ledger().sequence() + 300);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 300);
 
     // A zero-amount probe isn't allowed, so trigger accrual via a tiny draw
     // against the now-larger balance and check the pre-draw accrued amount

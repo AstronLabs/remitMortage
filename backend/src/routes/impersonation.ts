@@ -1,6 +1,10 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Router, Response } from "express";
 import jwt from "jsonwebtoken";
 import { requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";
+import { requireBoundDevice } from "../middleware/adminDeviceBinding.js";
 import { sensitiveRateLimiter } from "../middleware/rateLimit.js";
 import { isValidGAddress } from "../middleware/validate.js";
 import { prisma } from "../services/db.js";
@@ -37,6 +41,11 @@ impersonationRouter.post(
   "/impersonate/start",
   sensitiveRateLimiter,
   requireAdmin,
+  // Issue #886: starting a support session is the highest-value admin action
+  // a stolen cookie could reach, so it needs the device proof too. Mounted
+  // per-route rather than on the router because requireAdmin — not the outer
+  // authMiddleware — is what resolves the admin identity here.
+  requireBoundDevice(),
   async (req: AuthenticatedRequest, res: Response) => {
     const adminAddress = req.user?.walletAddress;
     const { targetWallet, reason } = req.body ?? {};
@@ -105,6 +114,7 @@ impersonationRouter.post(
 impersonationRouter.post(
   "/impersonate/end",
   requireAdmin,
+  requireBoundDevice(),
   async (req: AuthenticatedRequest, res: Response) => {
     const adminAddress = req.user?.walletAddress;
     if (!adminAddress) {

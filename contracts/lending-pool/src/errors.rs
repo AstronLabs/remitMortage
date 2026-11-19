@@ -30,14 +30,12 @@ pub enum PoolError {
     InsufficientLiquidity = 9,
     /// Repayment exceeds remaining loan balance.
     OverPayment = 10,
-    /// Loan has already defaulted.
-    AlreadyDefaulted = 12,
     /// Operation rejected because the contract is paused.
     ContractPaused = 13,
     /// Proposed new admin is not the caller or no transfer is pending.
     NotPendingAdmin = 14,
-    /// Upgrade was proposed but the timelock delay has not elapsed yet.
-    UpgradeTimelockActive = 16,
+    /// A timelocked change (upgrade, haircut, deposit cap, ...) was proposed but its delay has not elapsed yet.
+    TimelockActive = 16,
     /// Investor cannot change tranche after the initial deposit.
     TrancheMismatch = 17,
     /// The daily borrow limit has been exceeded.
@@ -56,14 +54,12 @@ pub enum PoolError {
     LoanNotOverdue = 26,
     /// Loan maturity rebate has already been claimed.
     RebateAlreadyClaimed = 32,
-    /// Loan has missed payments, so is ineligible for the maturity rebate.
-    MissedPaymentsPreventRebate = 33,
+    /// Loan has missed payments, so is ineligible for the maturity rebate or an extension.
+    LoanNotGoodStanding = 33,
     /// Loan must be in Approved state for this operation.
     LoanNotActive = 37,
     /// A restructure proposal already exists for this loan.
     RestructureProposalExists = 38,
-    /// Proposed fee switch exceeds the hard protocol cap.
-    FeeSwitchTooHigh = 39,
     /// No pending restructure proposal for this loan.
     NoRestructureProposal = 34,
     /// MultisigValidator contract address has not been configured.
@@ -76,12 +72,10 @@ pub enum PoolError {
     CollateralRatioBreached = 41,
     /// No collateral available for release.
     NoCollateralToRelease = 42,
-    /// Collateral has already been seized.
-    CollateralAlreadySeized = 43,
     /// Invalid collateral ratio configuration.
     InvalidCollateralRatio = 44,
-    /// Origination fee exceeds the full-disbursement ceiling.
-    OriginationFeeTooHigh = 45,
+    /// A fee (origination, application or protocol fee switch) exceeds its ceiling.
+    FeeTooHigh = 45,
     /// Borrower already holds the maximum number of active loans permitted by
     /// `max_active_loans_per_borrower`, or the loan would push their aggregate
     /// outstanding principal past the configured exposure cap. (The error enum
@@ -89,24 +83,17 @@ pub enum PoolError {
     BorrowerLoanCapExceeded = 46,
     /// Refinancing request was submitted before the cooldown window elapsed.
     RefinanceCooldownActive = 47,
-    /// Application fee exceeds the ceiling permitted on a single application.
-    ApplicationFeeTooHigh = 48,
     /// Withdrawal amount exceeds the pool's configured per-transaction limit.
     WithdrawalExceedsMaxSingleLimit = 50,
     /// No payoff quote exists for this loan.
     PayoffQuoteNotFound = 51,
     /// The payoff quote has expired; request a fresh quote.
     PayoffQuoteExpired = 52,
-    /// Payoff quotes are disabled (window is zero) or the window is invalid.
-    InvalidQuoteWindow = 53,
     /// Deposit attempted before the configured per-investor cooldown has elapsed.
     DepositCooldownActive = 54,
     /// Refinance execution attempted after the rate-lock window has expired.
     /// The borrower must call `request_refinance` again to obtain a fresh quote.
     RefinanceRateLockExpired = 55,
-    /// No pending rate-lock exists for this loan; `request_refinance` must be
-    /// called before `execute_refinance`.
-    RefinanceRateLockNotFound = 56,
     /// Emergency liquidity injection requires an InsurancePool to be configured.
     InsurancePoolNotSet = 57,
     /// Emergency liquidity injection requires a GovernanceContract to be configured.
@@ -122,6 +109,13 @@ pub enum PoolError {
     /// Draw would exceed the approved credit limit minus the outstanding
     /// drawn balance.
     CreditLimitExceeded = 63,
+    /// Loan extension exceeds the permitted count or term.
+    ExtensionCapExceeded = 64,
+    /// Deposit would push the tranche's total past its admin-set cap.
+    TrancheCapExceeded = 65,
+    /// Deposit would push the investor's position past the admin-set
+    /// per-investor cap.
+    InvestorCapExceeded = 66,
 }
 
 #[contracterror]
@@ -135,4 +129,8 @@ pub enum LoanAssumptionError {
     ApplicantNotVerified = 5,
     AssumptionNotFound = 6,
     AssumptionAlreadyRequested = 7,
+    /// The requested loan assumption fee is above the hard on-chain cap.
+    AssumptionFeeCapExceeded = 8,
+    /// The pool has not been initialized.
+    NotInitialized = 9,
 }

@@ -8,6 +8,32 @@
     }
   ],
   "events": {
+    "attchg_a": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "threshold"
+        ]
+      }
+    ],
+    "attchg_c": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": []
+      }
+    ],
+    "attchg_p": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "threshold",
+          "execute_after"
+        ]
+      }
+    ],
     "auto_cfg": [
       {
         "topicArgs": [
@@ -119,6 +145,45 @@
         ]
       }
     ],
+    "hs_appr": [
+      {
+        "topicArgs": [
+          "goal_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "borrower",
+          "admin",
+          "reason_hash"
+        ]
+      }
+    ],
+    "hs_pay": [
+      {
+        "topicArgs": [
+          "goal_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "borrower",
+          "refund",
+          "approver",
+          "reason_hash"
+        ]
+      }
+    ],
+    "hs_req": [
+      {
+        "topicArgs": [
+          "goal_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "borrower",
+          "reason_hash"
+        ]
+      }
+    ],
     "pen_prop": [
       {
         "topicArgs": [],
@@ -150,6 +215,31 @@
         "dataKind": "value",
         "data": [
           "enabled"
+        ]
+      }
+    ],
+    "rel_conf": [
+      {
+        "topicArgs": [
+          "goal_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "borrower",
+          "release_time",
+          "reschedule_count"
+        ]
+      }
+    ],
+    "rel_prop": [
+      {
+        "topicArgs": [
+          "goal_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "borrower",
+          "release_time"
         ]
       }
     ],
@@ -185,6 +275,15 @@
           "borrower",
           "amount",
           "deposited"
+        ]
+      }
+    ],
+    "ttl_ext": [
+      {
+        "topicArgs": [],
+        "dataKind": "value",
+        "data": [
+          "extended"
         ]
       }
     ],

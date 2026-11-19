@@ -139,7 +139,7 @@ export async function exportAuditLogToSiem(
 
     if (rows.length === 0) break;
 
-    const events: AuditExportEvent[] = rows.map((r) => ({
+    const events: AuditExportEvent[] = rows.map((r: any) => ({
       id: r.id,
       action: r.action,
       actorAddress: r.actorAddress ?? null,

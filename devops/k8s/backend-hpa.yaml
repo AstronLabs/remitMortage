@@ -2,6 +2,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: remitmortgage-backend
+  namespace: remitmortgage
   labels:
     app: remitmortgage-backend
 spec:

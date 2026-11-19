@@ -6,22 +6,44 @@ import jwt from "jsonwebtoken";
 import { verifySessionToken } from "../services/jwtKeyRing.js";
 import { loadConfig } from "../config.js";
 import { IMPERSONATION_COOKIE, isImpersonationSessionActive } from "../services/impersonation.js";
-import { runWithUserBaggage } from "./tracingBaggage.js";
+import { tenantRateLimitMiddleware } from "./tenantRateLimit.js";
 
 export interface AuthenticatedRequest extends Request {
   user?: {
     walletAddress: string;
     network: string;
+    /**
+     * SHA-256 fingerprint of the device public key this session is bound to,
+     * from the token's `dbk` claim (issue #886). Undefined on an unbound
+     * session. `middleware/adminDeviceBinding.ts` is the only consumer.
+     */
+    deviceFingerprint?: string;
     impersonation?: {
       sessionId: string;
       adminAddress: string;
       readOnly: true;
     };
   };
+  /**
+   * How an admin-only route authenticated the caller. Set by
+   * {@link requireAdmin}; device binding (issue #886) only applies to the
+   * `session` path, since a static API key is a server-to-server credential
+   * with no device to bind to.
+   */
+  adminAuth?: {
+    via: "api_key" | "session";
+    deviceFingerprint?: string;
+  };
   workspaceAccess?: {
     workspaceId: string;
     role: string;
   };
+}
+
+/** The `dbk` claim of a verified session token, when it carries one. */
+function deviceFingerprintOf(decoded: unknown): string | undefined {
+  const claim = (decoded as { dbk?: unknown } | null)?.dbk;
+  return typeof claim === "string" && claim.length > 0 ? claim : undefined;
 }
 
 /** HTTP methods that never mutate state — allowed through a read-only impersonation session. */
@@ -58,12 +80,12 @@ export async function authMiddleware(req: AuthenticatedRequest, res: Response, n
       }
 
       req.user = decoded;
-      next();
-      return;
     } catch (err) {
       res.status(401).json({ error: "unauthorized", message: "Invalid or expired impersonation session" });
       return;
     }
+    tenantRateLimitMiddleware(req, res, next);
+    return;
   }
 
   // Accept token from HTTP-only cookie or Authorization: Bearer <token> header
@@ -82,12 +104,12 @@ export async function authMiddleware(req: AuthenticatedRequest, res: Response, n
       walletAddress: string;
       network: string;
     };
-    req.user = decoded;
-    runWithUserBaggage(decoded.walletAddress, next);
+    req.user = { ...decoded, deviceFingerprint: deviceFingerprintOf(decoded) };
   } catch (err) {
     res.status(401).json({ error: "unauthorized", message: "Invalid or expired token" });
     return;
   }
+  tenantRateLimitMiddleware(req, res, next);
 }
 
 /** Populate a verified wallet identity when present, without requiring login. */
@@ -107,7 +129,7 @@ export function optionalAuthMiddleware(
       // Public endpoints remain available to anonymous callers.
     }
   }
-  runWithUserBaggage(req.user?.walletAddress, next);
+  tenantRateLimitMiddleware(req, _res, next);
 }
 
 /**
@@ -122,7 +144,8 @@ export function requireAdmin(req: AuthenticatedRequest, res: Response, next: Nex
   // API-key callers remain supported for admin-only endpoints that do not
   // require a wallet identity.
   if (bearer && bearer === adminApiKey) {
-    next();
+    req.adminAuth = { via: "api_key" };
+    tenantRateLimitMiddleware(req, res, next);
     return;
   }
 
@@ -139,7 +162,9 @@ export function requireAdmin(req: AuthenticatedRequest, res: Response, next: Nex
       network: string;
     };
 
-    req.user = decoded;
+    const deviceFingerprint = deviceFingerprintOf(decoded);
+    req.user = { ...decoded, deviceFingerprint };
+    req.adminAuth = { via: "session", deviceFingerprint };
 
     const adminWallet = process.env.ADMIN_WALLET_ADDRESS?.toLowerCase();
     const wallet = decoded.walletAddress?.toLowerCase();
@@ -149,9 +174,9 @@ export function requireAdmin(req: AuthenticatedRequest, res: Response, next: Nex
       return;
     }
 
-    runWithUserBaggage(decoded.walletAddress, next);
   } catch (err) {
     res.status(401).json({ error: "unauthorized", message: "Invalid or expired token" });
     return;
   }
+  tenantRateLimitMiddleware(req, res, next);
 }

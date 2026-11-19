@@ -7,6 +7,7 @@ import {
   formatAutoRejectionReason,
   type AutoRejectionRuleRecord,
 } from "../services/autoRejectionRules.js";
+import { applicantFactory } from "../test-utils/factories/index.js";
 
 const baseRules: AutoRejectionRuleRecord[] = [
   {
@@ -37,33 +38,21 @@ const baseRules: AutoRejectionRuleRecord[] = [
 
 describe("autoRejectionRules engine", () => {
   it("rejects applicants below the configured minimum credit score", () => {
-    const failure = evaluateRule(baseRules[0], {
-      verificationStatus: "ELIGIBLE",
-      creditScore: 580,
-      monthlyIncome: 5000,
-    }, 10000);
+    const failure = evaluateRule(baseRules[0], applicantFactory.verified().snapshot({ creditScore: 580, monthlyIncome: 5000 }), 10000);
 
     expect(failure?.ruleType).toBe("MIN_CREDIT_SCORE");
     expect(failure?.reason).toMatch(/below the minimum required score/i);
   });
 
   it("rejects applicants exceeding the configured debt-to-income ratio", () => {
-    const failure = evaluateRule(baseRules[1], {
-      verificationStatus: "ELIGIBLE",
-      creditScore: 700,
-      monthlyIncome: 1000,
-    }, 50000);
+    const failure = evaluateRule(baseRules[1], applicantFactory.verified().snapshot({ creditScore: 700, monthlyIncome: 1000 }), 50000);
 
     expect(failure?.ruleType).toBe("MAX_DEBT_TO_INCOME");
     expect(failure?.reason).toMatch(/debt-to-income ratio/i);
   });
 
   it("rejects applicants without eligible verification status", () => {
-    const failure = evaluateRule(baseRules[2], {
-      verificationStatus: "PENDING",
-      creditScore: 720,
-      monthlyIncome: 6000,
-    }, 10000);
+    const failure = evaluateRule(baseRules[2], applicantFactory.verified().pending().snapshot(), 10000);
 
     expect(failure?.ruleType).toBe("REQUIRES_VERIFICATION");
     expect(failure?.reason).toMatch(/Verification status must be ELIGIBLE/i);
@@ -72,11 +61,7 @@ describe("autoRejectionRules engine", () => {
   it("evaluates all active rules and aggregates human-readable reasons", () => {
     const result = evaluateApplicantAgainstRules(
       baseRules,
-      {
-        verificationStatus: "INELIGIBLE",
-        creditScore: 500,
-        monthlyIncome: 800,
-      },
+      applicantFactory.ineligible().snapshot({ creditScore: 500, monthlyIncome: 800 }),
       80000
     );
 
@@ -88,11 +73,7 @@ describe("autoRejectionRules engine", () => {
   it("passes applicants that satisfy all active rules", () => {
     const result = evaluateApplicantAgainstRules(
       baseRules,
-      {
-        verificationStatus: "ELIGIBLE",
-        creditScore: 720,
-        monthlyIncome: 8000,
-      },
+      applicantFactory.verified().snapshot({ monthlyIncome: 8000 }),
       10000
     );
 

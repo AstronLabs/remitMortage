@@ -19,6 +19,7 @@ import PortfolioBreakdownChart from "../../components/PortfolioBreakdownChart";
 import InvestorRebalancingSuggestions from "../../components/investor/InvestorRebalancingSuggestions";
 import { computeConcentrationMetrics, type TrancheHolding } from "../../lib/investorRebalancing";
 import { useImpersonation } from "../../hooks/useImpersonation";
+import ConfirmationDialog from "../../components/ConfirmationDialog";
 import {
   LoadingRegion,
   PoolOverviewSkeleton,
@@ -139,9 +140,14 @@ function InvestPageInner() {
   const [depositError, setDepositError] = useState<string | null>(null);
   const [depositing, setDepositing] = useState(false);
   const [depositSuccess, setDepositSuccess] = useState(false);
+  const [pendingDeposit, setPendingDeposit] = useState<{
+    amount: number;
+    tranche: Tranche;
+  } | null>(null);
 
   const [withdrawing, setWithdrawing] = useState(false);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [pendingWithdrawal, setPendingWithdrawal] = useState(false);
 
   const [autoReinvest, setAutoReinvest] = useState(false);
   const [showAutoReinvestModal, setShowAutoReinvestModal] = useState(false);
@@ -222,29 +228,32 @@ function InvestPageInner() {
       return;
     }
 
-    const confirmed = confirm(
-      `Confirm deposit of ${formatUSDC(amount)} USDC into the ${selectedTranche} tranche?`
-    );
-    if (!confirmed) return;
+    setPendingDeposit({ amount, tranche: selectedTranche });
+  }
 
-    track("investment_started", { tranche: selectedTranche });
+  async function confirmDeposit() {
+    if (!pendingDeposit) return;
+    if (isReadOnly) throw new Error("Deposits are disabled while viewing this account read-only.");
+
+    const { amount, tranche } = pendingDeposit;
+    track("investment_started", { tranche });
     setDepositing(true);
     try {
       await new Promise((r) => setTimeout(r, 1000));
 
       setPosition((prev: InvestorPosition | null) => ({
         deposited: String((parseFloat(prev?.deposited ?? "0") + amount).toFixed(2)),
-        tranche: prev?.tranche ?? selectedTranche,
+        tranche: prev?.tranche ?? tranche,
         accruedYield: prev?.accruedYield ?? "0",
         startLedger: prev?.startLedger ?? 0,
       }));
 
       setDepositAmount("");
       setDepositSuccess(true);
-      track("investment_completed", { tranche: selectedTranche });
+      track("investment_completed", { tranche });
       setTimeout(() => setDepositSuccess(false), 5000);
-    } catch (err: any) {
-      setDepositError(err?.message || "Deposit transaction failed.");
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : "Deposit transaction failed.");
     } finally {
       setDepositing(false);
     }
@@ -289,18 +298,19 @@ function InvestPageInner() {
       }
     }
 
-    const confirmed = confirm(
-      `Withdraw your ${formatUSDC(position.deposited)} USDC from the ${position.tranche} tranche?`
-    );
-    if (!confirmed) return;
+    setPendingWithdrawal(true);
+  }
 
+  async function confirmWithdrawal() {
+    if (!pendingWithdrawal || !position) return;
+    if (isReadOnly) throw new Error("Withdrawals are disabled while viewing this account read-only.");
     setWithdrawing(true);
     try {
       await new Promise((r) => setTimeout(r, 800));
       setPosition({ deposited: "0", tranche: null, accruedYield: "0", startLedger: 0 });
       track("investment_withdrawal_completed");
-    } catch (err: any) {
-      setWithdrawError(err?.message || "Withdrawal failed.");
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : "Withdrawal failed.");
     } finally {
       setWithdrawing(false);
     }
@@ -767,6 +777,30 @@ function InvestPageInner() {
           />
         )}
       </main>
+
+      {pendingDeposit && (
+        <ConfirmationDialog
+          isOpen
+          title="Confirm USDC deposit"
+          description={`Deposit ${formatUSDC(pendingDeposit.amount)} USDC into the ${pendingDeposit.tranche} tranche. This submits a financial transaction and cannot be reversed after it is confirmed.`}
+          confirmationText="DEPOSIT"
+          confirmLabel="Deposit USDC"
+          onConfirm={confirmDeposit}
+          onCancel={() => setPendingDeposit(null)}
+        />
+      )}
+
+      {pendingWithdrawal && position && (
+        <ConfirmationDialog
+          isOpen
+          title="Confirm liquidity withdrawal"
+          description={`Withdraw ${formatUSDC(position.deposited)} USDC from the ${position.tranche} tranche. This changes your pool position and cannot be reversed after confirmation.`}
+          confirmationText="WITHDRAW"
+          confirmLabel="Withdraw USDC"
+          onConfirm={confirmWithdrawal}
+          onCancel={() => setPendingWithdrawal(false)}
+        />
+      )}
     </div>
   );
 }

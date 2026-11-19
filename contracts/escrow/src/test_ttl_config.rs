@@ -10,15 +10,15 @@
 #![cfg(test)]
 
 use crate::errors::EscrowError;
-use crate::types::{DataKey, EscrowConfig};
-use crate::{EscrowContract, EscrowContractClient};
+use crate::types::{DataKey, EscrowConfig, TtlKeeperEntry};
+use crate::{EscrowContract, EscrowContractClient, MAX_TTL_KEEPER_BATCH};
 use soroban_sdk::{
     testutils::{
         storage::{Instance, Persistent},
         Address as _, Ledger as _,
     },
     token::StellarAssetClient,
-    Address, Env, Symbol,
+    Address, Env, Symbol, Vec,
 };
 
 /// Testnet-style TTL profile: short bumps, cheap to maintain.
@@ -255,4 +255,107 @@ fn exhausted_matching_reserve_does_not_revert_deposit() {
     let goal = Symbol::new(&env, "empty");
     client.deposit(&borrower, &goal, &500);
     assert_eq!(client.get_borrower_balance(&borrower, &goal), 500);
+}
+
+// ── Issue #855: permissionless TTL keeper ───────────────────────────────
+
+/// An arbitrary keeper extends both the instance TTL and the listed borrower
+/// record once their remaining TTL has fallen below the configured threshold.
+#[test]
+fn extend_ttl_batch_restores_instance_and_record_ttls() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, borrower, token, lending_pool) = setup(&env);
+    client.initialize(&base_config(admin, token, lending_pool));
+
+    let goal = Symbol::new(&env, "land");
+    client.deposit(&borrower, &goal, &10_000_000_000_i128);
+
+    // Move into the bump window: remaining persistent TTL drops just below
+    // TESTNET_PERSISTENT_THRESHOLD, and instance TTL below its threshold too.
+    let advance = TESTNET_PERSISTENT_BUMP - TESTNET_PERSISTENT_THRESHOLD + 1;
+    env.ledger().set_sequence_number(advance);
+
+    let key = DataKey::Borrower(borrower.clone(), goal.clone());
+    env.as_contract(&client.address, || {
+        assert!(
+            env.storage().persistent().get_ttl(&key) < TESTNET_PERSISTENT_THRESHOLD,
+            "precondition: record TTL is inside the bump window",
+        );
+    });
+
+    let mut entries = Vec::new(&env);
+    entries.push_back(TtlKeeperEntry {
+        borrower: borrower.clone(),
+        goal_id: goal.clone(),
+    });
+
+    // No auth is required: any keeper may call this.
+    let extended = client.extend_ttl_batch(&entries);
+    assert_eq!(extended, 1);
+
+    env.as_contract(&client.address, || {
+        assert!(
+            env.storage().persistent().get_ttl(&key) >= TESTNET_PERSISTENT_BUMP,
+            "record TTL must be restored to the configured bump",
+        );
+        assert!(
+            env.storage().instance().get_ttl() >= TESTNET_INSTANCE_BUMP,
+            "instance TTL must be restored to the configured bump",
+        );
+    });
+}
+
+#[test]
+fn extend_ttl_batch_rejects_an_empty_batch() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, _borrower, token, lending_pool) = setup(&env);
+    client.initialize(&base_config(admin, token, lending_pool));
+
+    let entries: Vec<TtlKeeperEntry> = Vec::new(&env);
+    let result = client.try_extend_ttl_batch(&entries);
+    assert_eq!(result, Err(Ok(EscrowError::InvalidTtlConfig)));
+}
+
+#[test]
+fn extend_ttl_batch_rejects_an_oversized_batch() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, borrower, token, lending_pool) = setup(&env);
+    client.initialize(&base_config(admin, token, lending_pool));
+
+    let mut entries = Vec::new(&env);
+    for _ in 0..=MAX_TTL_KEEPER_BATCH {
+        entries.push_back(TtlKeeperEntry {
+            borrower: borrower.clone(),
+            goal_id: Symbol::new(&env, "land"),
+        });
+    }
+
+    let result = client.try_extend_ttl_batch(&entries);
+    assert_eq!(result, Err(Ok(EscrowError::InvalidTtlConfig)));
+}
+
+/// Only records the contract actually owns can be named: an entry that was
+/// never initialized is rejected instead of extending an arbitrary key.
+#[test]
+fn extend_ttl_batch_rejects_unknown_records() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, _borrower, token, lending_pool) = setup(&env);
+    client.initialize(&base_config(admin, token, lending_pool));
+
+    let mut entries = Vec::new(&env);
+    entries.push_back(TtlKeeperEntry {
+        borrower: Address::generate(&env),
+        goal_id: Symbol::new(&env, "ghost"),
+    });
+
+    let result = client.try_extend_ttl_batch(&entries);
+    assert_eq!(result, Err(Ok(EscrowError::EscrowGoalNotFound)));
 }

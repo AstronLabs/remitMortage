@@ -89,4 +89,24 @@ pub enum EscrowError {
     BeneficiaryListTooLarge = 40,
     /// No pending attestor-threshold change exists to apply or cancel.
     AttestorChangeProposalNotPending = 41,
+    /// A hardship withdrawal request already exists for this goal.
+    HardshipRequestAlreadyExists = 42,
+    /// No hardship withdrawal request exists for this goal.
+    HardshipRequestNotFound = 43,
+    /// The hardship request's approval window has elapsed.
+    HardshipRequestExpired = 44,
+    /// The hardship request has not been approved by the admin yet.
+    HardshipRequestNotApproved = 45,
+    /// The hardship withdrawal exceeds the per-period cap.
+    HardshipAmountExceedsCap = 46,
+    /// The goal's confirmed scheduled release time has not been reached yet.
+    ReleaseTimeNotReached = 47,
+    /// Proposed release time is in the past, too far out, or moves the
+    /// confirmed date further than the configured limit allows.
+    InvalidReleaseTime = 48,
+    /// The goal's release time cannot be rescheduled again: the reschedule
+    /// count or minimum interval limit was hit, or the date already passed.
+    RescheduleLimitReached = 49,
+    /// There is no pending release time proposal to confirm.
+    NoPendingReleaseTime = 50,
 }

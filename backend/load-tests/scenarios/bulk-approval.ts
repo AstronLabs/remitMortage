@@ -38,13 +38,20 @@ async function runOne(): Promise<void> {
   }
 }
 
-while (Date.now() < end) {
-  await Promise.all(Array.from({ length: config.connections }, () => runOne()));
+async function main(): Promise<void> {
+  while (Date.now() < end) {
+    await Promise.all(Array.from({ length: config.connections }, () => runOne()));
+  }
+
+  latencies.sort((a, b) => a - b);
+  const percentile = (p: number) => latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * p))] ?? 0;
+  const p95 = percentile(0.95);
+  const errorRate = requests ? failures / requests : 1;
+  console.log(JSON.stringify({ scenario: "bulk-admin-approval", requests, failures, errorRate, p95Ms: p95, thresholdMs: config.p99ThresholdMs }, null, 2));
+  if (errorRate > config.maxErrorRate || p95 > config.p99ThresholdMs) process.exit(1);
 }
 
-latencies.sort((a, b) => a - b);
-const percentile = (p: number) => latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * p))] ?? 0;
-const p95 = percentile(0.95);
-const errorRate = requests ? failures / requests : 1;
-console.log(JSON.stringify({ scenario: "bulk-admin-approval", requests, failures, errorRate, p95Ms: p95, thresholdMs: config.p99ThresholdMs }, null, 2));
-if (errorRate > config.maxErrorRate || p95 > config.p99ThresholdMs) process.exit(1);
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

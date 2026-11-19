@@ -16,6 +16,7 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import logger from "../utils/logger.js";
+import { safeParseJson } from "../utils/safeObject.js";
 
 export type AlertSeverity = "critical" | "high" | "medium" | "low";
 export type ChatOpsProvider = "slack" | "teams";
@@ -365,7 +366,7 @@ function header(
 /** Extracts the acknowledged alert id from a Slack or Teams callback body. */
 export function extractAlertId(provider: ChatOpsProvider, rawBody: string): string | null {
   try {
-    const parsed = JSON.parse(rawBody) as Record<string, any>;
+    const parsed = safeParseJson<Record<string, any>>(rawBody);
     if (provider === "slack") {
       const action = parsed?.actions?.[0];
       return typeof action?.value === "string" ? action.value : null;

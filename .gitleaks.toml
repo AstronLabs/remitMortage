@@ -4,7 +4,7 @@ title = "RemitMortgage Gitleaks config"
 [extend]
   useDefault = true
 
-[[allowlist]]
+[[allowlists]]
   description = "Test fixtures and example keys - not real secrets"
   # Paths that are known to contain placeholder/low-entropy example values
   paths = [
@@ -36,11 +36,20 @@ title = "RemitMortgage Gitleaks config"
   ]
 
 # Narrow allowlist for .env.example - only the placeholder patterns, not the whole file
-[[allowlist]]
+[[allowlists]]
   description = "Allow placeholder values in .env.example"
   paths = ['''backend/\.env\.example''', '''frontend/\.env\.example''']
   regexes = [
     '''your_.*_here''',
     '''your_secure_.*_key''',
     '''example''',
+  ]
+
+# Public identifiers and documentation placeholders that look like keys to the entropy rules
+[[allowlists]]
+  description = "Stellar contract addresses (public on-chain IDs) and synthetic AWS-key-shaped test fixtures"
+  regexes = [
+    '''\bC[A-Z2-7]{55}\b''',
+    '''AKIAIOSFODNN7EXAMPLE''',
+    '''AKIAABCDEFGHIJKLMNOP''',
   ]

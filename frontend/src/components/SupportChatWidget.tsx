@@ -14,6 +14,7 @@ import {
   type SupportChatMessage,
   type SupportChatStreamEvent,
 } from "@/lib/supportChatApi";
+import { safeParseJson } from "@/lib/safe-object";
 
 function formatTime(iso: string): string {
   try {
@@ -90,7 +91,7 @@ export function SupportChatWidget() {
     source.onmessage = (event) => {
       let payload: SupportChatStreamEvent;
       try {
-        payload = JSON.parse(event.data);
+        payload = safeParseJson<SupportChatStreamEvent>(event.data);
       } catch {
         return;
       }

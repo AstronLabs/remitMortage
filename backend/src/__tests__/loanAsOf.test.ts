@@ -3,6 +3,7 @@
 
 import express from "express";
 import request from "supertest";
+import { loanFactory } from "../test-utils/factories/index.js";
 
 // Mock every dependency the loan router pulls in so we exercise only the
 // GET /:id `asOf` branch.
@@ -37,15 +38,11 @@ const app = express();
 app.use(express.json());
 app.use("/api/loan", loanRouter);
 
-const CURRENT = {
+const CURRENT = loanFactory.disbursing().build({
   id: "loan-1",
-  borrowerAddress: "GA" + "A".repeat(54),
-  amount: "1500",
-  status: "Disbursing",
-  reason: "funds released",
-  createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-20T18:15:00.000Z",
-};
+  createdAt: "2026-01-01T00:00:00.000Z",
+});
 
 beforeEach(() => {
   jest.clearAllMocks();

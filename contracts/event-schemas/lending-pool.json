@@ -60,6 +60,26 @@
         ]
       }
     ],
+    "assm_cfg": [
+      {
+        "topicArgs": [],
+        "dataKind": "value",
+        "data": [
+          "fee_bps"
+        ]
+      }
+    ],
+    "assm_fee": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "loan_id",
+          "new_borrower",
+          "fee"
+        ]
+      }
+    ],
     "batch_skip": [
       {
         "topicArgs": [
@@ -143,6 +163,60 @@
         ]
       }
     ],
+    "bonus_pay": [
+      {
+        "topicArgs": [
+          "investor"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "payout",
+          "lockup.tier as u32"
+        ]
+      }
+    ],
+    "cap_canc": [
+      {
+        "topicArgs": [
+          "Self::tranche_scope(&tranche)"
+        ],
+        "dataKind": "tuple",
+        "data": []
+      }
+    ],
+    "cap_canc/investor": [
+      {
+        "topicArgs": [
+          "\"investor\""
+        ],
+        "dataKind": "tuple",
+        "data": []
+      }
+    ],
+    "cap_prop": [
+      {
+        "topicArgs": [
+          "scope"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "cap",
+          "execute_after"
+        ]
+      }
+    ],
+    "cap_set": [
+      {
+        "topicArgs": [
+          "scope"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "old",
+          "cap"
+        ]
+      }
+    ],
     "collateral_released": [
       {
         "topicArgs": [
@@ -167,6 +241,39 @@
           "amount",
           "remaining_collateral",
           "ratio_bps"
+        ]
+      }
+    ],
+    "credit_drawn": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "borrower",
+          "amount",
+          "drawn_balance"
+        ]
+      }
+    ],
+    "credit_opened": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "borrower",
+          "approved_limit",
+          "interest_rate_bps"
+        ]
+      }
+    ],
+    "credit_repaid": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "borrower",
+          "amount",
+          "drawn_balance"
         ]
       }
     ],
@@ -215,6 +322,20 @@
         ]
       }
     ],
+    "dep_tier": [
+      {
+        "topicArgs": [
+          "investor"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "amount",
+          "tier as u32",
+          "unlock_ledger",
+          "bonus_bps"
+        ]
+      }
+    ],
     "disburse": [
       {
         "topicArgs": [],
@@ -244,6 +365,43 @@
         "data": [
           "borrower",
           "start_ledger"
+        ]
+      }
+    ],
+    "ext_loan": [
+      {
+        "topicArgs": [
+          "loan_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "borrower",
+          "additional_months",
+          "fee",
+          "duration_months"
+        ]
+      }
+    ],
+    "fee_cap": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "max_abs",
+          "max_bps"
+        ]
+      }
+    ],
+    "fee_capd": [
+      {
+        "topicArgs": [
+          "loan_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "uncapped",
+          "capped",
+          "cap"
         ]
       }
     ],
@@ -466,6 +624,18 @@
         "dataKind": "value",
         "data": [
           "enabled"
+        ]
+      }
+    ],
+    "phase_tr": [
+      {
+        "topicArgs": [
+          "loan_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "LoanPhase::Amortizing as u32",
+          "monthly_amount"
         ]
       }
     ],
@@ -811,6 +981,29 @@
         "dataKind": "tuple",
         "data": [
           "address"
+        ]
+      }
+    ],
+    "y_comp": [
+      {
+        "topicArgs": [
+          "investor"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "amount",
+          "deposited"
+        ]
+      }
+    ],
+    "y_mode": [
+      {
+        "topicArgs": [
+          "investor"
+        ],
+        "dataKind": "value",
+        "data": [
+          "mode as u32"
         ]
       }
     ]

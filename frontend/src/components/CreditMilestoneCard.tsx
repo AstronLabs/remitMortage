@@ -63,7 +63,7 @@ export function CreditMilestoneCard({
               <p className="text-xs text-cyan-400/80 mt-0.5">Next milestone — on-time payment required</p>
             )}
             {isFuture && (
-              <p className="text-xs text-zinc-500 mt-0.5">{milestone.projectedTier} tier projected</p>
+              <p className="text-xs text-zinc-400 mt-0.5">{milestone.projectedTier} tier projected</p>
             )}
           </div>
         </div>
@@ -88,7 +88,7 @@ export function CreditMilestoneCard({
           <p className="text-xs font-mono" style={{ color: tierColor }}>
             {milestone.projectedScore} pts · {milestone.projectedTier}
           </p>
-          <p className="text-[10px] text-zinc-500">{milestone.projectedRate}% APR</p>
+          <p className="text-[10px] text-zinc-400">{milestone.projectedRate}% APR</p>
         </div>
       </div>
     </div>

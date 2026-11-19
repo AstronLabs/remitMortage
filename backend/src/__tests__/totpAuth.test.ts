@@ -12,6 +12,7 @@ import {
   getAdmin2FAStatus,
   disableAdmin2FA,
   hashRecoveryCode,
+  regenerateAdminRecoveryCodes,
 } from "../services/totpAuth.js";
 
 describe("Admin TOTP 2FA Service (#562)", () => {
@@ -77,5 +78,27 @@ describe("Admin TOTP 2FA Service (#562)", () => {
     // 7. Verify remaining recovery code count decremented
     const updatedStatus = getAdmin2FAStatus(testAdmin);
     expect(updatedStatus.remainingRecoveryCodes).toBe(7);
+  });
+
+  test("regenerating recovery codes invalidates the old set and restores the count", () => {
+    const setup = initiateAdmin2FASetup(testAdmin);
+    enableAdmin2FA(testAdmin, setup.secret, generateTotpCode(setup.secret), setup.recoveryCodes);
+
+    // Burn a code so the count is below full.
+    authenticateAdmin2FA(testAdmin, setup.recoveryCodes[0]);
+    expect(getAdmin2FAStatus(testAdmin).remainingRecoveryCodes).toBe(7);
+
+    const fresh = regenerateAdminRecoveryCodes(testAdmin)!;
+    expect(fresh).toHaveLength(8);
+    expect(getAdmin2FAStatus(testAdmin).remainingRecoveryCodes).toBe(8);
+
+    // Old (unused) code no longer works; a new one does, once.
+    expect(authenticateAdmin2FA(testAdmin, setup.recoveryCodes[1]).authenticated).toBe(false);
+    expect(authenticateAdmin2FA(testAdmin, fresh[0]).method).toBe("recovery_code");
+    expect(authenticateAdmin2FA(testAdmin, fresh[0]).authenticated).toBe(false);
+  });
+
+  test("regenerating recovery codes is refused when 2FA is not enabled", () => {
+    expect(regenerateAdminRecoveryCodes(testAdmin)).toBeNull();
   });
 });

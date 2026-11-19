@@ -1,0 +1,17 @@
+{
+  "$comment": "Expected staging/production differences (issue #931). `key` supports a trailing * wildcard. If `expect` is given, the difference is only tolerated while each environment still holds exactly that value, so an allowlisted key drifting somewhere unexpected is still reported. Without `expect`, any value difference is tolerated (use for values that are inherently environment-specific).",
+  "allow": [
+    { "key": "env.DATABASE_SECRET_ID", "reason": "Each environment has its own secret" },
+    { "key": "env.SENDGRID_SECRET_ID", "reason": "Each environment has its own secret" },
+    { "key": "env.SECRETS_ROTATION_IDS", "reason": "Derived from per-environment secret ARNs" },
+    { "key": "env.REDIS_URL", "reason": "Per-environment cache endpoint" },
+    { "key": "env.REDIS_CLUSTER_NODES", "reason": "Per-environment cache endpoint" },
+    { "key": "env.OTEL_EXPORTER_OTLP_ENDPOINT", "reason": "Per-environment collector" },
+    { "key": "env.OTEL_TRACES_SAMPLER_RATIO", "reason": "Production samples less to control cost", "expect": { "staging": "1.0", "production": "0.1" } },
+    { "key": "image.tag", "reason": "Staging runs ahead of production between promotions" },
+    { "key": "runtime.cpu", "reason": "Production is sized larger", "expect": { "staging": "1024", "production": "2048" } },
+    { "key": "runtime.memory", "reason": "Production is sized larger", "expect": { "staging": "2048", "production": "4096" } },
+    { "key": "service.url", "reason": "Per-environment hostname" },
+    { "key": "service.arn", "reason": "Per-environment resource" }
+  ]
+}

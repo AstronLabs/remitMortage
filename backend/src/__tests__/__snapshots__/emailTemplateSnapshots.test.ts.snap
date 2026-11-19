@@ -1,0 +1,3766 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Email Template Snapshots Locale: en Deposit Alert renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Deposit Received - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Deposit Received</h2>
+    <p>A deposit of <strong>1000.00 USDC</strong> was recorded on-chain against your mortgage escrow.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Amount</td>
+        <td class="details-value">1000.00 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Borrower</td>
+        <td class="details-value"><code>GABC123DEF456</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Ledger</td>
+        <td class="details-value">12345</td>
+      </tr>
+    </table>
+    <p>No action is required. Your remittance timeline has been updated automatically.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: en Deposit Receipt renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Deposit Receipt - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Deposit Confirmed</h2>
+    <p>We successfully received your deposit of <strong>500.00 USDC</strong>. Your remittance progress has been updated accordingly.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Amount</td>
+        <td class="details-value">500.00 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Transaction Hash</td>
+        <td class="details-value"><code>tx_abc123def456</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Date</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Your deposit will be automatically processed into your mortgage escrow account.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: en Edge Cases renders correctly with extremely long fields, missing optional, and multi-currency formats: edge-deposit 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Deposit Receipt - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Deposit Confirmed</h2>
+    <p>We successfully received your deposit of <strong>1,234,567.89 USDC</strong>. Your remittance progress has been updated accordingly.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Amount</td>
+        <td class="details-value">1,234,567.89 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Transaction Hash</td>
+        <td class="details-value"><code>tx_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_end</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Date</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Your deposit will be automatically processed into your mortgage escrow account.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: en Edge Cases renders correctly with extremely long fields, missing optional, and multi-currency formats: edge-loan-status 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Loan Application Status Update: Pending Investigation</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Loan Status Update</h2>
+    <p>Your loan application has been updated to status: <strong>Pending Investigation</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Loan Application ID</td>
+        <td class="details-value"><code>LOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOAN</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">New Status</td>
+        <td class="details-value"><span style="color: #3b82f6; font-weight: bold;">Pending Investigation</span></td>
+      </tr>
+      <tr>
+        <td class="details-label">Updated At</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Log in to the dashboard to view more details about your application.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: en Edge Cases renders correctly with extremely long fields, missing optional, and multi-currency formats: edge-lockout 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Security Alert: Account Locked - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2 style="color: #ef4444;">Security Alert: Account Temporarily Locked</h2>
+    <p>Multiple consecutive failed login attempts were detected on your RemitMortgage account.</p>
+    <p>To protect your financial records and assets from unauthorized access, your account has been temporarily locked for <strong>999999 minute(s)</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Lockout Duration</td>
+        <td class="details-value"><strong>999999 minute(s)</strong></td>
+      </tr>
+      
+      <tr>
+        <td class="details-label">Timestamp</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p style="margin-top: 20px;">If this was not you, someone may be attempting to guess your password. We strongly recommend resetting your password immediately once the lockout period expires.</p>
+    <a href="#" class="cta-button" style="background-color: #ef4444;">Reset Password</a>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: en Loan Status Update renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Loan Application Status Update: Approved</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Loan Status Update</h2>
+    <p>Your loan application has been updated to status: <strong>Approved</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Loan Application ID</td>
+        <td class="details-value"><code>loan_789</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">New Status</td>
+        <td class="details-value"><span style="color: #3b82f6; font-weight: bold;">Approved</span></td>
+      </tr>
+      <tr>
+        <td class="details-label">Updated At</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Log in to the dashboard to view more details about your application.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: en Lockout Notification renders correctly with IP address 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Security Alert: Account Locked - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2 style="color: #ef4444;">Security Alert: Account Temporarily Locked</h2>
+    <p>Multiple consecutive failed login attempts were detected on your RemitMortgage account.</p>
+    <p>To protect your financial records and assets from unauthorized access, your account has been temporarily locked for <strong>15 minute(s)</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Lockout Duration</td>
+        <td class="details-value"><strong>15 minute(s)</strong></td>
+      </tr>
+      <tr>
+        <td class="details-label">Originating IP Address</td>
+        <td class="details-value"><code>192.168.1.100</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Timestamp</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p style="margin-top: 20px;">If this was not you, someone may be attempting to guess your password. We strongly recommend resetting your password immediately once the lockout period expires.</p>
+    <a href="#" class="cta-button" style="background-color: #ef4444;">Reset Password</a>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: en Lockout Notification renders correctly without IP address 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Security Alert: Account Locked - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2 style="color: #ef4444;">Security Alert: Account Temporarily Locked</h2>
+    <p>Multiple consecutive failed login attempts were detected on your RemitMortgage account.</p>
+    <p>To protect your financial records and assets from unauthorized access, your account has been temporarily locked for <strong>30 minute(s)</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Lockout Duration</td>
+        <td class="details-value"><strong>30 minute(s)</strong></td>
+      </tr>
+      
+      <tr>
+        <td class="details-label">Timestamp</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p style="margin-top: 20px;">If this was not you, someone may be attempting to guess your password. We strongly recommend resetting your password immediately once the lockout period expires.</p>
+    <a href="#" class="cta-button" style="background-color: #ef4444;">Reset Password</a>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: en Milestone Approved Alert renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Milestone Approved - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Milestone Approved</h2>
+    <p>A construction milestone on your project has been approved and funds are cleared for release.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Milestone</td>
+        <td class="details-value"><code>milestone_42</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Released Amount</td>
+        <td class="details-value">5000.00 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Borrower</td>
+        <td class="details-value"><code>GABC123DEF456</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Ledger</td>
+        <td class="details-value">99999</td>
+      </tr>
+    </table>
+    <p>Your contractor can now proceed with the next stage of work.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: en Repayment Alert renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Repayment Recorded - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Repayment Recorded</h2>
+    <p>We applied a repayment of <strong>300.00 USDC</strong> to your outstanding loan balance.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Amount</td>
+        <td class="details-value">300.00 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Borrower</td>
+        <td class="details-value"><code>GABC123DEF456</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Ledger</td>
+        <td class="details-value">67890</td>
+      </tr>
+    </table>
+    <p>Log in to the dashboard to review your updated amortization schedule.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: en Repayment Reminder renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Repayment Reminder - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Repayment Reminder</h2>
+    <p>This is a reminder that an upcoming repayment is scheduled for your loan.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Amount Due</td>
+        <td class="details-value"><strong>250.00 USDC</strong></td>
+      </tr>
+      <tr>
+        <td class="details-label">Due Date</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Please ensure sufficient funds are available in your wallet or linked account before the due date to avoid grace period penalties.</p>
+    <a href="#" class="cta-button">Make Repayment Now</a>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: es Deposit Alert renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Depósito Recibido - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Depósito Recibido</h2>
+    <p>Un depósito de <strong>1000.00 USDC</strong> fue registrado en cadena contra su depósito de hipoteca.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Monto</td>
+        <td class="details-value">1000.00 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Prestatario</td>
+        <td class="details-value"><code>GABC123DEF456</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Libro Mayor</td>
+        <td class="details-value">12345</td>
+      </tr>
+    </table>
+    <p>No se requiere acción. Su línea de tiempo de remesa ha sido actualizada automáticamente.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: es Deposit Receipt renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Recibo de Depósito - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Depósito Confirmado</h2>
+    <p>Recibimos exitosamente su depósito de <strong>500.00 USDC</strong>. Su progreso de remesa ha sido actualizado en consecuencia.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Monto</td>
+        <td class="details-value">500.00 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Hash de Transacción</td>
+        <td class="details-value"><code>tx_abc123def456</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Fecha</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Su depósito será procesado automáticamente en su cuenta de depósito de hipoteca.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: es Edge Cases renders correctly with extremely long fields, missing optional, and multi-currency formats: edge-deposit 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Recibo de Depósito - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Depósito Confirmado</h2>
+    <p>Recibimos exitosamente su depósito de <strong>1,234,567.89 USDC</strong>. Su progreso de remesa ha sido actualizado en consecuencia.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Monto</td>
+        <td class="details-value">1,234,567.89 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Hash de Transacción</td>
+        <td class="details-value"><code>tx_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_end</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Fecha</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Su depósito será procesado automáticamente en su cuenta de depósito de hipoteca.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: es Edge Cases renders correctly with extremely long fields, missing optional, and multi-currency formats: edge-loan-status 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Actualización de Estado de Solicitud de Préstamo: Pending Investigation</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Actualización de Estado del Préstamo</h2>
+    <p>Su solicitud de préstamo ha sido actualizada al estado: <strong>Pending Investigation</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">ID de Solicitud de Préstamo</td>
+        <td class="details-value"><code>LOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOAN</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Nuevo Estado</td>
+        <td class="details-value"><span style="color: #3b82f6; font-weight: bold;">Pending Investigation</span></td>
+      </tr>
+      <tr>
+        <td class="details-label">Actualizado En</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Inicie sesión en el panel de control para ver más detalles sobre su solicitud.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: es Edge Cases renders correctly with extremely long fields, missing optional, and multi-currency formats: edge-lockout 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Alerta de Seguridad: Cuenta Bloqueada - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2 style="color: #ef4444;">Alerta de Seguridad: Cuenta Temporalmente Bloqueada</h2>
+    <p>Se detectaron múltiples intentos de inicio de sesión fallidos consecutivos en su cuenta de RemitMortgage.</p>
+    <p>Para proteger sus registros financieros y activos de acceso no autorizado, su cuenta ha sido temporalmente bloqueada por <strong>999999 minuto(s)</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Duración del Bloqueo</td>
+        <td class="details-value"><strong>999999 minute(s)</strong></td>
+      </tr>
+      
+      <tr>
+        <td class="details-label">Marca de Tiempo</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p style="margin-top: 20px;">Si esto no fue usted, alguien puede estar intentando adivinar su contraseña. Recomendamos encarecidamente restablecer su contraseña inmediatamente una vez que expire el período de bloqueo.</p>
+    <a href="#" class="cta-button" style="background-color: #ef4444;">Restablecer Contraseña</a>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: es Loan Status Update renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Actualización de Estado de Solicitud de Préstamo: Approved</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Actualización de Estado del Préstamo</h2>
+    <p>Su solicitud de préstamo ha sido actualizada al estado: <strong>Approved</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">ID de Solicitud de Préstamo</td>
+        <td class="details-value"><code>loan_789</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Nuevo Estado</td>
+        <td class="details-value"><span style="color: #3b82f6; font-weight: bold;">Approved</span></td>
+      </tr>
+      <tr>
+        <td class="details-label">Actualizado En</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Inicie sesión en el panel de control para ver más detalles sobre su solicitud.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: es Lockout Notification renders correctly with IP address 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Alerta de Seguridad: Cuenta Bloqueada - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2 style="color: #ef4444;">Alerta de Seguridad: Cuenta Temporalmente Bloqueada</h2>
+    <p>Se detectaron múltiples intentos de inicio de sesión fallidos consecutivos en su cuenta de RemitMortgage.</p>
+    <p>Para proteger sus registros financieros y activos de acceso no autorizado, su cuenta ha sido temporalmente bloqueada por <strong>15 minuto(s)</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Duración del Bloqueo</td>
+        <td class="details-value"><strong>15 minute(s)</strong></td>
+      </tr>
+      <tr>
+        <td class="details-label">Dirección IP de Origen</td>
+        <td class="details-value"><code>192.168.1.100</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Marca de Tiempo</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p style="margin-top: 20px;">Si esto no fue usted, alguien puede estar intentando adivinar su contraseña. Recomendamos encarecidamente restablecer su contraseña inmediatamente una vez que expire el período de bloqueo.</p>
+    <a href="#" class="cta-button" style="background-color: #ef4444;">Restablecer Contraseña</a>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: es Lockout Notification renders correctly without IP address 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Alerta de Seguridad: Cuenta Bloqueada - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2 style="color: #ef4444;">Alerta de Seguridad: Cuenta Temporalmente Bloqueada</h2>
+    <p>Se detectaron múltiples intentos de inicio de sesión fallidos consecutivos en su cuenta de RemitMortgage.</p>
+    <p>Para proteger sus registros financieros y activos de acceso no autorizado, su cuenta ha sido temporalmente bloqueada por <strong>30 minuto(s)</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Duración del Bloqueo</td>
+        <td class="details-value"><strong>30 minute(s)</strong></td>
+      </tr>
+      
+      <tr>
+        <td class="details-label">Marca de Tiempo</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p style="margin-top: 20px;">Si esto no fue usted, alguien puede estar intentando adivinar su contraseña. Recomendamos encarecidamente restablecer su contraseña inmediatamente una vez que expire el período de bloqueo.</p>
+    <a href="#" class="cta-button" style="background-color: #ef4444;">Restablecer Contraseña</a>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: es Milestone Approved Alert renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Hito Aprobado - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Hito Aprobado</h2>
+    <p>Un hito de construcción en su proyecto ha sido aprobado y los fondos están listos para ser liberados.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Hito</td>
+        <td class="details-value"><code>milestone_42</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Monto Liberado</td>
+        <td class="details-value">5000.00 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Prestatario</td>
+        <td class="details-value"><code>GABC123DEF456</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Libro Mayor</td>
+        <td class="details-value">99999</td>
+      </tr>
+    </table>
+    <p>Su contratista ahora puede proceder con la siguiente etapa del trabajo.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: es Repayment Alert renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Pago Registrado - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Pago Registrado</h2>
+    <p>Aplicamos un pago de <strong>300.00 USDC</strong> a su saldo de préstamo pendiente.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Monto</td>
+        <td class="details-value">300.00 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Prestatario</td>
+        <td class="details-value"><code>GABC123DEF456</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Libro Mayor</td>
+        <td class="details-value">67890</td>
+      </tr>
+    </table>
+    <p>Inicie sesión en el panel de control para revisar su calendario de amortización actualizado.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: es Repayment Reminder renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Recordatorio de Pago - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Recordatorio de Pago</h2>
+    <p>Este es un recordatorio de que un pago próximo está programado para su préstamo.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Monto Adeudado</td>
+        <td class="details-value"><strong>250.00 USDC</strong></td>
+      </tr>
+      <tr>
+        <td class="details-label">Fecha de Vencimiento</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Por favor, asegúrese de tener fondos suficientes en su billetera o cuenta vinculada antes de la fecha de vencimiento para evitar penalidades de período de gracia.</p>
+    <a href="#" class="cta-button">Realizar Pago Ahora</a>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: fr Deposit Alert renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Dépôt Reçu - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Dépôt Reçu</h2>
+    <p>Un dépôt de <strong>1000.00 USDC</strong> a été enregistré en chaîne contre votre dépôt hypothécaire.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Montant</td>
+        <td class="details-value">1000.00 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Emprunteur</td>
+        <td class="details-value"><code>GABC123DEF456</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Grand Livre</td>
+        <td class="details-value">12345</td>
+      </tr>
+    </table>
+    <p>Aucune action requise. Votre calendrier de remise a été mis à jour automatiquement.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: fr Deposit Receipt renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Reçu de Dépôt - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Dépôt Confirmé</h2>
+    <p>Nous avons reçu avec succès votre dépôt de <strong>500.00 USDC</strong>. Votre progression de remise a été mise à jour en conséquence.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Montant</td>
+        <td class="details-value">500.00 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Hash de Transaction</td>
+        <td class="details-value"><code>tx_abc123def456</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Date</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Votre dépôt sera automatiquement traité dans votre compte de dépôt hypothécaire.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: fr Edge Cases renders correctly with extremely long fields, missing optional, and multi-currency formats: edge-deposit 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Reçu de Dépôt - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Dépôt Confirmé</h2>
+    <p>Nous avons reçu avec succès votre dépôt de <strong>1,234,567.89 USDC</strong>. Votre progression de remise a été mise à jour en conséquence.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Montant</td>
+        <td class="details-value">1,234,567.89 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Hash de Transaction</td>
+        <td class="details-value"><code>tx_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_long_end</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Date</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Votre dépôt sera automatiquement traité dans votre compte de dépôt hypothécaire.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: fr Edge Cases renders correctly with extremely long fields, missing optional, and multi-currency formats: edge-loan-status 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Mise à Jour du Statut de Demande de Prêt : Pending Investigation</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Mise à Jour du Statut du Prêt</h2>
+    <p>Votre demande de prêt a été mise à jour au statut : <strong>Pending Investigation</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">ID de Demande de Prêt</td>
+        <td class="details-value"><code>LOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOANOAN</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Nouveau Statut</td>
+        <td class="details-value"><span style="color: #3b82f6; font-weight: bold;">Pending Investigation</span></td>
+      </tr>
+      <tr>
+        <td class="details-label">Mis à Jour Le</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Connectez-vous au tableau de bord pour voir plus de détails sur votre demande.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: fr Edge Cases renders correctly with extremely long fields, missing optional, and multi-currency formats: edge-lockout 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Alerte de Sécurité : Compte Verrouillé - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2 style="color: #ef4444;">Alerte de Sécurité : Compte Temporairement Verrouillé</h2>
+    <p>Plusieurs tentatives de connexion échouées consécutives ont été détectées sur votre compte RemitMortgage.</p>
+    <p>Pour protéger vos enregistrements financiers et vos actifs contre les accès non autorisés, votre compte a été temporairement verrouillé pour <strong>999999 minute(s)</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Durée du Verrouillage</td>
+        <td class="details-value"><strong>999999 minute(s)</strong></td>
+      </tr>
+      
+      <tr>
+        <td class="details-label">Horodatage</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p style="margin-top: 20px;">Si ce n'était pas vous, quelqu'un essaie peut-être de deviner votre mot de passe. Nous vous recommandons vivement de réinitialiser votre mot de passe immédiatement après l'expiration de la période de verrouillage.</p>
+    <a href="#" class="cta-button" style="background-color: #ef4444;">Réinitialiser le Mot de Passe</a>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: fr Loan Status Update renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Mise à Jour du Statut de Demande de Prêt : Approved</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Mise à Jour du Statut du Prêt</h2>
+    <p>Votre demande de prêt a été mise à jour au statut : <strong>Approved</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">ID de Demande de Prêt</td>
+        <td class="details-value"><code>loan_789</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Nouveau Statut</td>
+        <td class="details-value"><span style="color: #3b82f6; font-weight: bold;">Approved</span></td>
+      </tr>
+      <tr>
+        <td class="details-label">Mis à Jour Le</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Connectez-vous au tableau de bord pour voir plus de détails sur votre demande.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: fr Lockout Notification renders correctly with IP address 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Alerte de Sécurité : Compte Verrouillé - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2 style="color: #ef4444;">Alerte de Sécurité : Compte Temporairement Verrouillé</h2>
+    <p>Plusieurs tentatives de connexion échouées consécutives ont été détectées sur votre compte RemitMortgage.</p>
+    <p>Pour protéger vos enregistrements financiers et vos actifs contre les accès non autorisés, votre compte a été temporairement verrouillé pour <strong>15 minute(s)</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Durée du Verrouillage</td>
+        <td class="details-value"><strong>15 minute(s)</strong></td>
+      </tr>
+      <tr>
+        <td class="details-label">Adresse IP d'Origine</td>
+        <td class="details-value"><code>192.168.1.100</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Horodatage</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p style="margin-top: 20px;">Si ce n'était pas vous, quelqu'un essaie peut-être de deviner votre mot de passe. Nous vous recommandons vivement de réinitialiser votre mot de passe immédiatement après l'expiration de la période de verrouillage.</p>
+    <a href="#" class="cta-button" style="background-color: #ef4444;">Réinitialiser le Mot de Passe</a>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: fr Lockout Notification renders correctly without IP address 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Alerte de Sécurité : Compte Verrouillé - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2 style="color: #ef4444;">Alerte de Sécurité : Compte Temporairement Verrouillé</h2>
+    <p>Plusieurs tentatives de connexion échouées consécutives ont été détectées sur votre compte RemitMortgage.</p>
+    <p>Pour protéger vos enregistrements financiers et vos actifs contre les accès non autorisés, votre compte a été temporairement verrouillé pour <strong>30 minute(s)</strong>.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Durée du Verrouillage</td>
+        <td class="details-value"><strong>30 minute(s)</strong></td>
+      </tr>
+      
+      <tr>
+        <td class="details-label">Horodatage</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p style="margin-top: 20px;">Si ce n'était pas vous, quelqu'un essaie peut-être de deviner votre mot de passe. Nous vous recommandons vivement de réinitialiser votre mot de passe immédiatement après l'expiration de la période de verrouillage.</p>
+    <a href="#" class="cta-button" style="background-color: #ef4444;">Réinitialiser le Mot de Passe</a>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: fr Milestone Approved Alert renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Jalon Approuvé - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Jalon Approuvé</h2>
+    <p>Un jalon de construction sur votre projet a été approuvé et les fonds sont prêts à être libérés.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Jalon</td>
+        <td class="details-value"><code>milestone_42</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Montant Libéré</td>
+        <td class="details-value">5000.00 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Emprunteur</td>
+        <td class="details-value"><code>GABC123DEF456</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Grand Livre</td>
+        <td class="details-value">99999</td>
+      </tr>
+    </table>
+    <p>Votre entrepreneur peut maintenant passer à la prochaine étape des travaux.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: fr Repayment Alert renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Remboursement Enregistré - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Remboursement Enregistré</h2>
+    <p>Nous avons appliqué un remboursement de <strong>300.00 USDC</strong> à votre solde de prêt en cours.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Montant</td>
+        <td class="details-value">300.00 USDC</td>
+      </tr>
+      <tr>
+        <td class="details-label">Emprunteur</td>
+        <td class="details-value"><code>GABC123DEF456</code></td>
+      </tr>
+      <tr>
+        <td class="details-label">Grand Livre</td>
+        <td class="details-value">67890</td>
+      </tr>
+    </table>
+    <p>Connectez-vous au tableau de bord pour consulter votre calendrier d'amortissement mis à jour.</p>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;
+
+exports[`Email Template Snapshots Locale: fr Repayment Reminder renders correctly 1`] = `
+"
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Rappel de Remboursement - RemitMortgage</title>
+        <style>
+          body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+          }
+          .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+          }
+          .header {
+            background-color: #0f172a;
+            color: #ffffff;
+            padding: 32px 24px;
+            text-align: center;
+          }
+          .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.025em;
+          }
+          .content {
+            padding: 32px 24px;
+            line-height: 1.6;
+          }
+          .cta-button {
+            display: inline-block;
+            background-color: #3b82f6;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 24px;
+            text-align: center;
+          }
+          .footer {
+            background-color: #f1f5f9;
+            padding: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+            border-top: 1px solid #e2e8f0;
+          }
+          .details-table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+          }
+          .details-table td {
+            padding: 12px;
+            border-bottom: 1px solid #f1f5f9;
+          }
+          .details-label {
+            font-weight: 600;
+            color: #475569;
+            width: 35%;
+          }
+          .details-value {
+            color: #0f172a;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>AstronLabs | RemitMortgage</h1>
+          </div>
+          <div class="content">
+            
+    <h2>Rappel de Remboursement</h2>
+    <p>Ceci est un rappel qu'un remboursement à venir est programmé pour votre prêt.</p>
+    <table class="details-table">
+      <tr>
+        <td class="details-label">Montant Dû</td>
+        <td class="details-value"><strong>250.00 USDC</strong></td>
+      </tr>
+      <tr>
+        <td class="details-label">Date d'Échéance</td>
+        <td class="details-value"><DATE></td>
+      </tr>
+    </table>
+    <p>Veuillez vous assurer que des fonds suffisants sont disponibles dans votre portefeuille ou compte lié avant la date d'échéance pour éviter les pénalités de période de grâce.</p>
+    <a href="#" class="cta-button">Effectuer le Remboursement Maintenant</a>
+  
+          </div>
+          <div class="footer">
+            <p>This is an automated notification from RemitMortgage protocol.</p>
+            <p>&copy; 2026 AstronLabs. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  "
+`;

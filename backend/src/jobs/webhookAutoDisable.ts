@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import cron from "node-cron";
+import { scheduledJob } from "../services/jobLeaderElection.js";
 import { prisma } from "../services/db.js";
 import { updateSubscriptionStatus } from "../services/webhook.js";
 import { queueNotification } from "../services/notification.js";
@@ -46,9 +47,9 @@ export function startWebhookAutoDisableScheduler(): void {
 
   autoDisableTask = cron.schedule(
     schedule,
-    () => {
-      void runWebhookAutoDisableSweep();
-    },
+    scheduledJob("webhook-auto-disable", async () => {
+      await runWebhookAutoDisableSweep();
+    }),
     { timezone: "UTC" }
   );
 

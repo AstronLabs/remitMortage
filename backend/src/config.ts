@@ -179,6 +179,12 @@ export interface Config {
   webhookAutoDisableStaleAfterMs: number;
   /** Optional email notified when a webhook subscription is auto-paused. */
   webhookAutoDisableNotifyEmail: string | null;
+  /**
+   * Recipient notified when an admin session is rejected by device binding
+   * (issue #886) — a copied cookie, a revoked device, a replayed signature.
+   * Empty disables the email; the audit entry is written either way.
+   */
+  adminAlertEmail: string;
 }
 
 /** Parses APPLICATION_SLA_HOURS (a JSON map of status -> SLA hours). */
@@ -406,5 +412,10 @@ export function loadConfig(): Config {
       10
     ),
     webhookAutoDisableNotifyEmail: process.env.WEBHOOK_AUTO_DISABLE_NOTIFY_EMAIL || null,
+    adminAlertEmail:
+      process.env.ADMIN_ALERT_EMAIL ||
+      process.env.OPS_FALLBACK_ALERT_EMAIL ||
+      process.env.ALERT_DEFAULT_RECIPIENT ||
+      "",
   };
 }

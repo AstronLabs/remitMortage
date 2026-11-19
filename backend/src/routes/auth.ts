@@ -5,6 +5,7 @@ import { Router, Request, Response } from "express";
 import { signSessionToken } from "../services/jwtKeyRing.js";
 import { isInviteRequired, validateInviteCode, consumeInviteCode } from "../services/inviteCode.js";
 import { upsertApplicant } from "../services/db.js";
+import { adaptiveCaptcha } from "../middleware/adaptiveCaptcha.js";
 import logger from "../utils/logger.js";
 
 export const authRouter = Router();
@@ -41,7 +42,7 @@ export const authRouter = Router();
  *       403:
  *         description: Invite code required or invalid
  */
-authRouter.post("/register", async (req: Request, res: Response) => {
+authRouter.post("/register", adaptiveCaptcha("register"), async (req: Request, res: Response) => {
   const { walletAddress, email, inviteCode } = req.body ?? {};
 
   if (!walletAddress || typeof walletAddress !== "string") {

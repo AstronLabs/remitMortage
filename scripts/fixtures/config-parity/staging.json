@@ -1,0 +1,15 @@
+{
+  "environment": "staging",
+  "collectedAt": "2026-10-01T00:00:00.000Z",
+  "config": {
+    "image.tag": "v1.8.0",
+    "service.url": "stg.example.awsapprunner.com",
+    "runtime.cpu": "1024",
+    "runtime.memory": "2048",
+    "env.OTEL_TRACES_SAMPLER_RATIO": "1.0",
+    "env.REDIS_URL": "redis://stg-cache:6379",
+    "env.LOG_LEVEL": "debug",
+    "env.INVITE_CODE_REQUIRED": "false",
+    "flag.risk-based-pricing": "45"
+  }
+}
