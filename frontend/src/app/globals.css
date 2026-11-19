@@ -1560,3 +1560,46 @@ body {
   outline: 2px solid var(--color-blue);
   outline-offset: 2px;
 }
+
+/* Theme-aware illustrations.
+   Both the light and dark variant are rendered by `Illustration`, and the
+   active `[data-theme]` on the document root reveals exactly one of them. This
+   keeps the switch instantly in sync with the theme toggle without a JS round
+   trip (and therefore without a flash of the wrong variant). */
+.rm-illustration {
+  display: block;
+  line-height: 0;
+}
+
+/* Let the wrapper size the artwork; the SVG scales to fill it. */
+.rm-illustration svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.rm-illustration__variant {
+  display: none;
+}
+
+/* Default to the dark variant at the base, matching the `:root` dark tokens,
+   until `[data-theme]` is applied on the document root. */
+.rm-illustration__variant[data-variant="dark"] {
+  display: block;
+}
+
+[data-theme="light"] .rm-illustration__variant[data-variant="light"] {
+  display: block;
+}
+
+[data-theme="light"] .rm-illustration__variant[data-variant="dark"] {
+  display: none;
+}
+
+[data-theme="dark"] .rm-illustration__variant[data-variant="light"] {
+  display: none;
+}
+
+[data-theme="dark"] .rm-illustration__variant[data-variant="dark"] {
+  display: block;
+}

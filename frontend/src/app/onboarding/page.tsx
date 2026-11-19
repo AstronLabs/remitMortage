@@ -4,6 +4,7 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { Illustration } from "../../components/illustrations/Illustration";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 const OnboardingWizard = dynamic(() => import("../../components/onboarding/OnboardingWizard"), {
@@ -92,14 +93,20 @@ export default function OnboardingPage() {
             </div>
 
             {/* Title + description */}
-            <div className="max-w-3xl space-y-3 sm:space-y-4">
-              <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-[2.75rem] font-extrabold tracking-tight text-white leading-tight">
-                Onboard to RemitMortgage
-              </h1>
-              <p className="text-sm sm:text-base md:text-lg text-slate-400 leading-relaxed max-w-2xl">
-                Connect your wallet, verify your remittance history on Stellar Horizon, set a
-                down-payment goal, and make your first deposit into a non-custodial Soroban escrow.
-              </p>
+            <div className="flex flex-col-reverse gap-6 lg:flex-row lg:items-center lg:justify-between">
+              <div className="max-w-3xl space-y-3 sm:space-y-4">
+                <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-[2.75rem] font-extrabold tracking-tight text-white leading-tight">
+                  Onboard to RemitMortgage
+                </h1>
+                <p className="text-sm sm:text-base md:text-lg text-slate-400 leading-relaxed max-w-2xl">
+                  Connect your wallet, verify your remittance history on Stellar Horizon, set a
+                  down-payment goal, and make your first deposit into a non-custodial Soroban escrow.
+                </p>
+              </div>
+              <Illustration
+                name="onboarding-welcome"
+                className="w-full max-w-[220px] shrink-0 mx-auto lg:mx-0"
+              />
             </div>
           </div>
         </div>
