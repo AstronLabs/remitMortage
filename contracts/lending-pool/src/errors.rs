@@ -38,7 +38,11 @@ pub enum PoolError {
     TimelockActive = 16,
     /// Investor cannot change tranche after the initial deposit.
     TrancheMismatch = 17,
-    /// The daily borrow limit has been exceeded.
+    /// The pool-wide daily borrow limit has been exceeded, or (from `repay`
+    /// and `payoff_with_quote`) the repayment would push the borrower past the
+    /// admin-set per-borrower daily repayment cap. The repayment is rejected
+    /// outright, never partially applied. (The error enum is at Soroban's
+    /// 50-variant ceiling, so both daily limits share this code.)
     DailyBorrowLimitExceeded = 20,
     /// Refund amount exceeds the amount disbursed for the loan.
     RefundExceedsDisbursed = 21,
@@ -114,7 +118,10 @@ pub enum PoolError {
     /// Deposit would push the tranche's total past its admin-set cap.
     TrancheCapExceeded = 65,
     /// Deposit would push the investor's position past the admin-set
-    /// per-investor cap.
+    /// per-investor cap, or push their share of the tranche above the
+    /// admin-set maximum per-investor tranche share. (The error enum is at
+    /// Soroban's 50-variant ceiling, so both per-investor limits share this
+    /// code.)
     InvestorCapExceeded = 66,
 }
 
@@ -133,4 +140,26 @@ pub enum LoanAssumptionError {
     AssumptionFeeCapExceeded = 8,
     /// The pool has not been initialized.
     NotInitialized = 9,
+}
+
+/// Errors returned by `adjust_loan_rate`. Kept apart from [`PoolError`]
+/// because that enum is at Soroban's 50-variant ceiling.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum RateAdjustmentError {
+    /// The pool has not been initialized.
+    NotInitialized = 1,
+    /// Loan not found.
+    LoanNotFound = 2,
+    /// Only an active (approved) loan's rate can be adjusted.
+    LoanNotActive = 3,
+    /// The new rate is zero or unchanged from the loan's current rate.
+    InvalidRate = 4,
+    /// The adjustment moves the rate by more than the admin-set maximum
+    /// change per adjustment.
+    PeriodicCapExceeded = 5,
+    /// The adjustment would move the rate further from the loan's own
+    /// starting rate than the admin-set lifetime cap allows.
+    LifetimeCapExceeded = 6,
 }

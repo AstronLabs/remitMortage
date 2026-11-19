@@ -677,6 +677,54 @@ pub enum FeatureKey {
     /// Ledgers that must elapse between proposing and executing wind-down.
     /// `0` disables the timelock (wind-down starts immediately).
     WindDownDelay,
+    /// Terms latched when a loan is created (original principal and starting
+    /// interest rate), keyed by loan ID. Used by the cumulative late-fee cap
+    /// and the adjustable-rate caps, which are both measured against the
+    /// loan's own origination terms rather than anything pool-wide.
+    LoanOriginTerms(BytesN<32>),
+    /// Admin-set maximum total a single borrower may repay within one ledger
+    /// day, in token stroops. Absent or zero disables the cap.
+    DailyRepaymentCap,
+    /// A borrower's running repayment total for the current ledger day.
+    BorrowerDailyRepaid(Address),
+    /// Admin-set maximum share of a tranche any one investor may hold, in
+    /// basis points. Absent or zero disables the cap.
+    MaxInvestorTrancheShareBps,
+    /// Admin-set maximum change, in basis points, a single rate adjustment
+    /// may make to a loan's rate. Absent or zero disables this cap.
+    RateAdjustPeriodicCapBps,
+    /// Admin-set maximum distance, in basis points, a loan's rate may move
+    /// from its own starting rate over its lifetime. Absent or zero disables
+    /// this cap.
+    RateAdjustLifetimeCapBps,
+    /// Admin-set ceiling on a loan's cumulative late fees, in basis points of
+    /// that loan's original principal. Absent or zero disables the cap.
+    LateFeeLifetimeCapBps,
+    /// Cumulative late fees charged on a loan so far, in token stroops.
+    /// Absent means zero.
+    LoanLateFeesCharged(BytesN<32>),
+}
+
+/// Terms a loan was originated with, latched at creation and never changed
+/// afterwards (restructures, prepayments and rate adjustments leave it as is).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoanOriginTerms {
+    /// Principal at origination.
+    pub original_principal: i128,
+    /// Interest rate at origination, in basis points.
+    pub starting_rate_bps: u32,
+}
+
+/// A borrower's repayments within one ledger day, used to enforce the
+/// per-borrower daily repayment cap.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DailyRepaymentWindow {
+    /// Ledger day (`ledger sequence / LEDGERS_PER_DAY`) the total belongs to.
+    pub day: u32,
+    /// Total repaid by the borrower during `day`.
+    pub repaid: i128,
 }
 
 /// Function groups that can be paused independently of the global pause.
