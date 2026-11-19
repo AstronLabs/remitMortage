@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import NotificationDrawer from "../NotificationDrawer";
 
@@ -10,6 +10,10 @@ const mockMarkRead = jest.fn();
 const mockMarkAllRead = jest.fn();
 const mockClearHistory = jest.fn();
 const mockClosePanel = jest.fn();
+const mockRemoveNotification = jest.fn();
+const mockRestoreNotifications = jest.fn();
+const mockNotify = jest.fn();
+const mockDismiss = jest.fn();
 
 // NotificationContext appends new records to the end of the array (oldest
 // first); NotificationDrawer reverses this for newest-first display.
@@ -43,6 +47,10 @@ jest.mock("@/context/NotificationContext", () => ({
     clearHistory: mockClearHistory,
     markRead: mockMarkRead,
     markAllRead: mockMarkAllRead,
+    removeNotification: mockRemoveNotification,
+    restoreNotifications: mockRestoreNotifications,
+    notify: mockNotify,
+    dismiss: mockDismiss,
   }),
 }));
 

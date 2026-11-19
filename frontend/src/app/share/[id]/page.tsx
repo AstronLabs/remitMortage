@@ -99,10 +99,10 @@ export default async function SharePage({ params }: Props) {
       <div className="w-full max-w-lg">
         <div className="rounded-2xl border border-slate-800 bg-slate-950/80 backdrop-blur-sm overflow-hidden">
           {/* Header */}
-          <div className="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+          <header role="banner" className="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
             <span className="text-sm font-bold text-white">RemitMortgage</span>
             <span className="text-xs text-slate-500 font-mono">{data.borrowerLabel}</span>
-          </div>
+          </header>
 
           {/* Savings progress */}
           <div className="px-6 pt-6 pb-4">
@@ -167,17 +167,19 @@ export default async function SharePage({ params }: Props) {
           </div>
 
           {/* Footer */}
-          <div className="px-6 py-4 border-t border-slate-800 mt-4">
-            <Link
-              href={BASE_URL}
-              className="block w-full py-2.5 text-center text-sm font-bold text-white bg-cyan-600 hover:bg-cyan-500 rounded-full transition-colors"
-            >
-              View on RemitMortgage
-            </Link>
+          <footer role="contentinfo" className="px-6 py-4 border-t border-slate-800 mt-4">
+            <nav aria-label="Share page links">
+              <Link
+                href={BASE_URL}
+                className="block w-full py-2.5 text-center text-sm font-bold text-white bg-cyan-600 hover:bg-cyan-500 rounded-full transition-colors"
+              >
+                View on RemitMortgage
+              </Link>
+            </nav>
             <p className="text-[10px] text-slate-600 text-center mt-2">
               Remittance-backed property financing on Stellar
             </p>
-          </div>
+          </footer>
         </div>
       </div>
     </div>

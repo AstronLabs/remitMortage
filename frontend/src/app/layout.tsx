@@ -16,6 +16,8 @@ import { KeyboardShortcutsProvider } from "@/context/KeyboardShortcutsContext";
 import { NarrationProvider } from "@/context/NarrationContext";
 import { ToastContainer } from "@/components/ToastContainer";
 import { HotToaster } from "@/components/HotToaster";
+import { FeatureAnnouncements } from "@/components/FeatureAnnouncements";
+import { InstallPrompt } from "@/components/InstallPrompt";
 import WalletBanner from "@/components/WalletBanner";
 import { DemoModeProvider } from "@/context/DemoModeContext";
 import DemoModeBanner from "@/components/DemoModeBanner";
@@ -82,6 +84,11 @@ export const metadata: Metadata = {
     creator: "@remitmortgage",
     site: "@remitmortgage",
   },
+  appleWebApp: {
+    capable: true,
+    title: "RemitMortgage",
+    statusBarStyle: "black-translucent",
+  },
   robots: {
     index: true,
     follow: true,
@@ -140,6 +147,8 @@ export default async function RootLayout({
                         <NotificationLayer />
                         <ToastContainer />
                         <HotToaster />
+                        <FeatureAnnouncements />
+                        <InstallPrompt />
                       </NarrationProvider>
                     </KeyboardShortcutsProvider>
                   </IdleSessionProvider>

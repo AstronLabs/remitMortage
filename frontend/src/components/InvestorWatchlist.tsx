@@ -5,6 +5,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { useWallet } from "@/context/WalletContext";
+import { useUndoableAction } from "@/hooks/useUndoableAction";
 import {
   fetchUpcomingOfferings,
   fetchWatchlist,
@@ -44,6 +45,7 @@ function formatRate(bps: number): string {
  */
 export function InvestorWatchlist() {
   const { isConnected } = useWallet();
+  const { run: runUndoable } = useUndoableAction();
   const [upcoming, setUpcoming] = useState<UpcomingOffering[]>([]);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -69,14 +71,53 @@ export function InvestorWatchlist() {
     if (isConnected) void load();
   }, [isConnected, load]);
 
+  /**
+   * Removing a watched offering is low-stakes, so it lands behind a short undo
+   * window: the row disappears immediately, the DELETE is only sent once the
+   * window lapses, and Undo cancels it and restores the row.
+   */
+  function removeFromWatchlist(loanId: string) {
+    const removedItem = watchlist.find((item) => item.loanId === loanId);
+    const wasWatchedInUpcoming = upcoming.some((o) => o.id === loanId && o.watched);
+
+    setWatchlist((prev) => prev.filter((item) => item.loanId !== loanId));
+    setUpcoming((prev) => prev.map((o) => (o.id === loanId ? { ...o, watched: false } : o)));
+
+    runUndoable({
+      title: "Removed from watchlist",
+      message: "You can undo this for a few seconds.",
+      revert: () => {
+        if (removedItem) {
+          setWatchlist((prev) =>
+            prev.some((item) => item.loanId === loanId) ? prev : [...prev, removedItem]
+          );
+        }
+        if (wasWatchedInUpcoming) {
+          setUpcoming((prev) => prev.map((o) => (o.id === loanId ? { ...o, watched: true } : o)));
+        }
+      },
+      commit: async () => {
+        try {
+          await unwatchOffering(loanId);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Couldn't update your watchlist.");
+          await load();
+        }
+      },
+    });
+  }
+
   async function toggle(loanId: string, currentlyWatched: boolean) {
+    // Adding a watch is not destructive, so it stays immediate. Removing one
+    // goes through the undo window.
+    if (currentlyWatched) {
+      removeFromWatchlist(loanId);
+      return;
+    }
+
     setBusyId(loanId);
     try {
-      if (currentlyWatched) {
-        await unwatchOffering(loanId);
-      } else {
-        await watchOffering(loanId);
-      }
+      await watchOffering(loanId);
       await load();
     } catch (err) {
       throw new Error(err instanceof Error ? err.message : "Couldn't update your watchlist.");

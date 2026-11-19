@@ -4,7 +4,12 @@
 
 import React, { useState } from "react";
 import { BellRing, Check, CheckCheck, X, Trash2, CheckCircle2, AlertCircle, Info, AlertTriangle } from "lucide-react";
-import { useNotifications, ToastVariant } from "@/context/NotificationContext";
+import {
+  useNotifications,
+  ToastVariant,
+  type NotificationRecord,
+} from "@/context/NotificationContext";
+import { useUndoableAction } from "@/hooks/useUndoableAction";
 import { EmptyState } from "@/components/EmptyState";
 import ConfirmationDialog from "./ConfirmationDialog";
 
@@ -45,7 +50,10 @@ export function NotificationDrawer() {
     clearHistory,
     markRead,
     markAllRead,
+    removeNotification,
+    restoreNotifications,
   } = useNotifications();
+  const { run: runUndoable } = useUndoableAction();
 
   const [activeTab, setActiveTab] = useState<"all" | "unread">("all");
   const [confirmClear, setConfirmClear] = useState(false);
@@ -57,6 +65,31 @@ export function NotificationDrawer() {
     if (activeTab === "unread") return !item.read;
     return true;
   });
+
+  /**
+   * Dismissing a notification is low-stakes, so it is applied immediately but
+   * kept reversible for the undo window: Undo drops the record back into the
+   * inbox, otherwise the removal stands.
+   */
+  function dismissNotification(item: NotificationRecord) {
+    removeNotification(item.id);
+    runUndoable({
+      title: "Notification dismissed",
+      message: "You can bring it back for a few seconds.",
+      revert: () => restoreNotifications([item]),
+    });
+  }
+
+  function clearAllNotifications() {
+    const snapshot = notificationHistory;
+    if (snapshot.length === 0) return;
+    clearHistory();
+    runUndoable({
+      title: "Notifications cleared",
+      message: `Cleared ${snapshot.length} notification${snapshot.length > 1 ? "s" : ""}.`,
+      revert: () => restoreNotifications(snapshot),
+    });
+  }
 
   return (
     <>
@@ -233,6 +266,16 @@ export function NotificationDrawer() {
                           >
                             {item.read ? "Read" : "New"}
                           </span>
+                          <button
+                            type="button"
+                            onClick={() => dismissNotification(item)}
+                            data-testid={`dismiss-btn-${item.id}`}
+                            aria-label={`Dismiss notification: ${item.title}`}
+                            title="Dismiss"
+                            className="rounded text-slate-500 transition-colors hover:text-rose-300 cursor-pointer"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
                         </div>
                       </div>
                     </div>
