@@ -1,0 +1,31 @@
+{
+  "_comment": "Legacy test files that still build loans/applicants/milestones inline. Migrate them to test-utils/factories and delete the entry; never add to this list.",
+  "files": [
+    "__tests__/analytics.test.ts",
+    "__tests__/applicantMerge.test.ts",
+    "__tests__/applicationSlaMonitor.test.ts",
+    "__tests__/assignmentOnCreate.test.ts",
+    "__tests__/communicationPreferences.test.ts",
+    "__tests__/duplicateTaxId.test.ts",
+    "__tests__/emailI18n.test.ts",
+    "__tests__/emailSuppression.test.ts",
+    "__tests__/employmentVerification.test.ts",
+    "__tests__/feeWaiver.test.ts",
+    "__tests__/foreignKeyConstraintAudit.test.ts",
+    "__tests__/guarantor.test.ts",
+    "__tests__/idorAudit.test.ts",
+    "__tests__/ipfsOrphanCleanup.test.ts",
+    "__tests__/loanCheckConstraints.test.ts",
+    "__tests__/loanDocumentGate.test.ts",
+    "__tests__/loanHistory.test.ts",
+    "__tests__/loanServicingTransfer.test.ts",
+    "__tests__/milestoneAudit.test.ts",
+    "__tests__/milestoneConcurrency.test.ts",
+    "__tests__/orphanedRecordCleanup.test.ts",
+    "__tests__/proof.test.ts",
+    "__tests__/rateSheet.test.ts",
+    "__tests__/referral.test.ts",
+    "__tests__/scheduler.test.ts",
+    "__tests__/user.test.ts"
+  ]
+}

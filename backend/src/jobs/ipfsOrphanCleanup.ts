@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 /**
  * Automated Orphaned IPFS/Storage Object Cleanup Job
  *
@@ -22,6 +25,7 @@
  */
 
 import cron from "node-cron";
+import { scheduledJob } from "../services/jobLeaderElection.js";
 import logger from "../utils/logger.js";
 import {
   hasMilestoneEvidenceReference,
@@ -216,9 +220,9 @@ export function startIpfsOrphanCleanupScheduler(): void {
 
   cleanupTask = cron.schedule(
     schedule,
-    async () => {
+    scheduledJob("ipfs-orphan-cleanup", async () => {
       await runOrphanCleanup();
-    },
+    }),
     { timezone: "UTC" }
   );
 

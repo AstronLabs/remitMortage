@@ -17,10 +17,12 @@ import useTransactionHistoryFilters, {
   type SortField,
   type TxCategory,
 } from "@/hooks/useTransactionHistoryFilters";
-import { useColumnPreferences } from "@/hooks/useColumnPreferences";
+import DateRangePicker from "@/components/DateRangePicker";
 import ColumnManager from "@/components/tables/ColumnManager";
 import ColumnResizeHandle from "@/components/tables/ColumnResizeHandle";
+import { useColumnPreferences } from "@/hooks/useColumnPreferences";
 import type { ColumnDefinition } from "@/lib/column-preferences";
+import ConfirmationDialog from "@/components/ConfirmationDialog";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 
@@ -200,6 +202,7 @@ export default function HistoryClient() {
 
   // Presets
   const [presets, setPresets] = useState<FilterPreset[]>([]);
+  const [pendingPresetDelete, setPendingPresetDelete] = useState<FilterPreset | null>(null);
   const [showPresetModal, setShowPresetModal] = useState(false);
   const [newPresetName, setNewPresetName] = useState("");
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
@@ -611,28 +614,8 @@ export default function HistoryClient() {
                   </select>
                 </div>
 
-                <div>
-                  <label className="block text-xs text-[var(--text-muted)] mb-1.5 font-medium uppercase tracking-wider">
-                    From Date
-                  </label>
-                  <input
-                    type="date"
-                    value={filters.dateFrom}
-                    onChange={(e) => updateFilters({ dateFrom: e.target.value })}
-                    className="w-full bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent-primary)] transition-colors"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs text-[var(--text-muted)] mb-1.5 font-medium uppercase tracking-wider">
-                    To Date
-                  </label>
-                  <input
-                    type="date"
-                    value={filters.dateTo}
-                    onChange={(e) => updateFilters({ dateTo: e.target.value })}
-                    className="w-full bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent-primary)] transition-colors"
-                  />
+                <div className="md:col-span-2 lg:col-span-2">
+                  <DateRangePicker value={{ start: filters.dateFrom, end: filters.dateTo }} onChange={(range) => updateFilters({ dateFrom: range.start, dateTo: range.end })} />
                 </div>
 
                 <div>
@@ -914,7 +897,7 @@ export default function HistoryClient() {
                               </svg>
                             </button>
                             <button
-                              onClick={() => handleDeletePreset(p.id)}
+                              onClick={() => setPendingPresetDelete(p)}
                               className="p-1.5 text-red-400/70 hover:text-red-400 bg-red-400/10 hover:bg-red-400/20 rounded-md transition-colors"
                               title="Delete"
                             >
@@ -943,6 +926,17 @@ export default function HistoryClient() {
           </div>
         )}
       </main>
+      <ConfirmationDialog
+        isOpen={pendingPresetDelete !== null}
+        title="Delete saved filter?"
+        description={`Delete the saved filter “${pendingPresetDelete?.name ?? ""}”. This only removes the saved preset; your transactions and current filters are unchanged.`}
+        confirmLabel="Delete preset"
+        destructive={false}
+        onConfirm={() => {
+          if (pendingPresetDelete) handleDeletePreset(pendingPresetDelete.id);
+        }}
+        onCancel={() => setPendingPresetDelete(null)}
+      />
     </div>
   );
 }

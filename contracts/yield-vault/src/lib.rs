@@ -21,6 +21,16 @@ const COMPOUND_PERIOD: u64 = 86_400; // ~1 month (LEDGERS_PER_YEAR / 12)
 #[cfg(test)]
 const COMPOUND_PERIOD: u64 = 10;
 
+/// Delay, in ledgers, between an investor recovery takeover being requested
+/// and the recovery address being able to execute it (issue #856). The delay
+/// is the investor's escape hatch: it guarantees a window in which the real
+/// owner can notice and cancel a hostile request. Roughly seven days at
+/// five-second ledger close time.
+#[cfg(not(test))]
+const RECOVERY_DELAY_LEDGERS: u32 = 120_960;
+#[cfg(test)]
+const RECOVERY_DELAY_LEDGERS: u32 = 10;
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -49,6 +59,23 @@ pub enum DataKey {
     QueueTail,
     /// One queued withdrawal request, keyed by its queue index.
     QueueEntry(u64),
+    /// Recovery address configured by an investor (issue #856). Absent until
+    /// the investor registers one.
+    RecoveryAddress(Address),
+    /// A recovery takeover request awaiting its delay, keyed by the investor
+    /// whose position would move.
+    PendingRecovery(Address),
+}
+
+/// A recovery takeover that has been requested but not executed. The recovery
+/// address may call `execute_recovery` once `execute_after_ledger` is reached;
+/// the investor may cancel at any time before that.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingRecovery {
+    pub recovery: Address,
+    pub requested_ledger: u32,
+    pub execute_after_ledger: u32,
 }
 
 /// A withdrawal request queued because it exceeded `WithdrawalThreshold` at
@@ -668,6 +695,139 @@ impl YieldVaultContract {
             ((shares as u128).saturating_mul(total_assets as u128) / total_shares as u128) as i128
         }
     }
+
+    // ── Issue #856: investor recovery with delayed takeover ─────────────────
+
+    /// Register (or replace) the recovery address for `investor`.
+    ///
+    /// The recovery address is a second key that may take over the investor's
+    /// vault position, but only through the two-step flow below and only after
+    /// a delay. Registering a new address clears any pending takeover, so a
+    /// previously configured key cannot complete an old request.
+    pub fn set_recovery_address(env: Env, investor: Address, recovery: Address) {
+        investor.require_auth();
+        if investor == recovery {
+            panic!("recovery address must differ from investor");
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::RecoveryAddress(investor.clone()), &recovery);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PendingRecovery(investor.clone()));
+
+        env.events()
+            .publish((symbol_short!("rec_reg"), investor), recovery);
+    }
+
+    /// Read the recovery address configured for `investor`, if any.
+    pub fn get_recovery_address(env: Env, investor: Address) -> Option<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RecoveryAddress(investor))
+    }
+
+    /// Read the pending recovery request for `investor`, if any.
+    pub fn get_pending_recovery(env: Env, investor: Address) -> Option<PendingRecovery> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PendingRecovery(investor))
+    }
+
+    /// Start a takeover of `investor`'s position. Must be called by the
+    /// recovery address registered by the investor.
+    ///
+    /// Returns the ledger at which `execute_recovery` becomes callable. Until
+    /// then the investor can cancel, and executing early panics.
+    pub fn request_recovery(env: Env, investor: Address) -> u32 {
+        let recovery: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RecoveryAddress(investor.clone()))
+            .unwrap_or_else(|| panic!("recovery address not configured"));
+        recovery.require_auth();
+
+        let now = env.ledger().sequence();
+        let execute_after_ledger = now.saturating_add(RECOVERY_DELAY_LEDGERS);
+        let pending = PendingRecovery {
+            recovery: recovery.clone(),
+            requested_ledger: now,
+            execute_after_ledger,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingRecovery(investor.clone()), &pending);
+
+        env.events().publish(
+            (symbol_short!("rec_req"), investor),
+            (recovery, execute_after_ledger),
+        );
+        execute_after_ledger
+    }
+
+    /// Cancel a pending takeover. Only the investor may cancel; this is the
+    /// escape hatch the delay exists to provide.
+    pub fn cancel_recovery(env: Env, investor: Address) {
+        investor.require_auth();
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PendingRecovery(investor.clone()));
+        env.events()
+            .publish((symbol_short!("rec_cxl"), investor), ());
+    }
+
+    /// Complete a takeover after the delay: move the investor's entire share
+    /// balance to the registered recovery address.
+    ///
+    /// `TotalShares` is unchanged — this is a transfer, not a mint — so the
+    /// exchange rate and every other holder are unaffected. Returns the number
+    /// of shares moved. Pending withdrawal-queue entries are not moved: those
+    /// are owned by the address that requested them and are outside the share
+    /// position this entry point transfers.
+    pub fn execute_recovery(env: Env, investor: Address) -> i128 {
+        let pending: PendingRecovery = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingRecovery(investor.clone()))
+            .unwrap_or_else(|| panic!("no recovery request pending"));
+        pending.recovery.require_auth();
+
+        if env.ledger().sequence() < pending.execute_after_ledger {
+            panic!("recovery delay has not elapsed");
+        }
+
+        let shares: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ShareBalance(investor.clone()))
+            .unwrap_or(0);
+
+        if shares > 0 {
+            let recovery_shares: i128 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::ShareBalance(pending.recovery.clone()))
+                .unwrap_or(0);
+            env.storage()
+                .persistent()
+                .set(&DataKey::ShareBalance(investor.clone()), &0i128);
+            env.storage().persistent().set(
+                &DataKey::ShareBalance(pending.recovery.clone()),
+                &(recovery_shares + shares),
+            );
+        }
+
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PendingRecovery(investor.clone()));
+
+        env.events().publish(
+            (symbol_short!("rec_done"), investor),
+            (pending.recovery, shares),
+        );
+        shares
+    }
 }
 
 #[cfg(test)]
@@ -1151,5 +1311,124 @@ mod test {
         assert_eq!(event_id, 0);
         assert_eq!(event_shares, shares);
         assert_eq!(event_amount, 5_000 * USDC);
+    }
+
+    // ── Issue #856: investor recovery with delayed takeover ────────────────
+
+    fn funded_investor(
+        env: &Env,
+        client: &YieldVaultContractClient<'_>,
+        token: &Address,
+    ) -> (Address, i128) {
+        let investor = Address::generate(env);
+        StellarAssetClient::new(env, token).mint(&investor, &(1_000 * USDC));
+        let shares = client.deposit(&investor, &(1_000 * USDC));
+        (investor, shares)
+    }
+
+    #[test]
+    fn recovery_takeover_moves_the_share_position_after_the_delay() {
+        let env = Env::default();
+        let (_admin, token, client) = setup(&env, 0);
+
+        let (investor, shares) = funded_investor(&env, &client, &token);
+        let recovery = Address::generate(&env);
+        let total_before = client.get_total_shares();
+
+        client.set_recovery_address(&investor, &recovery);
+        assert_eq!(
+            client.get_recovery_address(&investor),
+            Some(recovery.clone())
+        );
+
+        let execute_after = client.request_recovery(&investor);
+        assert_eq!(
+            execute_after,
+            env.ledger().sequence() + RECOVERY_DELAY_LEDGERS
+        );
+        assert!(client.get_pending_recovery(&investor).is_some());
+
+        // The delay must have elapsed before the recovery can execute.
+        env.ledger().with_mut(|l| {
+            l.sequence_number = execute_after;
+        });
+        let moved = client.execute_recovery(&investor);
+
+        assert_eq!(moved, shares);
+        assert_eq!(client.get_shares(&investor), 0);
+        assert_eq!(client.get_shares(&recovery), shares);
+        // A transfer, not a mint: total supply is unchanged.
+        assert_eq!(client.get_total_shares(), total_before);
+        assert!(client.get_pending_recovery(&investor).is_none());
+    }
+
+    #[test]
+    fn takeover_cannot_execute_before_the_delay() {
+        let env = Env::default();
+        let (_admin, token, client) = setup(&env, 0);
+
+        let (investor, shares) = funded_investor(&env, &client, &token);
+        let recovery = Address::generate(&env);
+
+        client.set_recovery_address(&investor, &recovery);
+        let execute_after = client.request_recovery(&investor);
+
+        // A recovery key that has been compromised cannot move the position
+        // until the investor has had the full delay window to cancel.
+        env.ledger().with_mut(|l| {
+            l.sequence_number = execute_after - 1;
+        });
+        assert!(client.try_execute_recovery(&investor).is_err());
+        assert_eq!(client.get_shares(&investor), shares);
+
+        // Once the delay elapses it can proceed.
+        env.ledger().with_mut(|l| {
+            l.sequence_number = execute_after;
+        });
+        assert_eq!(client.execute_recovery(&investor), shares);
+    }
+
+    #[test]
+    fn investor_can_cancel_a_pending_takeover() {
+        let env = Env::default();
+        let (_admin, token, client) = setup(&env, 0);
+
+        let (investor, shares) = funded_investor(&env, &client, &token);
+        let recovery = Address::generate(&env);
+
+        client.set_recovery_address(&investor, &recovery);
+        client.request_recovery(&investor);
+        client.cancel_recovery(&investor);
+
+        assert!(client.get_pending_recovery(&investor).is_none());
+        // The position is untouched after cancellation.
+        assert_eq!(client.get_shares(&investor), shares);
+    }
+
+    #[test]
+    fn rotating_the_recovery_address_clears_a_pending_takeover() {
+        let env = Env::default();
+        let (_admin, token, client) = setup(&env, 0);
+
+        let (investor, _shares) = funded_investor(&env, &client, &token);
+        let first = Address::generate(&env);
+        let second = Address::generate(&env);
+
+        client.set_recovery_address(&investor, &first);
+        client.request_recovery(&investor);
+        client.set_recovery_address(&investor, &second);
+
+        assert!(client.get_pending_recovery(&investor).is_none());
+        assert_eq!(client.get_recovery_address(&investor), Some(second));
+    }
+
+    #[test]
+    fn recovery_address_must_differ_from_the_investor() {
+        let env = Env::default();
+        let (_admin, token, client) = setup(&env, 0);
+        let (investor, _shares) = funded_investor(&env, &client, &token);
+
+        let result = client.try_set_recovery_address(&investor, &investor);
+        assert!(result.is_err());
     }
 }

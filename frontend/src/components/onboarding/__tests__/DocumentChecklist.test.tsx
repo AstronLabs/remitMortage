@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import DocumentChecklist from "../DocumentChecklist";
 

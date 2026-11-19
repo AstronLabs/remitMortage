@@ -2,13 +2,13 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import toast, { Toaster } from "react-hot-toast";
 import { useWallet, OptionalWalletProvider } from "../../context/WalletContext";
 import { EmptyState } from "../../components/EmptyState";
 import HelpLink from "../../components/help/HelpLink";
-import { useFocusTrap } from "../../hooks/useFocusTrap";
+import ConfirmationDialog from "../../components/ConfirmationDialog";
 import { useImpersonation } from "../../hooks/useImpersonation";
 import { startImpersonation } from "../../lib/impersonationApi";
 import { ClipboardList, Hammer, History, MessagesSquare } from "lucide-react";
@@ -152,7 +152,6 @@ function AdminDashboard() {
   const [overview, setOverview] = useState<PoolOverview | null>(null);
   const [loading, setLoading] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
-  const [submitting, setSubmitting] = useState(false);
   const { status: impersonationStatus } = useImpersonation();
   const isReadOnly = impersonationStatus.active;
 
@@ -233,43 +232,35 @@ function AdminDashboard() {
   async function confirmAction() {
     if (!pendingAction) return;
     if (isReadOnly) {
-      toast.error("Approvals are disabled while viewing read-only.");
-      setPendingAction(null);
-      return;
+      throw new Error("Approvals are disabled while viewing read-only.");
     }
-    setSubmitting(true);
-    try {
-      if (pendingAction.kind === "approve-loan") {
-        const response = await fetch(`/api/loan/${pendingAction.loan.id}/approve`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          // Optimistic lock (issue #846): echo the version we rendered so a
-          // concurrent decision on this loan can never be overwritten.
-          body: JSON.stringify({ expectedVersion: pendingAction.loan.version }),
-        });
-        if (response.status === 409) {
-          throw new Error("This loan changed since it was loaded — refresh and review it again.");
-        }
-        if (!response.ok) throw new Error("Loan approval failed.");
+    if (pendingAction.kind === "approve-loan") {
+      const response = await fetch(`/api/loan/${pendingAction.loan.id}/approve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // Optimistic lock (issue #846): echo the version we rendered so a
+        // concurrent decision on this loan can never be overwritten.
+        body: JSON.stringify({ expectedVersion: pendingAction.loan.version }),
+      });
+      if (response.status === 409) {
+        throw new Error("This loan changed since it was loaded — refresh and review it again.");
       }
-
-      if (pendingAction.kind === "approve-loan") {
-        toast.success("Loan approved.");
-      } else if (pendingAction.kind === "reject-loan") {
-        toast.success("Loan rejected.");
-      } else {
-        toast.success("Milestone disbursement approved.");
-      }
-
-      setPendingAction(null);
-      // Real-time refresh once the transaction confirms.
-      await loadData();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Transaction failed.");
-    } finally {
-      setSubmitting(false);
+      if (!response.ok) throw new Error("Loan approval failed.");
     }
+
+    if (pendingAction.kind === "approve-loan") {
+      toast.success("Loan approved.");
+    } else if (pendingAction.kind === "reject-loan") {
+      toast.success("Loan rejected.");
+    } else {
+      toast.success("Milestone disbursement approved.");
+    }
+
+    // Real-time refresh once the transaction confirms.
+    await loadData();
   }
+
+  const pendingActionDetails = pendingAction ? describeAction(pendingAction) : null;
 
   return (
     <div className="space-y-8">
@@ -335,13 +326,25 @@ function AdminDashboard() {
         )}
       </div>
 
-      {pendingAction && (
-        <ConfirmationModal
-          action={pendingAction}
-          submitting={submitting}
+      {pendingAction && pendingActionDetails && (
+        <ConfirmationDialog
+          isOpen
+          title={pendingActionDetails.title}
+          description={pendingActionDetails.summary}
+          confirmationText={pendingActionDetails.confirmationText}
+          confirmLabel={pendingActionDetails.confirmLabel}
           onConfirm={confirmAction}
-          onCancel={() => (submitting ? undefined : setPendingAction(null))}
-        />
+          onCancel={() => setPendingAction(null)}
+        >
+          <dl className="mt-5 space-y-2 text-sm">
+            {pendingActionDetails.rows.map((row) => (
+              <div key={row.label} className="flex justify-between gap-4">
+                <dt className="text-[var(--text-muted)]">{row.label}</dt>
+                <dd className="break-all text-right font-medium">{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </ConfirmationDialog>
       )}
     </div>
   );
@@ -545,6 +548,9 @@ function PendingLoansTab({
   const [expandedLoanId, setExpandedLoanId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "kanban" | "table">("kanban");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [pendingBulkDecision, setPendingBulkDecision] = useState<"APPROVED" | "REJECTED" | null>(
+    null
+  );
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [summaryItems, setSummaryItems] = useState<BulkResultItem[] | null>(null);
   const [reassignModalOpen, setReassignModalOpen] = useState(false);
@@ -605,6 +611,7 @@ function PendingLoansTab({
           reason: `Bulk ${decision.toLowerCase()} by admin ${publicKey || "system"}`,
         }),
       });
+      if (!res.ok) throw new Error("Bulk review failed.");
 
       const data = await res.json();
 
@@ -631,8 +638,6 @@ function PendingLoansTab({
       setSummaryItems(resultsMap);
       setSelectedIds(new Set());
       onRefresh();
-    } catch (err: any) {
-      toast.error(err.message || "Bulk action failed");
     } finally {
       setBulkProcessing(false);
     }
@@ -830,14 +835,14 @@ function PendingLoansTab({
           </span>
           <div className="h-4 w-px bg-gray-700" />
           <button
-            onClick={() => handleBulkAction("APPROVED")}
+            onClick={() => setPendingBulkDecision("APPROVED")}
             disabled={bulkProcessing}
             className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500 text-white hover:bg-emerald-600 transition-colors disabled:opacity-50"
           >
             {bulkProcessing ? "Processing..." : "Bulk Approve"}
           </button>
           <button
-            onClick={() => handleBulkAction("REJECTED")}
+            onClick={() => setPendingBulkDecision("REJECTED")}
             disabled={bulkProcessing}
             className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-50"
           >
@@ -936,6 +941,29 @@ function PendingLoansTab({
           </div>
         </div>
       )}
+
+      {pendingBulkDecision && (
+        <ConfirmationDialog
+          isOpen
+          title={`Confirm bulk ${pendingBulkDecision === "APPROVED" ? "approval" : "rejection"}`}
+          description={
+            pendingBulkDecision === "APPROVED"
+              ? `Approve ${selectedIds.size} loan applications and commit pool liquidity. This decision affects borrower funding and cannot be reversed here.`
+              : `Reject ${selectedIds.size} loan applications. This decision declines the selected requests and cannot be reversed here.`
+          }
+          confirmationText={pendingBulkDecision === "APPROVED" ? "APPROVE" : "REJECT"}
+          confirmLabel={pendingBulkDecision === "APPROVED" ? "Bulk approve" : "Bulk reject"}
+          onConfirm={async () => {
+            const decision = pendingBulkDecision;
+            if (decision) await handleBulkAction(decision);
+          }}
+          onCancel={() => setPendingBulkDecision(null)}
+        >
+          <p className="mt-4 text-sm font-semibold text-[var(--text-primary)]">
+            {selectedIds.size} loan{selectedIds.size === 1 ? "" : "s"} selected
+          </p>
+        </ConfirmationDialog>
+      )}
     </div>
   );
 }
@@ -1023,76 +1051,11 @@ function MilestoneReviewsTab({
   );
 }
 
-// ── Confirmation Modal ───────────────────────────────────────────────────────
-
-function ConfirmationModal({
-  action,
-  submitting,
-  onConfirm,
-  onCancel,
-}: {
-  action: PendingAction;
-  submitting: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  const details = describeAction(action);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(dialogRef, true, { onEscape: onCancel });
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Confirm transaction"
-      onClick={onCancel}
-    >
-      <div
-        ref={dialogRef}
-        tabIndex={-1}
-        className="w-full max-w-md rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] p-6"
-        style={{ animation: "modal-pop 0.2s ease-out" }}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <h2 className="text-lg font-bold mb-1">{details.title}</h2>
-        <p className="text-sm text-[var(--text-secondary)] mb-4">{details.summary}</p>
-
-        <dl className="space-y-2 mb-6 text-sm">
-          {details.rows.map((row) => (
-            <div key={row.label} className="flex justify-between gap-4">
-              <dt className="text-[var(--text-muted)]">{row.label}</dt>
-              <dd className="font-medium text-right break-all">{row.value}</dd>
-            </div>
-          ))}
-        </dl>
-
-        <div className="flex gap-3">
-          <button
-            onClick={onCancel}
-            disabled={submitting}
-            className="flex-1 py-2.5 rounded-lg border border-[var(--border-color)] text-sm font-medium hover:bg-[var(--bg-card)] transition-colors disabled:opacity-40"
-          >
-            Cancel
-          </button>
-          <button
-            data-testid="admin-confirm-approval"
-            onClick={onConfirm}
-            disabled={submitting}
-            className="btn-primary flex-1 !py-2.5"
-            aria-busy={submitting}
-          >
-            {submitting ? "Signing…" : "Sign with Freighter"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function describeAction(action: PendingAction): {
   title: string;
   summary: string;
+  confirmationText: string;
+  confirmLabel: string;
   rows: { label: string; value: string }[];
 } {
   if (action.kind === "approve-milestone") {
@@ -1100,6 +1063,8 @@ function describeAction(action: PendingAction): {
     return {
       title: "Approve Milestone Disbursement",
       summary: "Release the requested funds to the whitelisted contractor.",
+      confirmationText: "DISBURSE",
+      confirmLabel: "Approve disbursement",
       rows: [
         { label: "Loan", value: milestone.loanId },
         { label: "Contractor", value: shortenAddress(milestone.contractor) },
@@ -1115,6 +1080,8 @@ function describeAction(action: PendingAction): {
     summary: approving
       ? "Commit pool liquidity and move this loan to Approved."
       : "Decline this loan request. No funds will be committed.",
+    confirmationText: approving ? "APPROVE" : "REJECT",
+    confirmLabel: approving ? "Approve loan" : "Reject loan",
     rows: [
       { label: "Borrower", value: shortenAddress(loan.borrower) },
       { label: "Principal", value: formatUsdc(loan.principal) },

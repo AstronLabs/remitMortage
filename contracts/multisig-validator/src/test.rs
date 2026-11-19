@@ -1152,7 +1152,12 @@ fn action(env: &Env, id_byte: u8, label: &str) -> Action {
     }
 }
 
-fn approve_with_full_set(env: &Env, client: &MultisigValidatorClient<'_>, account: &Address, pid: &BytesN<32>) {
+fn approve_with_full_set(
+    env: &Env,
+    client: &MultisigValidatorClient<'_>,
+    account: &Address,
+    pid: &BytesN<32>,
+) {
     let keys: Vec<BytesN<32>> = vec![env, key(env, 0xA1), key(env, 0xB2)];
     client.approve_action(account, pid, &keys);
 }
@@ -1207,7 +1212,10 @@ fn test_submit_proposal_accepts_exactly_the_cap() {
     }
 
     client.submit_proposal(&pid, &0u32, &actions);
-    assert_eq!(client.get_proposal(&pid).actions.len(), MAX_ACTIONS_PER_PROPOSAL);
+    assert_eq!(
+        client.get_proposal(&pid).actions.len(),
+        MAX_ACTIONS_PER_PROPOSAL
+    );
 }
 
 #[test]
@@ -1243,7 +1251,8 @@ fn test_execute_proposal_emits_per_action_and_summary_events_in_order() {
             Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap(),
             symbol_short!("act_exec")
         );
-        let topic_pid: BytesN<32> = TryFromVal::try_from_val(&env, &topics.get(1).unwrap()).unwrap();
+        let topic_pid: BytesN<32> =
+            TryFromVal::try_from_val(&env, &topics.get(1).unwrap()).unwrap();
         assert_eq!(topic_pid, pid);
         let (index, action_id, _label): (u32, BytesN<32>, Symbol) =
             TryFromVal::try_from_val(&env, &data).unwrap();

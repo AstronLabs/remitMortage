@@ -45,6 +45,7 @@ export function defaultExec(file, args, options = {}) {
   return new Promise((resolve, reject) => {
     execFile(file, args, options, (error, stdout, stderr) => {
       if (error) {
+        // safe-merge-ok: both keys are literals, attaching exec output to the Error
         reject(Object.assign(error, { stdout, stderr }));
       } else {
         resolve({ stdout, stderr });

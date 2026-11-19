@@ -22,7 +22,13 @@ mod fuzz_tests;
 
 pub use crate::errors::BridgeError;
 pub use crate::message::{InboundBridgeMessage, MessagePayloadType};
-pub use crate::types::{AssetInfo, BridgeConfig, BridgeOperation, BridgeState};
+pub use crate::types::{
+    AssetInfo, BridgeConfig, BridgeOperation, BridgeState, ChainVolumeWindow, PendingCapIncrease,
+};
+
+/// Rolling window length, in seconds, for the per-source-chain daily mint
+/// volume cap (issue #858).
+const DAILY_CAP_WINDOW_SECONDS: u64 = 86_400;
 
 /// Cross-chain bridge adapter interface for future EVM collateral support.
 ///
@@ -283,12 +289,17 @@ impl StellarBridgeAdapter {
 
         let delay = Self::read_cap_change_delay(&env);
         let execute_after = env.ledger().sequence() + delay;
-        let pending = PendingCapIncrease { new_cap, execute_after };
+        let pending = PendingCapIncrease {
+            new_cap,
+            execute_after,
+        };
         env.storage()
             .instance()
             .set(&DataKey::PendingCapIncrease(source_chain.clone()), &pending);
-        env.events()
-            .publish((symbol_short!("cap_prop"), source_chain), (new_cap, execute_after));
+        env.events().publish(
+            (symbol_short!("cap_prop"), source_chain),
+            (new_cap, execute_after),
+        );
         Ok(execute_after)
     }
 
@@ -327,7 +338,9 @@ impl StellarBridgeAdapter {
     pub fn set_cap_change_delay(env: Env, admin: Address, delay_ledgers: u32) {
         Self::require_admin(&env, &admin);
         admin.require_auth();
-        env.storage().instance().set(&DataKey::CapChangeDelay, &delay_ledgers);
+        env.storage()
+            .instance()
+            .set(&DataKey::CapChangeDelay, &delay_ledgers);
     }
 
     /// Current daily mint-volume cap for `source_chain` (0 = uncapped).
@@ -342,7 +355,9 @@ impl StellarBridgeAdapter {
 
     /// Pending cap increase for `source_chain`, if any.
     pub fn get_pending_cap_increase(env: Env, source_chain: Symbol) -> Option<PendingCapIncrease> {
-        env.storage().instance().get(&DataKey::PendingCapIncrease(source_chain))
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingCapIncrease(source_chain))
     }
 
     /// Get the current bridge configuration.
@@ -373,6 +388,21 @@ impl StellarBridgeAdapter {
     }
 
     /// Mint wrapped assets through the adapter interface.
+    ///
+    /// # Replay-protection invariant
+    ///
+    /// Each bridge operation can be minted **at most once**. The guard is the
+    /// operation's stored `status`: `mint` rejects a `"completed"` operation
+    /// with `AlreadyProcessed` *before* any other check that could be reached
+    /// on a replay and *before* any state-mutating effect (daily-volume
+    /// accounting, the `"completed"` status write, the `total_minted`
+    /// counter). The status flip and those effects happen in the same call,
+    /// so a message is either fully applied and marked, or not applied at
+    /// all. Because the guard is keyed by the operation id alone, a replay
+    /// that changes the amount, recipient or source chain is still rejected
+    /// as `AlreadyProcessed`, and operations are independent of each other,
+    /// so delivery order does not matter. Covered by the `replay_*` tests in
+    /// `test.rs`.
     pub fn mint(
         env: Env,
         operation_id: Symbol,
@@ -488,7 +518,11 @@ impl StellarBridgeAdapter {
     /// the window to or past 80% of the cap, and again at 100%; rejects —
     /// without recording any volume, so a rejected mint can be retried once
     /// there's room — a mint that would exceed the cap.
-    fn check_and_record_volume(env: &Env, source_chain: &Symbol, amount: i128) -> Result<(), BridgeError> {
+    fn check_and_record_volume(
+        env: &Env,
+        source_chain: &Symbol,
+        amount: i128,
+    ) -> Result<(), BridgeError> {
         let cap = Self::read_daily_cap(env, source_chain);
         if cap <= 0 {
             return Ok(());
@@ -598,6 +632,8 @@ impl BridgeAdapter for StellarBridgeAdapter {
             .get::<_, BridgeOperation>(&DataKey::Operation(operation_id.clone()))
             .ok_or(BridgeError::OperationNotFound)?;
 
+        // Replay guard (see the invariant on `StellarBridgeAdapter::mint`):
+        // must stay ahead of every check and effect below.
         if operation.status == symbol_short!("completed") {
             return Err(BridgeError::AlreadyProcessed);
         }

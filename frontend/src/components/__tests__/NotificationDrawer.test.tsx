@@ -101,44 +101,16 @@ describe("NotificationDrawer Component", () => {
     expect(mockMarkAllRead).toHaveBeenCalledTimes(1);
   });
 
-  it("dismisses a notification and offers an undo window", () => {
+  it("requires typed confirmation before clearing notification history", () => {
     render(<NotificationDrawer />);
 
-    fireEvent.click(screen.getByTestId("dismiss-btn-notif-1"));
-
-    expect(mockRemoveNotification).toHaveBeenCalledWith("notif-1");
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({
-        transient: true,
-        action: expect.objectContaining({ label: "Undo" }),
-      })
-    );
-  });
-
-  it("restores a dismissed notification when Undo is used inside the window", () => {
-    render(<NotificationDrawer />);
-
-    fireEvent.click(screen.getByTestId("dismiss-btn-notif-1"));
-
-    const undoToast = mockNotify.mock.calls[mockNotify.mock.calls.length - 1][0];
-    act(() => {
-      undoToast.action.onAction();
+    fireEvent.click(screen.getByRole("button", { name: "Clear notification history" }));
+    expect(mockClearHistory).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("textbox", { name: /type clear to continue/i }), {
+      target: { value: "CLEAR" },
     });
+    fireEvent.click(screen.getByRole("button", { name: "Clear history" }));
 
-    expect(mockRestoreNotifications).toHaveBeenCalledWith([mockHistory[1]]);
-  });
-
-  it("clears the notification list behind an undo window and restores it on undo", () => {
-    render(<NotificationDrawer />);
-
-    fireEvent.click(screen.getByLabelText("Clear notification list"));
     expect(mockClearHistory).toHaveBeenCalledTimes(1);
-
-    const undoToast = mockNotify.mock.calls[mockNotify.mock.calls.length - 1][0];
-    act(() => {
-      undoToast.action.onAction();
-    });
-
-    expect(mockRestoreNotifications).toHaveBeenCalledWith(mockHistory);
   });
 });

@@ -41,6 +41,50 @@
         ]
       }
     ],
+    "rec_cxl": [
+      {
+        "topicArgs": [
+          "investor"
+        ],
+        "dataKind": "tuple",
+        "data": []
+      }
+    ],
+    "rec_done": [
+      {
+        "topicArgs": [
+          "investor"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "recovery",
+          "shares"
+        ]
+      }
+    ],
+    "rec_reg": [
+      {
+        "topicArgs": [
+          "investor"
+        ],
+        "dataKind": "value",
+        "data": [
+          "recovery"
+        ]
+      }
+    ],
+    "rec_req": [
+      {
+        "topicArgs": [
+          "investor"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "recovery",
+          "execute_after_ledger"
+        ]
+      }
+    ],
     "thresh": [
       {
         "topicArgs": [],

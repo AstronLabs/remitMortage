@@ -123,9 +123,17 @@ export const verificationRouter = Router();
  *                     generatedAt: { type: string, format: date-time }
  *                     reportHash: { type: string }
  *       400:
- *         description: Required request fields are missing.
+ *         description: Required request fields are missing or malformed.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ValidationErrorResponse'
  *       500:
  *         description: Verification service failed unexpectedly.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  */
 verificationRouter.post("/check", validateVerificationBody, async (req, res) => {
   try {

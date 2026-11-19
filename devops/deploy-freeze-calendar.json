@@ -1,0 +1,22 @@
+{
+  "$comment": "Version-controlled deployment freeze calendar (issue #930). All times are UTC. A window is active from `start` (inclusive) to `end` (exclusive). Change it through a reviewed PR; docs/DEPLOYMENT_FREEZE.md explains the format.",
+  "authorizedOverriders": ["Levi-Ojukwu"],
+  "minOverrideReasonLength": 15,
+  "monthEnd": {
+    "enabled": true,
+    "lastDays": 2,
+    "environments": ["production"],
+    "reason": "Month-end processing"
+  },
+  "windows": [
+    {
+      "id": "year-end-2026",
+      "name": "Year-end change freeze",
+      "reason": "Year-end settlement and reporting",
+      "start": "2026-12-23T00:00:00Z",
+      "end": "2027-01-04T00:00:00Z",
+      "environments": ["production"],
+      "allowOverride": true
+    }
+  ]
+}

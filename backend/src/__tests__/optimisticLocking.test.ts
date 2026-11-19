@@ -17,6 +17,7 @@
 
 import express from "express";
 import request from "supertest";
+import { loanRowFactory } from "../test-utils/factories/index.js";
 
 const ADMIN_WALLET = "G" + "A".repeat(55);
 const BORROWER_WALLET = "G" + "B".repeat(55);
@@ -29,24 +30,13 @@ type MockRow = Record<string, any>;
 const mockRows: Record<string, MockRow> = {};
 
 function seedLoan(overrides: MockRow = {}): MockRow {
-  const row: MockRow = {
+  const base = loanRowFactory.build({
     id: "loan-1",
     applicantId: "applicant-1",
-    applicant: {
-      id: "applicant-1",
-      stellarAddress: BORROWER_WALLET,
-      deletedAt: null,
-      verificationStatus: "ELIGIBLE",
-    },
-    principal: 1500,
-    status: "Pending",
-    reason: null,
-    version: 1,
-    deletedAt: null,
-    createdAt: new Date("2026-10-01T00:00:00.000Z"),
-    updatedAt: new Date("2026-10-01T00:00:00.000Z"),
-    ...overrides,
-  };
+    applicant: { id: "applicant-1", stellarAddress: BORROWER_WALLET },
+  });
+  // The loan mapper reads `updatedAt`, which is not a schema column.
+  const row: MockRow = { ...base, updatedAt: base.createdAt, ...overrides };
   mockRows[row.id] = row;
   return row;
 }

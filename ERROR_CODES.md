@@ -22,6 +22,10 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 14 | `InvalidAsset` | Invalid asset identifier. |
 | 15 | `MalformedPayload` | Malformed or truncated inbound bridge message payload. |
 | 16 | `UnsupportedVersion` | Unsupported cross-chain message version. |
+| 17 | `DailyVolumeCapExceeded` | The mint would push this source chain's rolling daily volume over its configured cap (issue #858). |
+| 18 | `CapIncreaseRequiresTimelock` | `set_daily_cap` was asked to raise an existing positive cap — raises must go through propose_daily_cap_increase / execute_daily_cap_increase instead, since only raises are timelocked. |
+| 19 | `NoPendingCapIncrease` | No pending cap increase exists for this source chain. |
+| 20 | `CapChangeTimelockActive` | A pending cap increase exists but its timelock has not yet elapsed. |
 
 ## escrow (`EscrowError`)
 
@@ -67,6 +71,16 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 38 | `InvalidAutoDepositInterval` | Auto-deposit interval must be greater than zero ledgers. |
 | 39 | `InvalidBeneficiaryShares` | Beneficiary split shares do not sum to exactly 10 000 basis points (100 %). |
 | 40 | `BeneficiaryListTooLarge` | Beneficiary list exceeds the maximum allowed number of recipients. |
+| 41 | `AttestorChangeProposalNotPending` | No pending attestor-threshold change exists to apply or cancel. |
+| 42 | `HardshipRequestAlreadyExists` | A hardship withdrawal request already exists for this goal. |
+| 43 | `HardshipRequestNotFound` | No hardship withdrawal request exists for this goal. |
+| 44 | `HardshipRequestExpired` | The hardship request's approval window has elapsed. |
+| 45 | `HardshipRequestNotApproved` | The hardship request has not been approved by the admin yet. |
+| 46 | `HardshipAmountExceedsCap` | The hardship withdrawal exceeds the per-period cap. |
+| 47 | `ReleaseTimeNotReached` | The goal's confirmed scheduled release time has not been reached yet. |
+| 48 | `InvalidReleaseTime` | Proposed release time is in the past, too far out, or moves the confirmed date further than the configured limit allows. |
+| 49 | `RescheduleLimitReached` | The goal's release time cannot be rescheduled again: the reschedule count or minimum interval limit was hit, or the date already passed. |
+| 50 | `NoPendingReleaseTime` | There is no pending release time proposal to confirm. |
 
 ## lending-pool (`PoolError`)
 
@@ -82,10 +96,9 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 8 | `InvalidLoanState` | Loan is not in the correct state for this operation. |
 | 9 | `InsufficientLiquidity` | Insufficient pool liquidity for the requested disbursement. |
 | 10 | `OverPayment` | Repayment exceeds remaining loan balance. |
-| 12 | `AlreadyDefaulted` | Loan has already defaulted. |
 | 13 | `ContractPaused` | Operation rejected because the contract is paused. |
 | 14 | `NotPendingAdmin` | Proposed new admin is not the caller or no transfer is pending. |
-| 16 | `UpgradeTimelockActive` | Upgrade was proposed but the timelock delay has not elapsed yet. |
+| 16 | `TimelockActive` | A timelocked change (upgrade, haircut, deposit cap, ...) was proposed but its delay has not elapsed yet. |
 | 17 | `TrancheMismatch` | Investor cannot change tranche after the initial deposit. |
 | 20 | `DailyBorrowLimitExceeded` | The daily borrow limit has been exceeded. |
 | 21 | `RefundExceedsDisbursed` | Refund amount exceeds the amount disbursed for the loan. |
@@ -95,33 +108,34 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 25 | `RefinanceNotEligible` | Loan cannot be refinanced. |
 | 26 | `LoanNotOverdue` | Loan is not yet overdue, so it cannot be marked as defaulted. |
 | 32 | `RebateAlreadyClaimed` | Loan maturity rebate has already been claimed. |
-| 33 | `MissedPaymentsPreventRebate` | Loan has missed payments, so is ineligible for the maturity rebate. |
+| 33 | `LoanNotGoodStanding` | Loan has missed payments, so is ineligible for the maturity rebate or an extension. |
 | 34 | `NoRestructureProposal` | No pending restructure proposal for this loan. |
 | 35 | `MultisigValidatorNotSet` | MultisigValidator contract address has not been configured. |
 | 36 | `LockupPeriodActive` | Investor withdrawal is blocked because the lockup period has not elapsed. |
 | 37 | `LoanNotActive` | Loan must be in Approved state for this operation. |
 | 38 | `RestructureProposalExists` | A restructure proposal already exists for this loan. |
-| 39 | `FeeSwitchTooHigh` | Proposed fee switch exceeds the hard protocol cap. |
 | 40 | `DepositBelowMinimum` | Deposit is below the pool's configured minimum deposit amount. |
 | 41 | `CollateralRatioBreached` | Collateral release would breach the minimum collateralization ratio. |
 | 42 | `NoCollateralToRelease` | No collateral available for release. |
-| 43 | `CollateralAlreadySeized` | Collateral has already been seized. |
 | 44 | `InvalidCollateralRatio` | Invalid collateral ratio configuration. |
-| 45 | `OriginationFeeTooHigh` | Origination fee exceeds the full-disbursement ceiling. |
-| 46 | `BorrowerLoanCapExceeded` | Borrower already holds the maximum number of active loans permitted by `max_active_loans_per_borrower`, or the loan would push their aggregate outstanding principal past the configured exposure cap. |
+| 45 | `FeeTooHigh` | A fee (origination, application or protocol fee switch) exceeds its ceiling. |
+| 46 | `BorrowerLoanCapExceeded` | Borrower already holds the maximum number of active loans permitted by `max_active_loans_per_borrower`, or the loan would push their aggregate outstanding principal past the configured exposure cap. (The error enum is at Soroban's 50-variant ceiling, so both limits share this code.) |
 | 47 | `RefinanceCooldownActive` | Refinancing request was submitted before the cooldown window elapsed. |
-| 48 | `ApplicationFeeTooHigh` | Application fee exceeds the ceiling permitted on a single application. |
 | 50 | `WithdrawalExceedsMaxSingleLimit` | Withdrawal amount exceeds the pool's configured per-transaction limit. |
 | 51 | `PayoffQuoteNotFound` | No payoff quote exists for this loan. |
 | 52 | `PayoffQuoteExpired` | The payoff quote has expired; request a fresh quote. |
-| 53 | `InvalidQuoteWindow` | Payoff quotes are disabled (window is zero) or the window is invalid. |
 | 54 | `DepositCooldownActive` | Deposit attempted before the configured per-investor cooldown has elapsed. |
 | 55 | `RefinanceRateLockExpired` | Refinance execution attempted after the rate-lock window has expired. The borrower must call `request_refinance` again to obtain a fresh quote. |
-| 56 | `RefinanceRateLockNotFound` | No pending rate-lock exists for this loan; `request_refinance` must be called before `execute_refinance`. |
 | 57 | `InsurancePoolNotSet` | Emergency liquidity injection requires an InsurancePool to be configured. |
 | 58 | `GovernanceContractNotSet` | Emergency liquidity injection requires a GovernanceContract to be configured. |
 | 59 | `GovernanceProposalNotPassed` | The referenced governance proposal has not reached `Passed` status. |
 | 60 | `EmergencyInjectionCapExceeded` | Injection amount exceeds the configured percentage cap of insurance reserves. |
+| 61 | `CreditLineAlreadyExists` | A credit line already exists for this borrower. |
+| 62 | `CreditLineNotFound` | No credit line exists for this borrower. |
+| 63 | `CreditLimitExceeded` | Draw would exceed the approved credit limit minus the outstanding drawn balance. |
+| 64 | `ExtensionCapExceeded` | Loan extension exceeds the permitted count or term. |
+| 65 | `TrancheCapExceeded` | Deposit would push the tranche's total past its admin-set cap. |
+| 66 | `InvestorCapExceeded` | Deposit would push the investor's position past the admin-set per-investor cap. |
 
 ## lending-pool (`LoanAssumptionError`)
 
@@ -134,6 +148,8 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 5 | `ApplicantNotVerified` |  |
 | 6 | `AssumptionNotFound` |  |
 | 7 | `AssumptionAlreadyRequested` |  |
+| 8 | `AssumptionFeeCapExceeded` | The requested loan assumption fee is above the hard on-chain cap. |
+| 9 | `NotInitialized` | The pool has not been initialized. |
 
 ## milestone (`MilestoneError`)
 
@@ -198,6 +214,8 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 20 | `SignerPenalized` | Signer is penalized for repeated missed votes (weight reduced). |
 | 21 | `RotationCooldownActive` | A signer-set change was attempted before the rotation cooldown elapsed. |
 | 22 | `InvalidRotationCooldown` | Invalid rotation cooldown configuration. |
+| 23 | `TooManyActions` | The proposal's action list exceeds `MAX_ACTIONS_PER_PROPOSAL`. |
+| 24 | `DuplicateActionId` | Two actions within the same proposal share the same `action_id`. |
 
 ## verification-registry (`RegistryError`)
 

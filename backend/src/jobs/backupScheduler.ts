@@ -4,6 +4,7 @@
 import cron from "node-cron";
 import { createBackupService } from "../services/databaseBackup.js";
 import logger from "../utils/logger.js";
+import { scheduledJob } from "../services/jobLeaderElection.js";
 
 /**
  * Automated Database Backup Scheduler
@@ -30,7 +31,7 @@ export function startBackupScheduler(): void {
 
   cron.schedule(
     schedule,
-    async () => {
+    scheduledJob("database-backup", async () => {
       logger.info("Executing scheduled database backup");
 
       try {
@@ -51,7 +52,7 @@ export function startBackupScheduler(): void {
         // TODO: Send alert notification (email, Slack, PagerDuty, etc.)
         // await sendBackupFailureAlert(error);
       }
-    },
+    }),
     {
       timezone: "UTC",
     }
@@ -95,7 +96,7 @@ export function startBackupCleanupScheduler(): void {
 
   cron.schedule(
     schedule,
-    async () => {
+    scheduledJob("database-backup-cleanup", async () => {
       logger.info("Executing scheduled backup cleanup");
 
       try {
@@ -111,7 +112,7 @@ export function startBackupCleanupScheduler(): void {
           error: error instanceof Error ? error.message : String(error),
         });
       }
-    },
+    }),
     { timezone: "UTC" },
   );
 

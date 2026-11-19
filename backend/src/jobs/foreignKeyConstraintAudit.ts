@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { runForeignKeyAudit, ForeignKeyAuditReport } from "../services/foreignKeyAudit.js";
 import { loadConfig } from "../config.js";
 import { sendEmail, getBrandedHtml } from "../services/email.js";

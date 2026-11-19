@@ -1,6 +1,8 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
+import { safeAssign } from "./safe-object";
+
 /**
  * WCAG 2.x colour-contrast audit for the design-system tokens (issue #698).
  *
@@ -106,11 +108,11 @@ export function themeTokens(
   palette: "default" | "colorblind"
 ): Tokens {
   const tokens: Tokens = { ...extractBlock(css, ":root") };
-  if (theme === "light") Object.assign(tokens, extractBlock(css, '[data-theme="light"]'));
+  if (theme === "light") safeAssign(tokens, extractBlock(css, '[data-theme="light"]'));
   if (palette === "colorblind")
-    Object.assign(tokens, extractBlock(css, '[data-palette="colorblind"]'));
+    safeAssign(tokens, extractBlock(css, '[data-palette="colorblind"]'));
   if (theme === "light" && palette === "colorblind") {
-    Object.assign(tokens, extractBlock(css, '[data-theme="light"][data-palette="colorblind"]'));
+    safeAssign(tokens, extractBlock(css, '[data-theme="light"][data-palette="colorblind"]'));
   }
   return tokens;
 }

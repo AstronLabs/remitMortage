@@ -208,7 +208,7 @@ Ensure each commit is a **small, modular, and compilable unit of work**.
 ## Submitting a Pull Request
 
 1. **Keep it focused:** Try to limit each PR to a single feature, improvement, or bug fix.
-2. **Write tests:** Ensure new code is covered by robust unit or integration tests.
+2. **Write tests:** Ensure new code is covered by robust unit or integration tests. Build loans, applicants and milestones with the shared factories in `backend/src/test-utils/factories` rather than inline object literals (a ratcheted test, `noInlineFixtures.test.ts`, enforces this; see [Test Data Factories](docs/TEST_DATA_FACTORIES.md)).
 3. **Verify locally:** Run code formatting, linting, and test commands before pushing.
 4. **Draft details:** Explain the rationale behind your change in the PR description, including how it was tested.
 5. **Request review:** Assign at least one project maintainer to review your code.

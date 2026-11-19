@@ -13,6 +13,8 @@
 
 import type { Request, Response, NextFunction } from "express";
 import { isStuffingSourceLocked } from "../services/credentialStuffing.js";
+import { peekCaptchaToken } from "../services/adaptiveCaptcha.js";
+import { captchaTokenFromRequest } from "./adaptiveCaptcha.js";
 import logger from "../utils/logger.js";
 
 function sourceContextFromRequest(req: Request): { ip?: string; asn?: string; fingerprint?: string } {
@@ -29,6 +31,12 @@ export async function credentialStuffingGuard(req: Request, res: Response, next:
   try {
     const status = isStuffingSourceLocked(sourceContextFromRequest(req));
     if (!status.locked) {
+      next();
+      return;
+    }
+    // A user who completed the challenge may proceed; the downstream
+    // adaptiveCaptcha gate spends the token and enforces its action binding.
+    if (peekCaptchaToken(captchaTokenFromRequest(req), req.ip || "unknown")) {
       next();
       return;
     }

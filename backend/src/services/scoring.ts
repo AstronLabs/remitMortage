@@ -154,10 +154,10 @@ const REASON_CODE_CATALOG = {
 function insufficientHistoryReasons(weights: typeof WEIGHTS_V1): ScoreReason[] {
   const { code, text } = REASON_CODE_CATALOG.insufficientHistory;
   return [
-    { code, factor: "consistency", text, contribution: 0, maxContribution: weights.CONSISTENCY },
-    { code, factor: "frequency", text, contribution: 0, maxContribution: weights.FREQUENCY },
-    { code, factor: "duration", text, contribution: 0, maxContribution: weights.DURATION },
-    { code, factor: "volume", text, contribution: 0, maxContribution: weights.VOLUME },
+    { code, factor: "consistency" as const, text, contribution: 0, maxContribution: weights.CONSISTENCY },
+    { code, factor: "frequency" as const, text, contribution: 0, maxContribution: weights.FREQUENCY },
+    { code, factor: "duration" as const, text, contribution: 0, maxContribution: weights.DURATION },
+    { code, factor: "volume" as const, text, contribution: 0, maxContribution: weights.VOLUME },
   ];
 }
 
@@ -186,7 +186,7 @@ function scoreWithWeights(analysis: RemittanceAnalysis, weights: typeof WEIGHTS_
 
   const avgDaysBetween = (analysis.spanMonths * 30) / (analysis.totalPayments - 1);
   let frequencyScore = 0;
-  let frequencyReason = REASON_CODE_CATALOG.frequencyInsufficient;
+  let frequencyReason: Pick<ScoreReason, "code" | "text"> = REASON_CODE_CATALOG.frequencyInsufficient;
   if (avgDaysBetween <= 35) {
     frequencyScore = weights.FREQUENCY;
     frequencyReason = REASON_CODE_CATALOG.frequencyRegular;
@@ -199,7 +199,7 @@ function scoreWithWeights(analysis: RemittanceAnalysis, weights: typeof WEIGHTS_
   }
 
   let durationScore = 0;
-  let durationReason = REASON_CODE_CATALOG.durationInsufficient;
+  let durationReason: Pick<ScoreReason, "code" | "text"> = REASON_CODE_CATALOG.durationInsufficient;
   if (analysis.spanMonths >= 12) {
     durationScore = weights.DURATION;
     durationReason = REASON_CODE_CATALOG.durationEstablished;
@@ -212,7 +212,7 @@ function scoreWithWeights(analysis: RemittanceAnalysis, weights: typeof WEIGHTS_
   }
 
   let volumeScore = 0;
-  let volumeReason = REASON_CODE_CATALOG.volumeMinimal;
+  let volumeReason: Pick<ScoreReason, "code" | "text"> = REASON_CODE_CATALOG.volumeMinimal;
   if (totalAmount >= 5000) {
     volumeScore = weights.VOLUME;
     volumeReason = REASON_CODE_CATALOG.volumeSubstantial;
@@ -239,10 +239,10 @@ function scoreWithWeights(analysis: RemittanceAnalysis, weights: typeof WEIGHTS_
   // the factor holding the score back the most comes first, which is the
   // order an adverse-decision notice wants: "here's what to improve."
   const reasons: ScoreReason[] = [
-    { ...consistencyReason, factor: "consistency", contribution: consistencyScore, maxContribution: weights.CONSISTENCY },
-    { ...frequencyReason, factor: "frequency", contribution: frequencyScore, maxContribution: weights.FREQUENCY },
-    { ...durationReason, factor: "duration", contribution: durationScore, maxContribution: weights.DURATION },
-    { ...volumeReason, factor: "volume", contribution: volumeScore, maxContribution: weights.VOLUME },
+    { ...consistencyReason, factor: "consistency" as const, contribution: consistencyScore, maxContribution: weights.CONSISTENCY },
+    { ...frequencyReason, factor: "frequency" as const, contribution: frequencyScore, maxContribution: weights.FREQUENCY },
+    { ...durationReason, factor: "duration" as const, contribution: durationScore, maxContribution: weights.DURATION },
+    { ...volumeReason, factor: "volume" as const, contribution: volumeScore, maxContribution: weights.VOLUME },
   ].sort((a, b) => (b.maxContribution - b.contribution) - (a.maxContribution - a.contribution));
 
   return {

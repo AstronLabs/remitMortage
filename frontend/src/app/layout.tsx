@@ -6,7 +6,7 @@ import { WalletProvider } from "../context/WalletContext";
 import "./globals.css";
 import { ContractRegistryProvider } from "@/context/ContractRegistryContext";
 import { ThemeProvider } from "@/context/ThemeContext";
-import { THEME_BOOT_SCRIPT } from "@/app/lib/theme-boot";
+import { DataSaverProvider } from "@/context/DataSaverContext";
 import { AuthProvider } from "@/context/AuthContext";
 import { NotificationProvider } from "@/context/NotificationContext";
 import { NotificationLayer } from "@/components/NotificationLayer";
@@ -27,6 +27,7 @@ import { LiveRegionAnnouncer } from "@/components/LiveRegionAnnouncer";
 import Footer from "@/components/Footer";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
+import { THEME_BOOT_SCRIPT } from "./lib/theme-boot";
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL ?? "https://remitmortgage.com";
 
@@ -130,6 +131,7 @@ export default async function RootLayout({
           <WalletBanner />
           <DemoModeBanner />
           <ThemeProvider>
+          <DataSaverProvider>
             <WalletProvider>
               <ContractRegistryProvider>
               <AuthProvider>
@@ -155,6 +157,7 @@ export default async function RootLayout({
               </AuthProvider>
               </ContractRegistryProvider>
             </WalletProvider>
+          </DataSaverProvider>
           </ThemeProvider>
           </DemoModeProvider>
         </NextIntlClientProvider>

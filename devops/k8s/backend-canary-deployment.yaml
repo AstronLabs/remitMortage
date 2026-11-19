@@ -2,10 +2,12 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: remitmortgage-backend-canary
-  namespace: default
+  namespace: remitmortgage
   labels:
     app: remitmortgage-backend-canary
     track: canary
+  annotations:
+    secret.reloader.stakater.com/reload: remitmortgage-backend-secrets
 spec:
   replicas: 2
   selector:

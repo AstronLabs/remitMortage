@@ -466,6 +466,26 @@ model OfferingWatch {
   @@index([investorAddress])
 }
 
+/// Accredited-investor re-verification tracking (issue #725). One row per
+/// investor wallet, created when accreditation is first captured. The next
+/// deadline is derived from `lastVerifiedAt` plus the configured interval, so
+/// changing the interval never requires rewriting rows. The two reminder
+/// timestamps make the sweep idempotent and are cleared on every successful
+/// re-verification.
+model InvestorAccreditation {
+  id                 String    @id @default(uuid())
+  investorAddress    String    @unique
+  lastVerifiedAt     DateTime
+  /// Set when the "deadline approaching" reminder has been sent.
+  reminderSentAt     DateTime?
+  /// Set when the follow-up for a missed deadline has been sent.
+  missedReminderSentAt DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([lastVerifiedAt])
+}
+
 enum ServicingTransferStatus {
   SCHEDULED
   COMPLETED
@@ -612,6 +632,21 @@ model Borrower {
   @@index([deletedAt])
 }
 
+model InvestorPosition {
+  id            String   @id @default(uuid())
+  walletAddress String   @unique
+  deposited     String   @default("0")
+  claimedYield  String   @default("0")
+  startLedger   Int      @default(0)
+  tranche       String
+  accruedYield  String   @default("0")
+  absorbedLoss  String   @default("0")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([tranche])
+}
+
 model EscrowDeposit {
   id          String   @id @default(uuid())
   borrower    Borrower @relation(fields: [borrowerId], references: [id])
@@ -731,6 +766,26 @@ model AnalyticsOutbox {
   publishedAt   DateTime? @db.Timestamptz(6)
 
   @@map("AnalyticsOutbox")
+}
+
+/// Reliable business-event publishing (issue #858). Rows are written in the
+/// same transaction as the business change; a relay publishes pending rows at
+/// least once and stamps `publishedAt`. `idempotencyKey` is unique so consumers
+/// can deduplicate redeliveries.
+model OutboxEvent {
+  id             BigInt    @id @default(autoincrement())
+  idempotencyKey String    @unique
+  topic          String
+  payload        Json
+  occurredAt     DateTime  @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+  publishedAt    DateTime? @db.Timestamptz(6)
+  attempts       Int       @default(0)
+  lastError      String?
+
+  @@index([publishedAt, id])
+  @@index([publishedAt, createdAt])
+  @@map("OutboxEvent")
 }
 
 model EventIndexerState {
@@ -997,100 +1052,12 @@ model SessionToken {
   @@index([createdAt])
 }
 
-// Tracks admin "view as user" read-only support sessions end-to-end: who
-// impersonated whom, the window it was valid for, and when it actually
-// ended (which may be earlier than expiresAt if explicitly revoked). This is
-// the enforcement source of truth (authMiddleware checks it on every
-// impersonated request); AuditLog additionally gets start/end entries
-// referencing this row's id so the audit trail is queryable alongside every
-// other admin action.
-model ImpersonationSession {
-  id            String    @id @default(uuid())
-  adminAddress  String
-  targetAddress String
-  reason        String?
-  ipAddress     String?
-  startedAt     DateTime  @default(now())
-  expiresAt     DateTime
-  endedAt       DateTime?
-  endedBy       String?
-  createdAt     DateTime  @default(now())
-
-  @@index([adminAddress])
-  @@index([targetAddress])
-  @@index([expiresAt])
-}
-
-model InviteCode {
-  id        String    @id @default(uuid())
-  code      String    @unique
-  email     String?
-  used      Boolean   @default(false)
-  usedBy    String?
-  usedAt    DateTime?
-  createdAt DateTime  @default(now())
-  expiresAt DateTime?
-
-  @@index([code])
-  @@index([used])
-}
-
-model WaitlistEntry {
-  id            String    @id @default(uuid())
-  email         String    @unique
-  walletAddress String?
-  status        String    @default("pending")
-  inviteCode    String?
-  position      Int?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-
-  @@index([email])
-  @@index([status])
-  @@index([createdAt])
-}
-
 /// Availability of review staff for the assignment queue (issue #621).
 /// Only `ACTIVE` reviewers take part in the round-robin rotation.
 enum ReviewerStatus {
   ACTIVE
   INACTIVE
   ON_LEAVE
-}
-
-// Four-eyes approval queue for high-value/sensitive admin actions (issue
-// #841). A request's `payload` is exactly what the originating admin route
-// needs to actually perform the action once approved — the route defers
-// execution rather than running it immediately. `requestedBy` can never also
-// be the `approvedBy`/`rejectedBy` address (enforced in services/
-// fourEyesApproval.ts, not at the schema level, since Postgres can't express
-// "column A != column B" across nullable columns cleanly here).
-model FourEyesApprovalRequest {
-  id              String    @id @default(uuid())
-  /// One of FOUR_EYES_ACTIONS in services/fourEyesPolicy.ts.
-  actionType      String
-  /// Exact arguments to re-run the original action on approval.
-  payload         Json
-  /// Dollar value at stake, when the action type is amount-gated. Null for
-  /// actions that always require approval regardless of amount.
-  amount          Float?
-  requestedBy     String
-  /// "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED"
-  status          String    @default("PENDING")
-  approvedBy      String?
-  approvedAt      DateTime?
-  rejectedBy      String?
-  rejectedAt      DateTime?
-  rejectionReason String?
-  /// Set once the approved action has actually been executed.
-  executedAt      DateTime?
-  expiresAt       DateTime
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-
-  @@index([status, expiresAt])
-  @@index([requestedBy])
-  @@index([actionType, status])
 }
 
 /// Review staff that new loan applications are distributed across by the
@@ -1111,175 +1078,21 @@ model Reviewer {
   @@index([status, lastAssignedAt])
 }
 
-/// One captured database operation whose duration exceeded the configurable
-/// slow-query threshold. Rows are rolled up by `fingerprint` into the weekly
-/// digest (issue #583).
-model SlowQueryLog {
-  id          String   @id @default(uuid())
-  /// Normalized query pattern (literals stripped) used for grouping.
-  query       String
-  /// Stable hash of the normalized pattern; groups equivalent statements.
-  fingerprint String
-  /// Prisma model the operation ran against, when applicable.
-  model       String?
-  /// Prisma operation name (e.g. findMany, create), when applicable.
-  operation   String?
-  /// Wall-clock duration of the operation in milliseconds.
-  durationMs  Int
-  occurredAt  DateTime @default(now())
+/// Per-key, per-billing-period request counter. Exactly one row per
+/// (apiKeyId, periodStart) — created on that period's first metered
+/// request, incremented on every one after. Billing periods are rolling
+/// windows anchored to the key's createdAt (see
+/// apiKeyQuota.ts#resolveBillingPeriod), not calendar months.
+model ApiKeyUsage {
+  id           String   @id @default(uuid())
+  apiKeyId     String
+  apiKey       ApiKey   @relation(fields: [apiKeyId], references: [id])
+  periodStart  DateTime
+  periodEnd    DateTime
+  requestCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  @@index([occurredAt])
-  @@index([fingerprint])
-  @@index([fingerprint, occurredAt])
-}
-
-enum EmailSuppressionReason {
-  HARD_BOUNCE
-  SOFT_BOUNCE
-  SPAM_COMPLAINT
-}
-
-/// Outbound email suppression list, fed by the email provider's bounce and
-/// complaint webhook. Every send checks this table first. Hard bounces and spam
-/// complaints suppress permanently; soft bounces suppress until
-/// `suppressedUntil` (exponential backoff) and become permanent after repeated
-/// failures.
-model EmailSuppression {
-  id               String                 @id @default(uuid())
-  /// Lower-cased, trimmed recipient address.
-  email            String                 @unique
-  reason           EmailSuppressionReason
-  /// True for hard bounces and complaints; soft bounces rely on `suppressedUntil`.
-  permanent        Boolean                @default(false)
-  /// End of the current soft-bounce backoff window.
-  suppressedUntil  DateTime?
-  softBounceCount  Int                    @default(0)
-  /// Internal flag raised on spam complaints for staff follow-up.
-  flaggedForReview Boolean                @default(false)
-  /// Provider-supplied reason text from the most recent event.
-  lastDetail       String?
-  lastEventAt      DateTime               @default(now())
-  createdAt        DateTime               @default(now())
-  updatedAt        DateTime               @updatedAt
-
-  @@index([permanent])
-}
-
-/// Periodic snapshot of dead-tuple bloat for a table, taken from
-/// pg_stat_user_tables. Gives operators visibility into which tables are
-/// accumulating bloat between autovacuum cycles, and records whether the
-/// monitor triggered a manual VACUUM for it (issue #684).
-model TableBloatSnapshot {
-  id               String    @id @default(uuid())
-  schemaName       String    @default("public")
-  tableName        String
-  liveTuples       BigInt
-  deadTuples       BigInt
-  /// deadTuples / (liveTuples + deadTuples), 0 when the table is empty.
-  deadTupleRatio   Float
-  tableSizeBytes   BigInt
-  lastAutovacuum   DateTime?
-  lastVacuum       DateTime?
-  /// True when this snapshot's ratio crossed the critical threshold and the
-  /// monitor issued a manual VACUUM in response.
-  vacuumTriggered  Boolean   @default(false)
-  capturedAt       DateTime  @default(now())
-
-  @@index([capturedAt])
-  @@index([tableName, capturedAt])
-}
-
-/// Hardship late-fee waiver request workflow (issue #749).
-///
-/// A borrower facing genuine hardship (job loss, medical emergency, etc.)
-/// submits a structured request against a loan with an outstanding
-/// `lateFeeBalance`. Requests sit in PENDING until an admin applies a
-/// documented decision: APPROVED (full waiver), PARTIAL (partial waiver) or
-/// DENIED. Every decision records the waived amount, the documented reason
-/// and the approving admin so the full request-to-decision trail is auditable
-/// against the loan.
-enum FeeWaiverStatus {
-  PENDING
-  APPROVED
-  PARTIAL
-  DENIED
-}
-
-/// Documented hardship categories accepted on waiver requests.
-enum HardshipReason {
-  JOB_LOSS
-  MEDICAL_EMERGENCY
-  NATURAL_DISASTER
-  REDUCED_INCOME
-  BEREAVEMENT
-  OTHER
-}
-
-model LateFeeWaiverRequest {
-  id                String         @id @default(uuid())
-  loanApplicationId String
-  /// Borrower wallet address that filed the request (denormalized for queue filtering).
-  borrowerAddress   String
-  hardshipReason    HardshipReason
-  /// Free-text supporting context supplied by the borrower.
-  context           String
-  /// Late-fee amount outstanding when the request was filed (audit snapshot).
-  requestedAmount   Float
-  /// Amount actually waived by the admin decision (0 for DENIED/PENDING).
-  waivedAmount      Float          @default(0)
-  status            FeeWaiverStatus @default(PENDING)
-  /// Admin wallet / API-key identity that decided the request.
-  decidedBy         String?
-  /// Documented approval-criteria reference + rationale recorded by the admin.
-  decisionReason    String?
-  /// Approval-criteria version evaluated (e.g. "waiver-policy-v1").
-  policyVersion     String         @default("waiver-policy-v1")
-  decidedAt         DateTime?
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
-
-  @@index([loanApplicationId, status])
-  @@index([status, createdAt])
-  @@index([borrowerAddress])
-}
-
-/// Lifecycle of an admin-managed notification template version (issue #825).
-/// At most one version per (key, locale) is Published at any time (enforced by
-/// a partial unique index); Superseded versions were live once and can be
-/// restored by a rollback.
-enum NotificationTemplateStatus {
-  Draft
-  Published
-  Superseded
-}
-
-/// A version of a notification template for one locale. Content is immutable
-/// once published; changing wording means a new version, and going back means
-/// re-publishing an earlier one (rollback), so the full history is retained.
-/// Sends resolve the Published version at dispatch time, so publishing affects
-/// only sends that happen afterwards. Who created / published each version is
-/// stored here; every change is also written to the audit log.
-model NotificationTemplateVersion {
-  id          String                     @id @default(uuid())
-  /// Template identifier from the code registry, e.g. "deposit_receipt".
-  key         String
-  /// Supported locale code: en | es | fr.
-  locale      String
-  /// Monotonic per (key, locale), starting at 1.
-  version     Int
-  status      NotificationTemplateStatus @default(Draft)
-  subject     String
-  /// Message body (HTML) with `{{variable}}` placeholders.
-  body        String
-  changeNote  String?
-  createdBy   String
-  createdAt   DateTime                   @default(now())
-  updatedBy   String?
-  updatedAt   DateTime                   @updatedAt
-  /// Set each time this version goes live (publish or rollback).
-  publishedBy String?
-  publishedAt DateTime?
-
-  @@unique([key, locale, version])
-  @@index([key, locale, status])
+  @@unique([apiKeyId, periodStart])
+  @@index([apiKeyId, periodStart])
 }

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   AreaChart,
   Area,
@@ -14,6 +14,9 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import AccessibleChart from "@/components/charts/AccessibleChart";
+import type { ChartExportData } from "@/lib/chart-export";
+import { summarizeTrend } from "@/lib/chart-summary";
 
 interface HistoricalData {
   date: string;
@@ -56,6 +59,23 @@ export default function YieldAnalyticsChart() {
     return `${value.toFixed(1)}%`;
   };
 
+  const tvlTable = useMemo<ChartExportData>(
+    () => ({ columns: ["Date", "TVL (USDC)"], rows: data.map((d) => [d.date, d.tvl]) }),
+    [data]
+  );
+  const apyTable = useMemo<ChartExportData>(
+    () => ({ columns: ["Date", "Pool APY (%)"], rows: data.map((d) => [d.date, d.apy]) }),
+    [data]
+  );
+  const tvlSummary = useMemo(
+    () => summarizeTrend("TVL", data.map((d) => ({ label: d.date, value: d.tvl })), formatCurrency),
+    [data]
+  );
+  const apySummary = useMemo(
+    () => summarizeTrend("Pool APY", data.map((d) => ({ label: d.date, value: d.apy })), formatPercent),
+    [data]
+  );
+
   if (error) {
     return (
       <div className="p-6 bg-slate-900/70 border border-slate-800/80 rounded-2xl">
@@ -71,7 +91,13 @@ export default function YieldAnalyticsChart() {
         <h3 className="text-lg font-bold text-white mb-1">Total Value Locked (USDC)</h3>
         <p className="text-xs text-slate-400 mb-6">Historical TVL growth over time.</p>
         
-        <div className="flex-1 min-h-[250px] relative">
+        <AccessibleChart
+          chartTitle="Total Value Locked (USDC)"
+          summary={tvlSummary}
+          data={tvlTable}
+          filterDescription="Historical TVL growth over time."
+        >
+        <div className="flex-1 min-h-[250px] h-[250px] relative">
           {loading ? (
             <div className="absolute inset-0 flex items-center justify-center bg-slate-900/50 rounded-xl animate-pulse">
               <div className="w-full h-full bg-slate-800/50 rounded-xl"></div>
@@ -117,6 +143,7 @@ export default function YieldAnalyticsChart() {
             </ResponsiveContainer>
           )}
         </div>
+        </AccessibleChart>
       </div>
 
       {/* APY Line Chart */}
@@ -124,7 +151,13 @@ export default function YieldAnalyticsChart() {
         <h3 className="text-lg font-bold text-white mb-1">Estimated Pool APY</h3>
         <p className="text-xs text-slate-400 mb-6">Average historical yield for lenders.</p>
         
-        <div className="flex-1 min-h-[250px] relative">
+        <AccessibleChart
+          chartTitle="Estimated Pool APY"
+          summary={apySummary}
+          data={apyTable}
+          filterDescription="Average historical yield for lenders."
+        >
+        <div className="flex-1 min-h-[250px] h-[250px] relative">
           {loading ? (
             <div className="absolute inset-0 flex items-center justify-center bg-slate-900/50 rounded-xl animate-pulse">
               <div className="w-full h-full bg-slate-800/50 rounded-xl"></div>
@@ -164,6 +197,7 @@ export default function YieldAnalyticsChart() {
             </ResponsiveContainer>
           )}
         </div>
+        </AccessibleChart>
       </div>
     </div>
   );

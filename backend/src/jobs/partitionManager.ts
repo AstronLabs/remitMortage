@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import cron from "node-cron";
+import { scheduledJob } from "../services/jobLeaderElection.js";
 import logger from "../utils/logger.js";
 import { prisma } from "../services/db.js";
 
@@ -45,6 +46,6 @@ async function managePartitions() {
 
 export function startPartitionManager() {
   // Run on the 1st of every month at midnight
-  cron.schedule("0 0 1 * *", managePartitions);
+  cron.schedule("0 0 1 * *", scheduledJob("partition-manager", managePartitions));
   logger.info("[partition-manager] Scheduled monthly partition management job");
 }

@@ -55,4 +55,19 @@ pub enum BridgeError {
 
     /// Unsupported cross-chain message version.
     UnsupportedVersion = 16,
+
+    /// The mint would push this source chain's rolling daily volume over
+    /// its configured cap (issue #858).
+    DailyVolumeCapExceeded = 17,
+
+    /// `set_daily_cap` was asked to raise an existing positive cap — raises
+    /// must go through propose_daily_cap_increase / execute_daily_cap_increase
+    /// instead, since only raises are timelocked.
+    CapIncreaseRequiresTimelock = 18,
+
+    /// No pending cap increase exists for this source chain.
+    NoPendingCapIncrease = 19,
+
+    /// A pending cap increase exists but its timelock has not yet elapsed.
+    CapChangeTimelockActive = 20,
 }

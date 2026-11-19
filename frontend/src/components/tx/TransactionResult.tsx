@@ -71,7 +71,7 @@ export default function TransactionResult({
           role="alert"
           className="mb-5 mx-auto max-w-lg text-left bg-red-500/10 border border-red-500/25 rounded-lg px-4 py-3"
         >
-          <p className="text-xs font-semibold uppercase tracking-wider text-red-400/80 mb-1">
+          <p className="text-xs font-semibold uppercase tracking-wider text-red-300 mb-1">
             Contract Error
           </p>
           <p className="text-sm text-red-300 font-mono break-words">{contractError}</p>

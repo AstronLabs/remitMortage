@@ -6,6 +6,13 @@ horizontal pod autoscaling.
 | File | Purpose |
 | --- | --- |
 | `backend-deployment.yaml` | Backend Deployment with CPU/memory requests, limits, ConfigMap, and secret environment mapping |
+| `namespace.yaml` | Dedicated namespace for the application workloads and secret controllers |
+| `external-secrets/helm-values.yaml` | Namespace-scoped External Secrets Operator settings and AWS workload identity placeholder |
+| `external-secrets/aws-secret-store.yaml` | Namespaced AWS Secrets Manager `SecretStore` |
+| `external-secrets/backend-external-secret.yaml` | Periodic sync of backend runtime secrets |
+| `external-secrets/staging-external-secrets.yaml` | Staging-only production-readonly and staging database syncs |
+| `external-secrets/token-request-rbac.yaml` | TokenRequest permission limited to the ESO service account |
+| `external-secrets/reloader.yaml` | Namespace-only Reloader RBAC and deployment |
 | `backend-service.yaml` | ClusterIP Service fronting the backend pods |
 | `backend-configmap.yaml` | ConfigMap defining standard non-sensitive variables |
 | `backend-ingress.yaml` | Ingress mapping external/internal APIs to the ClusterIP Service |
@@ -62,6 +69,104 @@ Build a backlog with the existing webhook or analytics load test and verify
 `kubectl get hpa -l app.kubernetes.io/managed-by=keda --watch` grows replicas;
 stop the producer and verify they return to two after the cooldown window.
 
+## External Secrets Operator and secret rotation
+
+The repository's existing cloud secret-manager integration is AWS Secrets
+Manager (`devops/main.tf`). Kubernetes does not yet have a configured AWS
+account, EKS OIDC identity, IAM role, region, or secret names. The manifests
+therefore contain obvious placeholders; replace them with the values for the
+target cluster before installation. Do not commit credentials or secret
+payloads.
+
+Provision an EKS IAM role trusted only for
+`system:serviceaccount:remitmortgage:external-secrets`. Its policy should grant
+`secretsmanager:GetSecretValue` and `secretsmanager:DescribeSecret` only for the
+exact Secrets Manager ARNs referenced below, plus `kms:Decrypt` only for the
+customer-managed key used by those secrets, if applicable. Do not use a
+node-wide or account-wide wildcard role. For a non-EKS cluster, configure the
+provider's supported workload identity instead of adding static credentials.
+
+Create the following AWS Secrets Manager JSON values out of band. The JSON
+property names are the mappings in the ExternalSecret manifests; actual values
+stay in AWS and are never checked into this repository:
+
+| Secret name | Required JSON properties |
+| --- | --- |
+| `remitmortgage/<environment>/backend` | `databaseUrl`, `redisUrl`, `redisClusterNodes`, `otelExporterOtlpEndpoint` |
+| `remitmortgage/production/database-readonly` | `databaseUrl` (read-only production replica credential; staging seed job only) |
+| `remitmortgage/<environment>/staging-database` | `databaseUrl` (staging write target) |
+
+The External Secrets Operator syncs every five minutes into the existing
+Kubernetes Secret names used by the Deployments and staging CronJob. Apply
+`staging-external-secrets.yaml` and `anonymized-staging-seed-cronjob.yaml` only
+in the staging cluster; do not grant production credentials to non-staging
+clusters.
+
+Install the pinned operator chart after replacing the AWS account and role
+placeholders in `external-secrets/helm-values.yaml` and the region and
+environment placeholders in `external-secrets/aws-secret-store.yaml` and
+`external-secrets/external-secrets.yaml`:
+
+```bash
+kubectl apply -f devops/k8s/namespace.yaml
+helm repo add external-secrets https://charts.external-secrets.io
+helm repo update external-secrets
+helm upgrade --install external-secrets external-secrets/external-secrets \
+  --version 2.14.0 \
+  --namespace remitmortgage \
+  --values devops/k8s/external-secrets/helm-values.yaml
+kubectl apply -f devops/k8s/external-secrets/token-request-rbac.yaml
+kubectl apply -f devops/k8s/external-secrets/aws-secret-store.yaml
+kubectl apply -f devops/k8s/external-secrets/backend-external-secret.yaml
+kubectl apply -f devops/k8s/external-secrets/reloader.yaml
+kubectl wait --for=condition=Ready secretstore/remitmortgage-aws-secrets \
+  --namespace remitmortgage --timeout=120s
+kubectl wait --for=condition=Ready externalsecret/remitmortgage-backend-secrets \
+  --namespace remitmortgage --timeout=120s
+```
+
+In staging only, also apply:
+
+```bash
+kubectl apply -f devops/k8s/external-secrets/staging-external-secrets.yaml
+kubectl apply -f devops/k8s/anonymized-staging-seed-cronjob.yaml
+kubectl wait --for=condition=Ready externalsecret/production-readonly-secrets \
+  --namespace remitmortgage --timeout=120s
+kubectl wait --for=condition=Ready externalsecret/staging-db-secrets \
+  --namespace remitmortgage --timeout=120s
+```
+
+The chart is configured with scoped RBAC, watches only `remitmortgage`, and
+does not process cluster-scoped stores or external secrets. Its AWS service
+account uses web identity; the token-request Role permits only the
+`external-secrets` service account. Reloader can read Secrets and patch Deployments only
+inside this namespace. The backend and canary Deployments opt in for
+`remitmortgage-backend-secrets`; an updated Secret triggers a rolling restart
+so environment variables refresh in running pods. The seed CronJob reads the
+latest synced values when its next scheduled run starts.
+
+After sync, install application resources in `remitmortgage`:
+
+```bash
+kubectl apply -f devops/k8s/backend-configmap.yaml
+kubectl apply -f devops/k8s/backend-deployment.yaml
+kubectl apply -f devops/k8s/backend-service.yaml
+kubectl apply -f devops/k8s/backend-ingress.yaml
+kubectl apply -f devops/k8s/backend-hpa.yaml
+```
+
+Verify rotation without printing secret contents:
+
+```bash
+kubectl describe externalsecret remitmortgage-backend-secrets -n remitmortgage
+kubectl rollout status deployment/remitmortgage-backend -n remitmortgage
+kubectl get secret remitmortgage-backend-secrets -n remitmortgage \
+  -o jsonpath='{.metadata.resourceVersion}{"\n"}'
+```
+
+Do not use `kubectl get secret -o yaml` or otherwise dump secret data into
+terminals or CI logs.
+
 ## Prerequisites
 
 The HPA reads pod CPU/memory from the metrics API, so `metrics-server` must be running:
@@ -70,15 +175,6 @@ The HPA reads pod CPU/memory from the metrics API, so `metrics-server` must be r
 kubectl get deployment metrics-server -n kube-system
 # if missing:
 kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-```
-
-Before applying, ensure the backend secrets exist:
-```bash
-kubectl create secret generic remitmortgage-backend-secrets \
-  --from-literal=database-url="postgres://..." \
-  --from-literal=redis-url="redis://..." \
-  --from-literal=redis-cluster-nodes="..." \
-  --from-literal=otel-exporter-otlp-endpoint="http://jaeger-collector:4318"
 ```
 
 CPU **requests** are required on the Deployment — utilization is a percentage of
@@ -90,6 +186,9 @@ You can validate the manifests syntax before deploying using `kubectl`:
 
 ```bash
 kubectl apply --dry-run=client -f devops/k8s/
+kubectl apply --dry-run=client -f devops/k8s/namespace.yaml
+kubectl apply --dry-run=client -f devops/k8s/external-secrets/token-request-rbac.yaml
+kubectl apply --dry-run=client -f devops/k8s/external-secrets/reloader.yaml
 ```
 
 ## Deploy

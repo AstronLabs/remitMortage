@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 import dynamic from "next/dynamic";
+import { previewTransaction } from "../../lib/soroban-client";
+import type { TransactionPreview } from "../../lib/transaction-preview";
+import ConfirmationDialog from "../../components/ConfirmationDialog";
 import { ChangeEvent, useMemo, useState } from "react";
 import {
   BASE_FEE,
@@ -14,6 +17,11 @@ import {
 } from "@stellar/stellar-sdk";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
+
+const TransactionPreviewPanel = dynamic(
+  () => import("../../components/tx/TransactionPreviewPanel"),
+  { ssr: false }
+);
 
 type CommitteeMember = {
   id: string;
@@ -82,9 +90,13 @@ export default function MultisigCoordinatorPage() {
   const [mediumThreshold, setMediumThreshold] = useState(2);
   const [highThreshold, setHighThreshold] = useState(3);
   const [transactionXdr, setTransactionXdr] = useState("");
+  const [preview, setPreview] = useState<TransactionPreview | null>(null);
+  const [previewAcknowledged, setPreviewAcknowledged] = useState(false);
   const [signedTransactionXdr, setSignedTransactionXdr] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [isBusy, setIsBusy] = useState(false);
+  const [pendingRemovalMember, setPendingRemovalMember] = useState<CommitteeMember | null>(null);
+  const [pendingSigningXdr, setPendingSigningXdr] = useState<string | null>(null);
 
   const horizonUrl = process.env.NEXT_PUBLIC_HORIZON_URL || "https://horizon-testnet.stellar.org";
   const networkPassphrase = process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE || Networks.TESTNET;
@@ -237,6 +249,10 @@ export default function MultisigCoordinatorPage() {
       const transaction = builder.setTimeout(300).build();
       const xdr = transaction.toXDR();
       setTransactionXdr(xdr);
+      // A rebuilt transaction is a different transaction: the old preview and
+      // the acknowledgement of its warnings no longer apply to it.
+      setPreview(null);
+      setPreviewAcknowledged(false);
       setStatusMessage("SetOptions transaction built successfully.");
       return xdr;
     } catch (error) {
@@ -247,14 +263,56 @@ export default function MultisigCoordinatorPage() {
     }
   }
 
-  async function signSetupTransaction() {
+  /**
+   * Issue #884: a signing-policy change is the most dangerous transaction in
+   * the app — get the thresholds wrong and the account is locked out
+   * permanently. So the envelope is decoded and described before the wallet is
+   * asked for anything, and the describing happens from the XDR, not from the
+   * form that built it.
+   */
+  async function prepareSetupSigning() {
     const xdr = transactionXdr || (await buildSetupTransaction());
 
     if (!xdr) return;
 
     setIsBusy(true);
-    setStatusMessage("Requesting Freighter signature...");
+    setStatusMessage("Checking what this transaction will do...");
 
+    try {
+      const built = await previewTransaction(xdr, {
+        intent: { account: governanceAccount.trim() },
+      });
+      setPreview(built);
+
+      if (!built.ok) {
+        // Never reaches the wallet: there is nothing trustworthy to show.
+        setStatusMessage(built.failureReason ?? "The transaction could not be previewed.");
+        return;
+      }
+
+      if (built.requiresAcknowledgement && !previewAcknowledged) {
+        setStatusMessage(
+          "Review the preview below and confirm the warnings before signing."
+        );
+        return;
+      }
+
+      setPendingSigningXdr(xdr);
+      setStatusMessage("Review the signer-policy change before continuing.");
+    } catch (error) {
+      setStatusMessage(
+        error instanceof Error ? error.message : "Unable to prepare the transaction for signing."
+      );
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function confirmSetupSigning() {
+    if (!pendingSigningXdr) return;
+
+    setIsBusy(true);
+    setStatusMessage("Requesting Freighter signature...");
     try {
       const freighterPublicKey = await getFreighterPublicKey();
 
@@ -264,13 +322,14 @@ export default function MultisigCoordinatorPage() {
         );
       }
 
-      const signedXdr = await signTransactionWithFreighter(xdr, networkPassphrase);
+      const signedXdr = await signTransactionWithFreighter(pendingSigningXdr, networkPassphrase);
       setSignedTransactionXdr(signedXdr);
       setStatusMessage("Freighter signed the multisig setup transaction.");
     } catch (error) {
-      setStatusMessage(
-        error instanceof Error ? error.message : "Freighter could not sign the transaction."
-      );
+      const message =
+        error instanceof Error ? error.message : "Freighter could not sign the transaction.";
+      setStatusMessage(message);
+      throw new Error(message);
     } finally {
       setIsBusy(false);
     }
@@ -385,7 +444,7 @@ export default function MultisigCoordinatorPage() {
 
                           <button
                             type="button"
-                            onClick={() => removeMember(member.id)}
+                            onClick={() => setPendingRemovalMember(member)}
                             className="btn-outline !py-3 !px-5 lg:self-end"
                             disabled={members.length === 1}
                           >
@@ -547,7 +606,7 @@ export default function MultisigCoordinatorPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={signSetupTransaction}
+                    onClick={prepareSetupSigning}
                     disabled={!isValidConfiguration || isBusy}
                     className="btn-primary disabled:opacity-60 disabled:cursor-not-allowed"
                   >
@@ -557,6 +616,14 @@ export default function MultisigCoordinatorPage() {
 
                 {statusMessage && (
                   <p className="text-sm text-[var(--text-secondary)]">{statusMessage}</p>
+                )}
+
+                {preview && (
+                  <TransactionPreviewPanel
+                    preview={preview}
+                    acknowledged={previewAcknowledged}
+                    onAcknowledgedChange={setPreviewAcknowledged}
+                  />
                 )}
 
                 {transactionXdr && (
@@ -587,6 +654,25 @@ export default function MultisigCoordinatorPage() {
           </div>
         </div>
       </section>
+      <ConfirmationDialog
+        isOpen={pendingRemovalMember !== null}
+        title="Remove committee signer?"
+        description={`Remove ${pendingRemovalMember?.label ?? "this signer"} from the draft configuration. This will also discard the current unsigned and signed transaction previews.`}
+        confirmLabel="Remove signer"
+        onConfirm={() => {
+          if (pendingRemovalMember) removeMember(pendingRemovalMember.id);
+        }}
+        onCancel={() => setPendingRemovalMember(null)}
+      />
+      <ConfirmationDialog
+        isOpen={pendingSigningXdr !== null}
+        title="Confirm signer-policy change"
+        description={`You are about to sign a Stellar transaction that changes signer weights and thresholds for ${shortKey(governanceAccount)}. An incorrect policy can permanently lock the governance account.`}
+        confirmationText="UPDATE SIGNERS"
+        confirmLabel="Sign configuration"
+        onConfirm={confirmSetupSigning}
+        onCancel={() => setPendingSigningXdr(null)}
+      />
     </main>
   );
 }

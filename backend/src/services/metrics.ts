@@ -38,6 +38,34 @@ export const metricsRegistry = new Registry();
 collectDefaultMetrics({ register: metricsRegistry });
 
 // ---------------------------------------------------------------------------
+// Scheduled job leader election (issue #935)
+// ---------------------------------------------------------------------------
+
+/**
+ * Outcomes of scheduled-job ticks on this instance. `executed`/`failed` mean
+ * this instance was the leader for the run; the `skipped_*` outcomes mean
+ * another instance already ran (or is running) it.
+ */
+export const scheduledJobRunsTotal = new Counter({
+  name: "remitmortgage_scheduled_job_runs_total",
+  help: "Scheduled job ticks handled by this instance, by outcome.",
+  labelNames: ["job", "outcome"] as const,
+  registers: [metricsRegistry],
+});
+
+/**
+ * Scheduled runs this instance skipped because it was not the leader.
+ * `lock_held`: another instance holds the job's advisory lock right now.
+ * `recently_run`: another instance already completed this run.
+ */
+export const scheduledJobSkippedTotal = new Counter({
+  name: "remitmortgage_scheduled_job_skipped_total",
+  help: "Scheduled job runs skipped because another instance is the leader.",
+  labelNames: ["job", "reason"] as const,
+  registers: [metricsRegistry],
+});
+
+// ---------------------------------------------------------------------------
 // HTTP metrics
 // ---------------------------------------------------------------------------
 
@@ -237,6 +265,26 @@ export const apiKeyQuotaExceededTotal = new Counter({
 });
 
 // ---------------------------------------------------------------------------
+// Tenant request rate-limit metrics
+// ---------------------------------------------------------------------------
+
+/** Current request-window usage for each tenant and plan. */
+export const tenantRateLimitUsage = new Gauge({
+  name: "remitmortgage_tenant_rate_limit_usage",
+  help: "Authenticated requests used by each tenant in the current rate-limit window.",
+  labelNames: ["tenant_id", "plan"] as const,
+  registers: [metricsRegistry],
+});
+
+/** Requests rejected after exceeding a tenant's plan-based request budget. */
+export const tenantRateLimitExceededTotal = new Counter({
+  name: "remitmortgage_tenant_rate_limit_exceeded_total",
+  help: "Authenticated tenant requests rejected for exceeding the plan-based request budget.",
+  labelNames: ["tenant_id", "plan"] as const,
+  registers: [metricsRegistry],
+});
+
+// ---------------------------------------------------------------------------
 // Request payload limit metrics
 // ---------------------------------------------------------------------------
 
@@ -249,6 +297,32 @@ export const payloadRejectedTotal = new Counter({
   name: "remitmortgage_payload_rejected_total",
   help: "Total requests rejected with 413 for exceeding body size, JSON depth or array length limits.",
   labelNames: ["reason", "route"] as const,
+  registers: [metricsRegistry],
+});
+
+/**
+ * Reserved object keys (`__proto__`, `constructor`, `prototype`) removed from
+ * an incoming request, labelled by guard mode and route prefix. A non-zero
+ * rate means someone is probing for prototype pollution (issue #885).
+ * See middleware/prototypePollutionGuard.ts.
+ */
+export const prototypePollutionStrippedTotal = new Counter({
+  name: "remitmortgage_prototype_pollution_stripped_total",
+  help: "Total reserved object keys stripped from request bodies and query strings.",
+  labelNames: ["mode", "route"] as const,
+  registers: [metricsRegistry],
+});
+
+/**
+ * Admin requests rejected by device binding, labelled by failure reason and
+ * enforcement mode (issue #886). A rising `device_mismatch` or
+ * `replayed_proof` rate is session theft in progress, not a config problem.
+ * See middleware/adminDeviceBinding.ts.
+ */
+export const adminDeviceBindingFailuresTotal = new Counter({
+  name: "remitmortgage_admin_device_binding_failures_total",
+  help: "Total admin requests rejected because the device proof did not match the bound session.",
+  labelNames: ["reason", "mode"] as const,
   registers: [metricsRegistry],
 });
 

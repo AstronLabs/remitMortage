@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import express from "express";
 import request from "supertest";
 import cookieParser from "cookie-parser";
@@ -22,21 +25,49 @@ import {
 } from "../services/contractorAuth.js";
 import { generateStepUpCode } from "../services/locationAnomalyService.js";
 
-// Mock database services
-jest.mock("../services/db.js", () => ({
-  upsertApplicant: jest.fn().mockImplementation((walletAddress: string) =>
-    Promise.resolve({ id: `applicant-${walletAddress.slice(0, 8)}` })
-  ),
-  createVerificationResult: jest.fn().mockResolvedValue({ id: "verification-1" }),
-  prisma: {
-    applicant: {
-      findFirst: jest.fn().mockResolvedValue({ id: "applicant-test-id" }),
+// Mock database services. Login location history is persisted via
+// prisma.loginLocationHistory, so the mock needs a working in-memory version:
+// each login is recorded and then re-queried to evaluate the next one.
+jest.mock("../services/db.js", () => {
+  type FakeRow = {
+    walletAddress: string;
+    country: string;
+    latitude: number;
+    longitude: number;
+    loginAt: Date;
+  };
+  const rows: FakeRow[] = [];
+
+  return {
+    upsertApplicant: jest.fn().mockImplementation((walletAddress: string) =>
+      Promise.resolve({ id: `applicant-${walletAddress.slice(0, 8)}` })
+    ),
+    createVerificationResult: jest.fn().mockResolvedValue({ id: "verification-1" }),
+    getNotificationPreference: jest.fn().mockResolvedValue(null),
+    prisma: {
+      applicant: {
+        findFirst: jest.fn().mockResolvedValue({ id: "applicant-test-id" }),
+      },
+      waitlistEntry: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      loginLocationHistory: {
+        create: jest.fn(async ({ data }: { data: FakeRow }) => {
+          rows.push({ ...data });
+          return data;
+        }),
+        findMany: jest.fn(
+          async ({ where, take }: { where: { walletAddress: string }; take?: number }) => {
+            const matching = rows
+              .filter((r) => r.walletAddress === where.walletAddress)
+              .sort((a, b) => b.loginAt.getTime() - a.loginAt.getTime());
+            return take ? matching.slice(0, take) : matching;
+          }
+        ),
+      },
     },
-    waitlistEntry: {
-      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-    },
-  },
-}));
+  };
+});
 
 // Bypass rate limiters in tests
 jest.mock("../middleware/rateLimit.js", () => ({

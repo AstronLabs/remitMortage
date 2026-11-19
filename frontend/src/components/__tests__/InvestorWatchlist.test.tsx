@@ -165,14 +165,10 @@ describe("InvestorWatchlist removal undo window", () => {
       await Promise.resolve();
     });
 
-    // Optimistic flip: the row now offers to watch again, but nothing was sent.
-    expect(screen.getByTestId("upcoming-offering-loan-2").querySelector("button")).toHaveTextContent(
-      "Watch"
-    );
     expect(unwatchOfferingMock).not.toHaveBeenCalled();
-
-    await advancePastUndoWindow();
-
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Remove offering from watchlist?");
+    fireEvent.click(screen.getByRole("button", { name: "Remove from watchlist" }));
+    await flush();
     expect(unwatchOfferingMock).toHaveBeenCalledWith("loan-2");
     expect(unwatchOfferingMock).toHaveBeenCalledTimes(1);
   });
@@ -184,14 +180,12 @@ describe("InvestorWatchlist removal undo window", () => {
     const item = screen.getByTestId("watchlist-item-loan-9");
     await act(async () => {
       fireEvent.click(item.querySelector("button")!);
-      await Promise.resolve();
     });
 
-    expect(screen.queryByTestId("watchlist-item-loan-9")).not.toBeInTheDocument();
     expect(unwatchOfferingMock).not.toHaveBeenCalled();
-
-    await advancePastUndoWindow();
-
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("Remove offering from watchlist?");
+    fireEvent.click(screen.getByRole("button", { name: "Remove from watchlist" }));
+    await flush();
     expect(unwatchOfferingMock).toHaveBeenCalledWith("loan-9");
   });
 

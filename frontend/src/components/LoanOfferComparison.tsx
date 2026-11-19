@@ -20,6 +20,7 @@ import {
   useLoanComparison,
 } from "@/hooks/useLoanComparison";
 import FieldTooltip from "./ui/FieldTooltip";
+import ConfirmationDialog from "./ConfirmationDialog";
 
 export interface LoanOfferComparisonProps {
   /** Token ticker shown alongside figures. */
@@ -55,6 +56,7 @@ export default function LoanOfferComparison({
   const baselineId = useLoanComparison((s) => s.baselineId);
   const selectedId = useLoanComparison((s) => s.selectedId);
   const [appliedNote, setAppliedNote] = useState<string | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<{ id: string; label: string } | null>(null);
 
   // Actions are read straight off the store: they are stable identities, so
   // pulling them through the hydration-guarded selector would be wasted work.
@@ -227,7 +229,12 @@ export default function LoanOfferComparison({
                     {scenarios.length > 1 && (
                       <button
                         type="button"
-                        onClick={() => store.removeScenario(entry.scenario.id)}
+                        onClick={() =>
+                          setPendingRemoval({
+                            id: entry.scenario.id,
+                            label: entry.scenario.label,
+                          })
+                        }
                         aria-label={`Remove ${entry.scenario.label}`}
                         className="shrink-0 text-[var(--text-muted)] hover:opacity-70"
                       >
@@ -423,6 +430,17 @@ export default function LoanOfferComparison({
           </tbody>
         </table>
       </div>
+      <ConfirmationDialog
+        isOpen={pendingRemoval !== null}
+        title="Remove comparison scenario?"
+        description={`Remove “${pendingRemoval?.label ?? ""}” from this comparison. Other scenarios and loan data will remain unchanged.`}
+        confirmLabel="Remove scenario"
+        destructive={false}
+        onConfirm={() => {
+          if (pendingRemoval) store.removeScenario(pendingRemoval.id);
+        }}
+        onCancel={() => setPendingRemoval(null)}
+      />
     </section>
   );
 }

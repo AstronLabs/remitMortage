@@ -1,0 +1,18 @@
+Prisma Schema Drift Check
+=========================
+from=/var/folders/c3/4jhf_yn525x091nl7nx6w4fm0000gn/T/prisma-drift-4dswN1/schema.prisma
+to=/Users/ololajaco/Documents/Drips/remitMortage/backend/prisma/schema.prisma
+result=ERROR
+exit_code=1
+timestamp=2026-10-17T09:50:50Z
+
+Loaded Prisma config from prisma.config.ts.
+
+Error: P1012
+
+error: Type "ApiKeyUsage" is neither a built-in type, nor refers to another model, composite type, or enum.
+  -->  prisma/schema.prisma:928
+   | 
+927 | 
+928 |   usage     ApiKeyUsage[]
+   | 

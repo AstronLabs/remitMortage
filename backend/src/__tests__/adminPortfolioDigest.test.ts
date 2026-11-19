@@ -16,40 +16,27 @@ import {
   clearAnalyticsCache,
   type AnalyticsDeps,
 } from "../services/analytics";
+import { loanFactory, milestoneProposalFactory } from "../test-utils/factories/index.js";
+
+const JAN_1 = "2026-01-01T00:00:00.000Z";
+const REPAYING_LOAN = loanFactory.repaying().build({ amount: "1000", createdAt: JAN_1 });
+const COMPLETED_LOAN = loanFactory.completed().build({ amount: "2000", createdAt: JAN_1 });
+const APPROVED_LOAN = loanFactory.approved().build({ amount: "3000", createdAt: JAN_1 });
 
 // A fixed snapshot exercising every metric the digest renders.
 const DEPS: AnalyticsDeps = {
   listBalances: () => [
     {
-      address: "GBORROWER1",
+      address: REPAYING_LOAN.borrowerAddress,
       escrowBalance: "50000000000", // 5,000 USDC
       loanOutstanding: "30000000000", // 3,000 USDC
     },
   ],
-  listLoans: () => [
-    {
-      borrowerAddress: "GBORROWER1",
-      status: "Repaying",
-      amount: "1000",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    },
-    {
-      borrowerAddress: "GBORROWER2",
-      status: "Completed",
-      amount: "2000",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    },
-    {
-      borrowerAddress: "GBORROWER3",
-      status: "Approved",
-      amount: "3000",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    },
-  ],
+  listLoans: () => [REPAYING_LOAN, COMPLETED_LOAN, APPROVED_LOAN],
   listMilestones: () => [
-    { status: "Passed", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" },
-    { status: "Open", createdAt: "2026-01-03T00:00:00.000Z", updatedAt: "2026-01-03T00:00:00.000Z" },
-    { status: "Open", createdAt: "2026-01-04T00:00:00.000Z", updatedAt: "2026-01-04T00:00:00.000Z" },
+    milestoneProposalFactory.approved().build({ createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" }),
+    milestoneProposalFactory.open().build({ createdAt: "2026-01-03T00:00:00.000Z", updatedAt: "2026-01-03T00:00:00.000Z" }),
+    milestoneProposalFactory.open().build({ createdAt: "2026-01-04T00:00:00.000Z", updatedAt: "2026-01-04T00:00:00.000Z" }),
   ],
   investorCount: 5,
   defaultedLoans: 1,

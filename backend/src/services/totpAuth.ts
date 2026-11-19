@@ -98,10 +98,16 @@ export function generateTotpCode(secret: string, timeStep = Math.floor(Date.now(
  * Check if TOTP code matches current or adjacent time windows (+/- 1 step)
  */
 export function verifyTotpCode(secret: string, token: string): boolean {
+  const candidate = Buffer.from(token.trim());
+  // timingSafeEqual throws on unequal lengths (e.g. a recovery code passed to
+  // the TOTP check), so anything that isn't 6 digits is simply not a TOTP.
+  if (candidate.length !== 6) {
+    return false;
+  }
   const currentStep = Math.floor(Date.now() / 1000 / 30);
   for (let errorWindow = -1; errorWindow <= 1; errorWindow++) {
     const expected = generateTotpCode(secret, currentStep + errorWindow);
-    if (crypto.timingSafeEqual(Buffer.from(token.trim()), Buffer.from(expected))) {
+    if (crypto.timingSafeEqual(candidate, Buffer.from(expected))) {
       return true;
     }
   }
@@ -279,6 +285,23 @@ export function getAdmin2FAStatus(adminAddress: string): { enabled: boolean; rem
   }
   const remaining = (settings.recoveryCodes || []).filter((rc) => !rc.used).length;
   return { enabled: true, remainingRecoveryCodes: remaining };
+}
+
+/**
+ * Replace an admin's recovery codes with a freshly generated set. Every
+ * previous code (used or not) is invalidated at once, and the new plaintext
+ * codes are returned exactly once — only their hashes are stored.
+ * Returns null when 2FA is not enabled.
+ */
+export function regenerateAdminRecoveryCodes(adminAddress: string): string[] | null {
+  const settings = admin2FADB.get(adminAddress.toLowerCase());
+  if (!settings || !settings.enabled) {
+    return null;
+  }
+  const codes = generateRecoveryCodes();
+  settings.recoveryCodes = codes.map((code) => ({ codeHash: hashRecoveryCode(code), used: false }));
+  logger.info(`[TOTP] Recovery codes regenerated for admin account: ${adminAddress}`);
+  return codes;
 }
 
 /**

@@ -8,9 +8,11 @@ import {
   enableAdmin2FA,
   authenticateAdmin2FA,
   getAdmin2FAStatus,
+  regenerateAdminRecoveryCodes,
   disableAdmin2FA,
 } from "../services/totpAuth.js";
 import logger from "../utils/logger.js";
+import { adaptiveCaptcha } from "../middleware/adaptiveCaptcha.js";
 import { credentialStuffingGuard } from "../middleware/credentialStuffing.js";
 import { recordCredentialFailure } from "../services/credentialStuffing.js";
 
@@ -84,7 +86,7 @@ adminAuthRouter.post("/2fa/enable", requireAdmin, (req: AuthenticatedRequest, re
  *     summary: Authenticate admin action or login using TOTP code or single-use Backup Recovery Code
  *     tags: [Admin 2FA]
  */
-adminAuthRouter.post("/2fa/verify", (req: Request, res: Response) => {
+adminAuthRouter.post("/2fa/verify", adaptiveCaptcha("admin_2fa_verify"), (req: Request, res: Response) => {
   const { adminAddress, code } = req.body;
 
   if (!adminAddress || !code) {
@@ -122,6 +124,37 @@ adminAuthRouter.post("/2fa/verify", (req: Request, res: Response) => {
     message: result.method
       ? `Successfully authenticated via ${result.method === "totp" ? "TOTP code" : "backup recovery code"}`
       : "2FA not required",
+  });
+});
+
+/**
+ * @openapi
+ * /api/admin/2fa/recovery-codes/regenerate:
+ *   post:
+ *     summary: Regenerate backup recovery codes, invalidating the previous set
+ *     description: Requires a current TOTP code or unused recovery code. The new codes are returned once.
+ *     tags: [Admin 2FA]
+ */
+adminAuthRouter.post("/2fa/recovery-codes/regenerate", requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  const adminAddress = req.user?.walletAddress || process.env.ADMIN_WALLET_ADDRESS || "admin";
+  const { code } = req.body ?? {};
+
+  if (!code) {
+    return res.status(400).json({ error: "invalid_request", message: "A current 2FA code is required" });
+  }
+  if (!getAdmin2FAStatus(adminAddress).enabled) {
+    return res.status(400).json({ error: "2fa_not_enabled", message: "2FA is not enabled" });
+  }
+  const authCheck = authenticateAdmin2FA(adminAddress, code);
+  if (!authCheck.authenticated) {
+    return res.status(401).json({ error: "invalid_code", message: "Invalid 2FA code" });
+  }
+
+  const recoveryCodes = regenerateAdminRecoveryCodes(adminAddress);
+  return res.json({
+    success: true,
+    recoveryCodes,
+    remainingRecoveryCodes: recoveryCodes?.length ?? 0,
   });
 });
 
