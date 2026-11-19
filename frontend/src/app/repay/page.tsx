@@ -18,6 +18,9 @@ import {
 import { computePayoffCountdown, isFinalPayment } from "../../lib/payoffCountdown";
 import { track } from "../../lib/analytics";
 import ConfirmationDialog from "../../components/ConfirmationDialog";
+import { useLocale } from "next-intl";
+import CurrencyAmountInput from "../../components/forms/CurrencyAmountInput";
+import type { Locale } from "../../i18n/locales";
 
 const Navbar = loadDynamic(() => import("../../components/Navbar"), { ssr: false });
 
@@ -375,8 +378,8 @@ function RepayInner() {
     setPayError(null);
     setPaySuccess(false);
 
-    const amount = parseFloat(payAmount.replace(/,/g, ""));
-    if (isNaN(amount) || amount <= 0) {
+    const amount = payAmount;
+    if (amount === null || !Number.isFinite(amount) || amount <= 0) {
       setPayError("Enter a valid positive USDC amount.");
       return;
     }
@@ -424,7 +427,7 @@ function RepayInner() {
           : prev
       );
 
-      setPayAmount("");
+      setPayAmount(null);
       setPaySuccess(true);
       track("loan_repayment_completed");
       setTimeout(() => setPaySuccess(false), 5000);
@@ -805,21 +808,22 @@ function RepayInner() {
                           Amount (USDC)
                         </label>
                         <div className="relative">
-                          <input
+                          <CurrencyAmountInput
                             id="repay-amount"
-                            type="number"
-                            min="0.01"
-                            step="0.01"
-                            placeholder="0.00"
+                            data-testid="repay-amount"
+                            locale={locale}
                             value={payAmount}
-                            onChange={(e) => setPayAmount(e.target.value)}
+                            onChange={setPayAmount}
+                            min={0.01}
+                            placeholder="0.00"
+                            currencyLabel="USDC"
                             className="w-full p-3 pr-20 rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] text-lg font-semibold tabular-nums outline-none focus:border-[var(--accent-primary)] transition-colors"
                             aria-describedby="pay-error"
                           />
                           {schedule && schedule.monthlyAmount > 0 && (
                             <button
                               type="button"
-                              onClick={() => setPayAmount(formatUSDC(schedule.monthlyAmount))}
+                              onClick={() => setPayAmount(schedule.monthlyAmount)}
                               className="absolute right-2 top-1/2 -translate-y-1/2 text-xs px-2 py-1 rounded bg-[var(--accent-primary)]/10 text-[var(--accent-primary-light)] hover:bg-[var(--accent-primary)]/20 transition-colors"
                             >
                               Suggested
@@ -851,7 +855,7 @@ function RepayInner() {
                       >
                         {paying
                           ? "Signing transaction\u2026"
-                          : `Repay ${formatUSDC(payAmount || 0)} USDC`}
+                          : `Repay ${formatUSDC(payAmount ?? 0)} USDC`}
                       </button>
                     </form>
                   )}

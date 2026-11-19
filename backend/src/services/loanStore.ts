@@ -11,6 +11,7 @@ import {
 } from "./loanHistory.js";
 import { autoAssignApplicationReviewer } from "./assignmentQueue.js";
 import { priceNewOffer } from "./rateSheet.js";
+import { recordStageEnter, transitionReviewStage } from "./loanReviewStages.js";
 
 // lightweight id generator to avoid adding dependencies
 function makeId() {
@@ -196,6 +197,9 @@ export async function createApplication(
   // reconstructions have a base state to replay changes onto.
   await recordLoanCreation(application.id, snapshotOf(application));
 
+  // Open the application's first review-stage interval (issue #1047).
+  await recordStageEnter(undefined, application.id, application.status, new Date(application.createdAt));
+
   // Issue #621: distribute the new application round-robin across active
   // reviewers. Best-effort — a queue failure never blocks submission.
   await autoAssignApplicationReviewer(application.id);
@@ -344,6 +348,13 @@ export async function updateApplication(
   // tracked actually changed.
   await recordLoanChange(id, diffLoanSnapshot(before, snapshotOf(application)));
 
+  // Time the review-stage transition (issue #1047): close the interval for the
+  // status being left and open one for the status being entered. Guarded on a
+  // genuine status change so re-saving an unchanged application opens nothing.
+  if (application.status !== before.status) {
+    await transitionReviewStage(undefined, id, application.status, new Date());
+  }
+
   return application;
 }
 
@@ -478,6 +489,10 @@ export async function bulkReviewApplications(
             },
           },
         });
+
+        // Time the review-stage transition inside the same transaction
+        // (issue #1047): close the Pending interval, open the decided stage.
+        await transitionReviewStage(tx, item.applicationId, status, new Date());
 
         return {
           applicationId: updated.id,

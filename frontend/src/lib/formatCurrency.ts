@@ -21,7 +21,7 @@ const DEFAULT_CURRENCY: Record<Locale, string> = {
   fr: "EUR",
 };
 
-function resolveTag(locale: Locale): string {
+export function resolveLocaleTag(locale: Locale): string {
   const tag = LOCALE_TAGS[locale];
   if (!tag) {
     throw new Error(`Unsupported locale for number formatting: ${locale}`);
@@ -34,7 +34,7 @@ export function formatCurrency(
   locale: Locale,
   currency: string = DEFAULT_CURRENCY[locale]
 ): string {
-  return new Intl.NumberFormat(resolveTag(locale), {
+  return new Intl.NumberFormat(resolveLocaleTag(locale), {
     style: "currency",
     currency,
     currencyDisplay: "symbol",
@@ -46,5 +46,5 @@ export function formatNumber(
   locale: Locale,
   options?: Intl.NumberFormatOptions
 ): string {
-  return new Intl.NumberFormat(resolveTag(locale), options).format(value);
+  return new Intl.NumberFormat(resolveLocaleTag(locale), options).format(value);
 }

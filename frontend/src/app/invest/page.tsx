@@ -248,7 +248,7 @@ function InvestPageInner() {
         startLedger: prev?.startLedger ?? 0,
       }));
 
-      setDepositAmount("");
+      setDepositAmount(null);
       setDepositSuccess(true);
       track("investment_completed", { tranche });
       setTimeout(() => setDepositSuccess(false), 5000);
@@ -528,14 +528,15 @@ function InvestPageInner() {
                     >
                       Deposit Amount (USDC)
                     </label>
-                    <input
+                    <CurrencyAmountInput
                       id="deposit-amount"
-                      type="number"
-                      min="1"
-                      step="0.01"
-                      placeholder="e.g. 5000"
+                      data-testid="deposit-amount"
+                      locale={locale}
                       value={depositAmount}
-                      onChange={(e) => setDepositAmount(e.target.value)}
+                      onChange={setDepositAmount}
+                      min={1}
+                      placeholder="e.g. 5000"
+                      currencyLabel="USDC"
                       className="input-field font-mono"
                     />
                   </div>

@@ -10,6 +10,7 @@ import {
   type RuleEvaluationResult,
 } from "./autoRejectionRules.js";
 import type { AutoRejectionRuleType } from "@prisma/client";
+import { transitionReviewStage } from "./loanReviewStages.js";
 
 function mapRule(record: {
   id: string;
@@ -137,6 +138,10 @@ export async function applyAutoRejectionIfNeeded(
         version: { increment: 1 },
       },
     });
+
+    // Time the review-stage transition (issue #1047): close the open interval
+    // and open the Rejected one, in the same transaction as the status write.
+    await transitionReviewStage(tx, applicationId, "Rejected", now);
 
     for (const failure of evaluation.failures) {
       await tx.loanAutoRejectionLog.create({

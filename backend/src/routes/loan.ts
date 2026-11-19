@@ -33,6 +33,10 @@ import {
 } from "../services/taxIdDedup.js";
 import { reconstructLoanApplicationAt } from "../services/loanHistory.js";
 import {
+  getLoanActivityTimeline,
+  InvalidActivityCursorError,
+} from "../services/loanActivityTimeline.js";
+import {
   checkDuplicateApplicants,
   logReviewerDecision,
   ApplicantFields,
@@ -432,6 +436,50 @@ loanRouter.get("/:id", async (req, res) => {
   }
 
   return res.json(owned);
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/loan/:id/activity
+//
+// One chronological feed of a loan's whole history: on-chain payments, status
+// changes, KYC document uploads and operator actions. Scoped exactly like
+// GET /:id (owner-or-admin). Paginated with the same keyset convention as
+// /api/audit-logs; because events come from several tables the cursor is an
+// opaque token rather than a plain row id.
+// ---------------------------------------------------------------------------
+loanRouter.get("/:id/activity", async (req, res) => {
+  const id = String(req.params?.id ?? "");
+
+  // Issue #760: activity reads are owner-or-admin only, matching GET /:id.
+  const owned = await requireLoanOwnership(req as AuthenticatedRequest, res, id);
+  if (!owned) return;
+
+  const limitRaw = req.query.limit;
+  const limit = typeof limitRaw === "string" && limitRaw ? Number(limitRaw) : undefined;
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+    return res.status(400).json({
+      error: "invalid_limit",
+      field: "limit",
+      message: "limit must be a positive integer",
+    });
+  }
+
+  const cursor =
+    typeof req.query.cursor === "string" && req.query.cursor ? req.query.cursor : undefined;
+
+  try {
+    const timeline = await getLoanActivityTimeline(
+      { id: owned.id, borrowerAddress: owned.borrowerAddress },
+      { limit, cursor }
+    );
+    return res.json(timeline);
+  } catch (error) {
+    if (error instanceof InvalidActivityCursorError) {
+      return res.status(400).json({ error: "invalid_cursor", field: "cursor", message: error.message });
+    }
+    logger.error("Loan activity timeline error", { error, loanId: id });
+    return res.status(500).json({ error: "failed_to_load_activity" });
+  }
 });
 
 // ---------------------------------------------------------------------------
