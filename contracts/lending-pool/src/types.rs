@@ -703,6 +703,22 @@ pub enum FeatureKey {
     /// Cumulative late fees charged on a loan so far, in token stroops.
     /// Absent means zero.
     LoanLateFeesCharged(BytesN<32>),
+    /// Minimum number of ledgers each new investor deposit must wait before
+    /// becoming eligible for withdrawal (`0` disables the grace window).
+    WithdrawalGraceLedgers,
+    /// Per-investor list of deposit lots still subject to a withdrawal grace
+    /// window so each deposit tracks eligibility independently.
+    InvestorDepositLots(Address),
+}
+
+/// One investor deposit lot tracked independently for the withdrawal grace window.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DepositGraceLot {
+    /// Principal deposited in this lot (token stroops).
+    pub amount: i128,
+    /// Ledger sequence at which this lot becomes eligible for withdrawal.
+    pub unlock_ledger: u32,
 }
 
 /// Terms a loan was originated with, latched at creation and never changed

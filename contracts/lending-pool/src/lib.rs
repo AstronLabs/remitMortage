@@ -42,9 +42,13 @@ mod test_rate_adjustment_caps;
 #[cfg(test)]
 mod test_late_fee_lifetime_cap;
 
+#[cfg(test)]
+mod test_withdrawal_grace_window;
+
 pub use crate::errors::{LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
-    BatchDisburseItem, CreditLine, DailyRepaymentWindow, DataKey, FeatureKey, HalvingInfo,
+    BatchDisburseItem, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot, FeatureKey,
+    HalvingInfo,
     InvestorLockupPosition, InvestorRecord, LoanAssumptionRequest, LoanCollateralRecord,
     LoanIntroConfig, LoanOriginTerms, LoanPhase, LoanPortabilitySnapshot, LoanRecord, LoanStatus,
     LockupTier, PauseGroup, PayoffQuote, PendingCapChange, PendingHaircutChange,
@@ -2206,6 +2210,19 @@ impl LendingPoolContract {
             let total_dep = Self::read_total_deposited(&env) + amount;
             Self::set_total_deposited(&env, total_dep);
 
+            // Track this deposit's independent withdrawal grace window when enabled.
+            let grace_ledgers = Self::read_withdrawal_grace_ledgers(&env);
+            if grace_ledgers > 0 {
+                let mut lots = Self::prune_deposit_grace_lots(&env, &investor, current_ledger);
+                lots.push_back(DepositGraceLot {
+                    amount,
+                    unlock_ledger: current_ledger.saturating_add(grace_ledgers),
+                });
+                env.storage()
+                    .persistent()
+                    .set(&FeatureKey::InvestorDepositLots(investor.clone()), &lots);
+            }
+
             Ok(())
         })
     }
@@ -2220,6 +2237,71 @@ impl LendingPoolContract {
     }
 
     // ── Deposit Cap Administration ──────────────────────────────────────
+
+    /// Configure the per-deposit withdrawal grace window in ledgers.
+    ///
+    /// Newly deposited investor funds cannot be withdrawn until at least
+    /// `grace_ledgers` ledgers have elapsed since that specific deposit.
+    /// Setting `0` disables the grace window for subsequent deposits. Admin-only.
+    pub fn set_withdrawal_grace_ledgers(env: Env, grace_ledgers: u32) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&FeatureKey::WithdrawalGraceLedgers, &grace_ledgers);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events().publish(
+            (Symbol::new(&env, "grace_win_set"),),
+            (grace_ledgers, config.admin),
+        );
+        Ok(())
+    }
+
+    /// Returns the configured per-deposit withdrawal grace window in ledgers.
+    pub fn get_withdrawal_grace_ledgers(env: Env) -> u32 {
+        Self::read_withdrawal_grace_ledgers(&env)
+    }
+
+    /// Returns the portion of `investor`'s deposited balance currently past
+    /// its per-deposit withdrawal grace window.
+    pub fn get_withdrawable_amount(env: Env, investor: Address) -> i128 {
+        let record = Self::read_investor(&env, &investor);
+        let current_ledger = env.ledger().sequence();
+        let active_lots = Self::prune_deposit_grace_lots(&env, &investor, current_ledger);
+        let mut locked: i128 = 0;
+        for lot in active_lots.iter() {
+            locked = locked.saturating_add(lot.amount);
+        }
+        record.deposited.saturating_sub(locked).max(0)
+    }
+
+    fn read_withdrawal_grace_ledgers(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::WithdrawalGraceLedgers)
+            .unwrap_or(0)
+    }
+
+    fn prune_deposit_grace_lots(
+        env: &Env,
+        investor: &Address,
+        current_ledger: u32,
+    ) -> Vec<DepositGraceLot> {
+        let stored: Vec<DepositGraceLot> = env
+            .storage()
+            .persistent()
+            .get(&FeatureKey::InvestorDepositLots(investor.clone()))
+            .unwrap_or_else(|| Vec::new(env));
+        let mut remaining = Vec::new(env);
+        for lot in stored.iter() {
+            if current_ledger < lot.unlock_ledger && lot.amount > 0 {
+                remaining.push_back(lot);
+            }
+        }
+        remaining
+    }
 
     /// Set the number of ledgers a deposit-cap change must wait between being
     /// proposed and being executed. Cannot be set below one day, so the
@@ -5237,6 +5319,30 @@ impl LendingPoolContract {
                         return Err(PoolError::LockupPeriodActive);
                     }
                 }
+            }
+
+            // ── Per-Deposit Withdrawal Grace Window Check ─────────────────
+            // Each deposit carries its own unlock ledger so earlier eligible
+            // deposits remain withdrawable while newer deposits are still
+            // inside their grace window.
+            let current_ledger = env.ledger().sequence();
+            let active_lots = Self::prune_deposit_grace_lots(&env, &investor, current_ledger);
+            let mut locked_in_grace: i128 = 0;
+            for lot in active_lots.iter() {
+                locked_in_grace = locked_in_grace.saturating_add(lot.amount);
+            }
+            let eligible_for_withdrawal = record.deposited.saturating_sub(locked_in_grace);
+            if amount > eligible_for_withdrawal {
+                return Err(PoolError::LockupPeriodActive);
+            }
+            if active_lots.is_empty() {
+                env.storage()
+                    .persistent()
+                    .remove(&FeatureKey::InvestorDepositLots(investor.clone()));
+            } else {
+                env.storage()
+                    .persistent()
+                    .set(&FeatureKey::InvestorDepositLots(investor.clone()), &active_lots);
             }
 
             // ── Max Single Withdrawal Check ───────────────────────────────
