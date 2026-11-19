@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="RemitMortgage">
+  <defs>
+    <linearGradient id="rm-brand-maskable" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38bdf8" />
+      <stop offset="1" stop-color="#10b981" />
+    </linearGradient>
+  </defs>
+  <!-- Full-bleed background with the mark inside the central safe zone so
+       Android can crop the icon to any shape without clipping the logo. -->
+  <rect width="512" height="512" fill="#060913" />
+  <path d="M256 128 384 232v152H320v-96h-128v96H128V232z" fill="url(#rm-brand-maskable)" />
+</svg>

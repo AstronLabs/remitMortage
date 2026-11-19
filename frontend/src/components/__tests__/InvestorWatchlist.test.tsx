@@ -4,6 +4,9 @@
 import React from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import InvestorWatchlist from "../InvestorWatchlist";
+import { NotificationProvider } from "@/context/NotificationContext";
+import { ToastContainer } from "@/components/Toast";
+import { DEFAULT_UNDO_WINDOW_MS } from "@/hooks/useUndoableAction";
 
 let mockIsConnected = true;
 jest.mock("@/context/WalletContext", () => ({
@@ -53,18 +56,43 @@ async function flush() {
   });
 }
 
+/** Let the undo window (and the toast's own timer) lapse. */
+async function advancePastUndoWindow() {
+  await act(async () => {
+    jest.advanceTimersByTime(DEFAULT_UNDO_WINDOW_MS);
+    await Promise.resolve();
+  });
+}
+
+function renderWatchlist() {
+  return render(
+    <NotificationProvider>
+      <InvestorWatchlist />
+      <ToastContainer />
+    </NotificationProvider>
+  );
+}
+
 beforeEach(() => {
   mockIsConnected = true;
+  (global as any).fetch = jest.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ notifications: [] }),
+  });
   fetchUpcomingOfferingsMock.mockReset().mockResolvedValue(UPCOMING);
   fetchWatchlistMock.mockReset().mockResolvedValue(WATCHLIST);
   watchOfferingMock.mockReset().mockResolvedValue(undefined);
   unwatchOfferingMock.mockReset().mockResolvedValue(undefined);
 });
 
+afterEach(() => {
+  jest.useRealTimers();
+});
+
 describe("InvestorWatchlist (issue #799)", () => {
   it("prompts to connect a wallet and loads nothing when disconnected", async () => {
     mockIsConnected = false;
-    render(<InvestorWatchlist />);
+    renderWatchlist();
     await flush();
 
     expect(screen.getByText(/connect wallet to watch upcoming offerings/i)).toBeInTheDocument();
@@ -73,7 +101,7 @@ describe("InvestorWatchlist (issue #799)", () => {
   });
 
   it("shows upcoming offerings and a dedicated watchlist view with each item's state", async () => {
-    render(<InvestorWatchlist />);
+    renderWatchlist();
     await flush();
 
     expect(screen.getByTestId("upcoming-offering-loan-1")).toBeInTheDocument();
@@ -82,7 +110,7 @@ describe("InvestorWatchlist (issue #799)", () => {
   });
 
   it("watches an unwatched upcoming offering and refreshes the lists", async () => {
-    render(<InvestorWatchlist />);
+    renderWatchlist();
     await flush();
 
     const row = screen.getByTestId("upcoming-offering-loan-1");
@@ -97,44 +125,9 @@ describe("InvestorWatchlist (issue #799)", () => {
     expect(fetchWatchlistMock).toHaveBeenCalledTimes(2);
   });
 
-  it("unwatches an already-watched offering from the upcoming list", async () => {
-    render(<InvestorWatchlist />);
-    await flush();
-
-    const row = screen.getByTestId("upcoming-offering-loan-2");
-    expect(row.querySelector("button")).toHaveTextContent("Unwatch");
-    await act(async () => {
-      fireEvent.click(row.querySelector("button")!);
-      await Promise.resolve();
-    });
-
-    expect(unwatchOfferingMock).toHaveBeenCalledWith("loan-2");
-  });
-
-  it("removes an item directly from the watchlist view", async () => {
-    render(<InvestorWatchlist />);
-    await flush();
-
-    const item = screen.getByTestId("watchlist-item-loan-9");
-    await act(async () => {
-      fireEvent.click(item.querySelector("button")!);
-      await Promise.resolve();
-    });
-
-    expect(unwatchOfferingMock).toHaveBeenCalledWith("loan-9");
-  });
-
-  it("shows an error message instead of crashing when loading fails", async () => {
-    fetchUpcomingOfferingsMock.mockRejectedValue(new Error("network"));
-    render(<InvestorWatchlist />);
-    await flush();
-
-    expect(screen.getByText(/couldn't load your watchlist/i)).toBeInTheDocument();
-  });
-
   it("surfaces the server's message when watching fails", async () => {
     watchOfferingMock.mockRejectedValue(new Error("Only upcoming offerings can be watched."));
-    render(<InvestorWatchlist />);
+    renderWatchlist();
     await flush();
 
     const row = screen.getByTestId("upcoming-offering-loan-1");
@@ -144,5 +137,85 @@ describe("InvestorWatchlist (issue #799)", () => {
     });
 
     expect(screen.getByText(/only upcoming offerings can be watched/i)).toBeInTheDocument();
+  });
+
+  it("shows an error message instead of crashing when loading fails", async () => {
+    fetchUpcomingOfferingsMock.mockRejectedValue(new Error("network"));
+    renderWatchlist();
+    await flush();
+
+    expect(screen.getByText(/couldn't load your watchlist/i)).toBeInTheDocument();
+  });
+});
+
+describe("InvestorWatchlist removal undo window", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  it("removes an upcoming offering optimistically and only commits the unwatch after the window", async () => {
+    renderWatchlist();
+    await flush();
+
+    const row = screen.getByTestId("upcoming-offering-loan-2");
+    expect(row.querySelector("button")).toHaveTextContent("Unwatch");
+
+    await act(async () => {
+      fireEvent.click(row.querySelector("button")!);
+      await Promise.resolve();
+    });
+
+    // Optimistic flip: the row now offers to watch again, but nothing was sent.
+    expect(screen.getByTestId("upcoming-offering-loan-2").querySelector("button")).toHaveTextContent(
+      "Watch"
+    );
+    expect(unwatchOfferingMock).not.toHaveBeenCalled();
+
+    await advancePastUndoWindow();
+
+    expect(unwatchOfferingMock).toHaveBeenCalledWith("loan-2");
+    expect(unwatchOfferingMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes an item directly from the watchlist view and commits after the window", async () => {
+    renderWatchlist();
+    await flush();
+
+    const item = screen.getByTestId("watchlist-item-loan-9");
+    await act(async () => {
+      fireEvent.click(item.querySelector("button")!);
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("watchlist-item-loan-9")).not.toBeInTheDocument();
+    expect(unwatchOfferingMock).not.toHaveBeenCalled();
+
+    await advancePastUndoWindow();
+
+    expect(unwatchOfferingMock).toHaveBeenCalledWith("loan-9");
+  });
+
+  it("reverses a watchlist removal when Undo is used inside the window", async () => {
+    renderWatchlist();
+    await flush();
+
+    const item = screen.getByTestId("watchlist-item-loan-9");
+    await act(async () => {
+      fireEvent.click(item.querySelector("button")!);
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("watchlist-item-loan-9")).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await Promise.resolve();
+    });
+
+    // The row is restored and the DELETE is never sent, even after the window.
+    expect(screen.getByTestId("watchlist-item-loan-9")).toBeInTheDocument();
+
+    await advancePastUndoWindow();
+    expect(unwatchOfferingMock).not.toHaveBeenCalled();
   });
 });

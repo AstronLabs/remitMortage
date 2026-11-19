@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import NotificationDrawer from "../NotificationDrawer";
 
@@ -10,6 +10,10 @@ const mockMarkRead = jest.fn();
 const mockMarkAllRead = jest.fn();
 const mockClearHistory = jest.fn();
 const mockClosePanel = jest.fn();
+const mockRemoveNotification = jest.fn();
+const mockRestoreNotifications = jest.fn();
+const mockNotify = jest.fn();
+const mockDismiss = jest.fn();
 
 // NotificationContext appends new records to the end of the array (oldest
 // first); NotificationDrawer reverses this for newest-first display.
@@ -43,6 +47,10 @@ jest.mock("@/context/NotificationContext", () => ({
     clearHistory: mockClearHistory,
     markRead: mockMarkRead,
     markAllRead: mockMarkAllRead,
+    removeNotification: mockRemoveNotification,
+    restoreNotifications: mockRestoreNotifications,
+    notify: mockNotify,
+    dismiss: mockDismiss,
   }),
 }));
 
@@ -91,5 +99,46 @@ describe("NotificationDrawer Component", () => {
 
     fireEvent.click(screen.getByTestId("mark-all-read-btn"));
     expect(mockMarkAllRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismisses a notification and offers an undo window", () => {
+    render(<NotificationDrawer />);
+
+    fireEvent.click(screen.getByTestId("dismiss-btn-notif-1"));
+
+    expect(mockRemoveNotification).toHaveBeenCalledWith("notif-1");
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transient: true,
+        action: expect.objectContaining({ label: "Undo" }),
+      })
+    );
+  });
+
+  it("restores a dismissed notification when Undo is used inside the window", () => {
+    render(<NotificationDrawer />);
+
+    fireEvent.click(screen.getByTestId("dismiss-btn-notif-1"));
+
+    const undoToast = mockNotify.mock.calls[mockNotify.mock.calls.length - 1][0];
+    act(() => {
+      undoToast.action.onAction();
+    });
+
+    expect(mockRestoreNotifications).toHaveBeenCalledWith([mockHistory[1]]);
+  });
+
+  it("clears the notification list behind an undo window and restores it on undo", () => {
+    render(<NotificationDrawer />);
+
+    fireEvent.click(screen.getByLabelText("Clear notification list"));
+    expect(mockClearHistory).toHaveBeenCalledTimes(1);
+
+    const undoToast = mockNotify.mock.calls[mockNotify.mock.calls.length - 1][0];
+    act(() => {
+      undoToast.action.onAction();
+    });
+
+    expect(mockRestoreNotifications).toHaveBeenCalledWith(mockHistory);
   });
 });
