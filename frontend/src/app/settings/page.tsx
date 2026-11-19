@@ -7,7 +7,10 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { getProductTourStore } from "@/hooks/useProductTourState";
 import { useDataSaver } from "@/context/DataSaverContext";
 import { useThemeStore } from "@/app/stores/useThemeStore";
+import { useTextSizeStore } from "@/app/stores/useTextSizeStore";
 import ThemeModeSettings from "@/components/ThemeModeSettings";
+import TextSizeSettings from "@/components/TextSizeSettings";
+import { isTextSize } from "@/app/lib/textSize";
 import NotificationFrequencyControl, {
   type NotificationFrequency,
 } from "@/components/NotificationFrequencyControl";
@@ -207,6 +210,7 @@ export default function SettingsPage() {
   const [isSaving, setIsSaving] = useState(false);
 
   const { theme, palette, toggleTheme, togglePalette } = useThemeStore();
+  const { textSize, setTextSize } = useTextSizeStore();
 
   const emailError = email && !isValidEmail(email) ? "Enter a valid linked email address." : "";
   const webhookError =
@@ -252,6 +256,9 @@ export default function SettingsPage() {
               if (data.settings.contractor.registrationNumber)
                 setRegistrationNumber(data.settings.contractor.registrationNumber);
               if (data.settings.contractor.serviceRegion) setServiceRegion(data.settings.contractor.serviceRegion);
+            }
+            if (isTextSize(data.settings.textSize)) {
+              setTextSize(data.settings.textSize);
             }
           }
         }
@@ -326,6 +333,7 @@ export default function SettingsPage() {
             governanceFrequency: frequencies.governance,
           },
           contractor: { businessName, registrationNumber, serviceRegion },
+          textSize,
         }),
       });
 
@@ -774,6 +782,8 @@ export default function SettingsPage() {
                   </div>
 
                   <ThemeModeSettings />
+
+                  <TextSizeSettings />
 
                   {/* Theme: Light / Dark (picking one switches to Manual mode) */}
                   <div className="space-y-3">

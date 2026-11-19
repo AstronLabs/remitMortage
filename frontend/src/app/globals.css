@@ -3,6 +3,25 @@
 @source "../";
 
 /* ══════════════════════════════════════════════════════════════════════
+   USER-ADJUSTABLE TEXT SIZE
+   A single root-level scale. Every rem-based size in the app (Tailwind's
+   spacing and typography scales included) is relative to the root font size,
+   so one attribute scales the whole UI without per-component overrides.
+   Steps mirror lib/textSize.ts and are re-applied pre-paint by the boot script.
+   ══════════════════════════════════════════════════════════════════════ */
+html {
+  font-size: 100%;
+}
+
+html[data-text-size="large"] {
+  font-size: 112.5%;
+}
+
+html[data-text-size="x-large"] {
+  font-size: 125%;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
    REMITMORTGAGE ULTRA MODERN DESIGN SYSTEM
    ══════════════════════════════════════════════════════════════════════ */
 

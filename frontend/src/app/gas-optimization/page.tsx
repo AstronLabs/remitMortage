@@ -6,6 +6,7 @@ import React, { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from "recharts";
 import { Info, Zap, AlertTriangle, ShieldCheck } from "lucide-react";
+import { useChartDirection } from "@/hooks/useChartDirection";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 
@@ -75,6 +76,7 @@ const INTERACTION_TIPS: Record<InteractionType, { title: string; tips: string[] 
 };
 
 export default function GasOptimizationPage() {
+  const chartDirection = useChartDirection();
   const [fees, setFees] = useState<FeeRecommendation | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -176,10 +178,27 @@ export default function GasOptimizationPage() {
               ) : (
                 <div className="h-[350px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={chartData} margin={{ top: 20, right: 20, left: 20, bottom: 20 }}>
+                    <BarChart
+                      data={chartData}
+                      margin={chartDirection.margin({ top: 20, right: 20, left: 20, bottom: 20 })}
+                    >
                       <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                      <XAxis dataKey="name" stroke="#64748b" tick={{fill: '#94a3b8'}} axisLine={false} tickLine={false} />
-                      <YAxis stroke="#64748b" tick={{fill: '#94a3b8'}} axisLine={false} tickLine={false} tickFormatter={(value) => `${value}`} />
+                      <XAxis
+                        dataKey="name"
+                        reversed={chartDirection.reversed}
+                        stroke="#64748b"
+                        tick={{fill: '#94a3b8'}}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        orientation={chartDirection.yAxisOrientation}
+                        stroke="#64748b"
+                        tick={{fill: '#94a3b8'}}
+                        axisLine={false}
+                        tickLine={false}
+                        tickFormatter={(value) => `${value}`}
+                      />
                       <Tooltip 
                         cursor={{fill: 'rgba(255,255,255,0.02)'}}
                         content={({ active, payload }) => {

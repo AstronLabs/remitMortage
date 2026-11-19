@@ -18,6 +18,7 @@ import {
   bpsToPercent,
   estimateYield,
 } from "../lib/yield-estimator";
+import { useChartDirection } from "@/hooks/useChartDirection";
 
 interface YieldEstimatorCalculatorProps {
   /** Optional starting deposit (e.g. the borrower's current escrow balance). */
@@ -45,6 +46,8 @@ export default function YieldEstimatorCalculator({
   initialAmount = 10_000,
 }: YieldEstimatorCalculatorProps) {
   const { escrowApyBps } = useContractRegistry();
+  // Mirror the time axis and value axis in right-to-left locales.
+  const chartDirection = useChartDirection();
 
   const [amount, setAmount] = useState<number>(
     initialAmount > 0 ? initialAmount : 10_000
@@ -172,7 +175,7 @@ export default function YieldEstimatorCalculator({
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart
               data={chartData}
-              margin={{ top: 10, right: 10, left: -12, bottom: 0 }}
+              margin={chartDirection.margin({ top: 10, right: 10, left: -12, bottom: 0 })}
             >
               <defs>
                 <linearGradient id="colorYieldBalance" x1="0" y1="0" x2="0" y2="1">
@@ -189,6 +192,7 @@ export default function YieldEstimatorCalculator({
                 axisLine={false}
                 interval="preserveStartEnd"
                 minTickGap={24}
+                reversed={chartDirection.reversed}
               />
               <YAxis
                 stroke="#64748b"
@@ -197,6 +201,7 @@ export default function YieldEstimatorCalculator({
                 axisLine={false}
                 tickFormatter={CURRENCY}
                 width={64}
+                orientation={chartDirection.yAxisOrientation}
               />
               <Tooltip
                 contentStyle={{

@@ -26,6 +26,9 @@ import Footer from "@/components/Footer";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import { THEME_BOOT_SCRIPT } from "./lib/theme-boot";
+import { TEXT_SIZE_BOOT_SCRIPT } from "./lib/text-size-boot";
+import { DirectionProvider } from "@/context/DirectionContext";
+import { directionForLocale } from "@/lib/direction";
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL ?? "https://remitmortgage.com";
 
@@ -104,9 +107,10 @@ export default async function RootLayout({
 }>) {
   const locale = await getLocale();
   const messages = await getMessages();
+  const direction = directionForLocale(locale);
 
   return (
-    <html lang={locale} dir={locale === "ar" ? "rtl" : "ltr"} suppressHydrationWarning>
+    <html lang={locale} dir={direction} suppressHydrationWarning>
       <head>
         {/* SRI: This inline theme script is same-origin and not a CDN load, so Subresource Integrity does not apply.
             It resolves System / Scheduled / Manual mode before first paint (see lib/theme-boot.ts) and is intentionally inline to avoid FOUC and is protected by CSP script-src 'self'.
@@ -114,11 +118,15 @@ export default async function RootLayout({
             use `import { sriProps } from "@/lib/sri"` and spread `{...sriProps(url)}` to enforce
             integrity="sha384-..." + crossorigin="anonymous". See frontend/src/lib/sri.ts and docs/SRI_AUDIT.md. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+        {/* Same-origin inline script (CSP script-src 'self'); applies the saved text-size
+            scale before first paint to avoid a reflow flash. See lib/text-size-boot.ts. */}
+        <script dangerouslySetInnerHTML={{ __html: TEXT_SIZE_BOOT_SCRIPT }} />
       </head>
       <body className="min-h-screen bg-[#060913] text-slate-100 font-sans antialiased flex flex-col justify-between">
         <SkipToContent />
         <LiveRegionAnnouncer />
         <NextIntlClientProvider messages={messages} locale={locale}>
+          <DirectionProvider direction={direction}>
           <DemoModeProvider>
           <ImpersonationBanner />
           <WalletBanner />
@@ -151,6 +159,7 @@ export default async function RootLayout({
           </DataSaverProvider>
           </ThemeProvider>
           </DemoModeProvider>
+          </DirectionProvider>
         </NextIntlClientProvider>
       </body>
     </html>

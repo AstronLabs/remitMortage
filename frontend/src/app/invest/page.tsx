@@ -102,7 +102,7 @@ function UtilizationGauge({ rate }: { rate: number }) {
       </div>
       <div className="w-full bg-slate-950 rounded-full h-2.5 border border-slate-800 overflow-hidden">
         <div
-          className="h-2.5 rounded-full bg-gradient-to-r from-cyan-400 to-indigo-500 transition-all duration-700"
+          className="h-2.5 rounded-full bg-gradient-to-r rtl:bg-gradient-to-l from-cyan-400 to-indigo-500 transition-all duration-700"
           style={{ width: `${pct}%` }}
         />
       </div>

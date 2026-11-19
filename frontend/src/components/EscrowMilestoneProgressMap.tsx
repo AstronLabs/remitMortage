@@ -4,6 +4,7 @@
 
 import React from "react";
 import type { MilestoneNode, MilestoneState } from "./MilestoneTimeline";
+import { useDirection } from "@/context/DirectionContext";
 
 /* ── Borrower-facing status (issue #821) ──────────────────────────────────
  * MilestoneTimeline's MilestoneState is a governance/voting vocabulary
@@ -96,6 +97,7 @@ export interface EscrowMilestoneProgressMapProps {
  * and future ones (issue #821).
  */
 export function EscrowMilestoneProgressMap({ milestones, escrow }: EscrowMilestoneProgressMapProps) {
+  const { isRtl } = useDirection();
   const items = toEscrowMilestoneItems(milestones);
   const releasePct = computeEscrowRelease(escrow.deposited, escrow.target);
   const currentIndex = findCurrentMilestoneIndex(items);
@@ -121,8 +123,8 @@ export function EscrowMilestoneProgressMap({ milestones, escrow }: EscrowMilesto
         <div className="absolute left-0 right-0 top-2 h-2 rounded-full bg-slate-800" aria-hidden="true" />
         {/* Track: cumulative released fill */}
         <div
-          className="absolute left-0 top-2 h-2 rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-[width]"
-          style={{ width: `${releasePct}%` }}
+          className="absolute top-2 h-2 rounded-full bg-gradient-to-r rtl:bg-gradient-to-l from-emerald-500 to-emerald-400 transition-[width]"
+          style={isRtl ? { right: 0, width: `${releasePct}%` } : { left: 0, width: `${releasePct}%` }}
           aria-hidden="true"
         />
 
@@ -138,7 +140,11 @@ export function EscrowMilestoneProgressMap({ milestones, escrow }: EscrowMilesto
                 data-current={isCurrent ? "true" : "false"}
                 data-disputed={item.isDisputed ? "true" : "false"}
                 className="flex flex-col items-center text-center"
-                style={{ position: "absolute", left: `${nodePct(i)}%`, transform: "translateX(-50%)" }}
+                style={
+                  isRtl
+                    ? { position: "absolute", right: `${nodePct(i)}%`, transform: "translateX(50%)" }
+                    : { position: "absolute", left: `${nodePct(i)}%`, transform: "translateX(-50%)" }
+                }
               >
                 <span
                   className={`h-4 w-4 rounded-full border-2 border-slate-950 ${style.dot} ${
