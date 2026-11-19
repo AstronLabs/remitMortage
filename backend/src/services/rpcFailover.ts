@@ -3,6 +3,7 @@
 
 import { rpc } from "@stellar/stellar-sdk";
 import logger from "../utils/logger.js";
+import { FAULT_INJECTION_KEYS, withFaultInjection } from "./faultInjection.js";
 
 /**
  * RPC Gateway Manager with automatic round-robin load balancing and failover.
@@ -70,7 +71,8 @@ export class RpcFailoverManager {
         });
 
         const result = await this.executeWithTimeout(
-          () => operation(server),
+          // Dev-only fault hook; a transparent pass-through in production.
+          () => withFaultInjection(FAULT_INJECTION_KEYS.rpc, () => operation(server)),
           3000 // 3 second timeout per node
         );
 
