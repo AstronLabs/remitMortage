@@ -160,8 +160,92 @@ html[data-text-size="x-large"] {
   .chart-legend-marker { border: 2px solid ButtonText !important; background: Canvas !important; }
 }
 
-[data-high-contrast] { --color-text: #fff; --color-text-2: #f5f5f5; --color-text-3: #e5e5e5; --color-border: #fff; --bg-card: #000; --bg-secondary: #000; }
-[data-high-contrast] button:focus-visible, [data-high-contrast] a:focus-visible, [data-high-contrast] input:focus-visible, [data-high-contrast] select:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+/* ══════════════════════════════════════════════════════════════════════
+   HIGH-CONTRAST THEME (WCAG AAA)
+   A self-contained palette layered on top of whatever light/dark theme is
+   active. Pure black surfaces with maximum-lightness text push every text
+   pairing to 15:1–21:1 (AAA needs 7:1). Status colors are chosen for AAA
+   contrast *and* distinct luminance, so they stay separable in greyscale /
+   without relying on hue alone (see .status-indicator shapes below).
+   ══════════════════════════════════════════════════════════════════════ */
+[data-high-contrast] {
+  --color-bg: #000000;
+  --color-bg-alt: #000000;
+  --color-surface: #000000;
+  --color-surface-hover: #0a0a0a;
+  --color-navy: #000000;
+  --color-navy-mid: #000000;
+
+  --color-text: #ffffff;
+  --color-text-2: #f5f5f5;
+  --color-text-3: #e5e5e5;
+
+  /* Opaque, full-strength separators so boundaries never rely on hue. */
+  --color-border: #ffffff;
+  --color-border-glow: #ffffff;
+
+  /* Backward-compatible aliases follow the core tokens. */
+  --bg-primary: #000000;
+  --bg-secondary: #000000;
+  --bg-card: #000000;
+  --bg-card-hover: #0a0a0a;
+  --bg-glass: #000000;
+  --text-primary: #ffffff;
+  --text-secondary: #f5f5f5;
+  --text-muted: #e5e5e5;
+  --border-color: #ffffff;
+  --border-glow: #ffffff;
+
+  /* Glass surfaces drop their translucency so nothing shows through. */
+  --glass-card-bg: #000000;
+  --glass-panel-bg: #000000;
+  --glass-modal-bg: #000000;
+  --glass-overlay-bg: rgba(0, 0, 0, 0.92);
+  --glass-card-border: #ffffff;
+  --glass-panel-border: #ffffff;
+  --glass-modal-border: #ffffff;
+
+  /* Status colors: AAA on black + distinct luminance (no hue-only meaning). */
+  --status-success: #00e676;
+  --status-warning: #ffd400;
+  --status-error: #ff6b6b;
+  --status-info: #40c4ff;
+  --status-pending: #ffd400;
+  --status-overdue: #ff6b6b;
+  --status-healthy: #00e676;
+  --status-neutral: #e5e5e5;
+
+  --color-blue: #40c4ff;
+  --color-green: #00e676;
+  --color-lime: #00e676;
+  --color-red: #ff6b6b;
+  --color-amber: #ffd400;
+  --color-cyan: #40c4ff;
+  --accent-primary: #00e5ff;
+  --accent-secondary: #00e676;
+  --success: #00e676;
+  --warning: #ffd400;
+  --error: #ff6b6b;
+}
+
+/* Thick, opaque focus indicator on every interactive element. */
+[data-high-contrast] :focus-visible { outline: 3px solid #ffffff; outline-offset: 3px; }
+
+/* Form controls get a solid border so their bounds are unambiguous. */
+[data-high-contrast] input,
+[data-high-contrast] select,
+[data-high-contrast] textarea { border: 1px solid #ffffff; }
+
+/* Keep the shape cues and add a ring: meaning is conveyed by shape + outline,
+   not color alone. */
+[data-high-contrast] .status-indicator::before { box-shadow: 0 0 0 1.5px #000000, 0 0 0 3px #ffffff; }
+
+/* Charts: bolder series strokes, brighter axes/gridlines and legend text. */
+[data-high-contrast] .recharts-line-curve,
+[data-high-contrast] .recharts-area-curve { stroke-width: 3px; }
+[data-high-contrast] .recharts-cartesian-axis-tick-value { fill: #ffffff; }
+[data-high-contrast] .recharts-cartesian-grid line { stroke: #7a7a7a; }
+[data-high-contrast] .recharts-legend-item-text { color: #ffffff !important; }
 
 /* Core workflow pages: verification, pool investing, and loan servicing */
 .rm-verify-page, .rm-invest-page, .rm-repay-page {

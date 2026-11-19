@@ -480,10 +480,6 @@ export default function SettingsPage() {
                       <span><span className="font-semibold">Data saver</span><span className="block text-xs text-slate-400 mt-1">Honors your browser&apos;s Save-Data hint, reduces polling and chart payloads, and defers heavy visuals.</span></span>
                       <input aria-label="Data saver" type="checkbox" checked={dataSaver} onChange={(event) => setDataSaver(event.target.checked)} className="mt-1 h-5 w-5 accent-cyan-500" />
                     </label>
-                    <label className="flex items-start justify-between gap-4 text-sm text-slate-200">
-                      <span><span className="font-semibold">High-contrast palette</span><span className="block text-xs text-slate-400 mt-1">Uses stronger borders and focus indicators in addition to Windows forced-colors support.</span></span>
-                      <input aria-label="High contrast palette" type="checkbox" checked={highContrast} onChange={(event) => setHighContrast(event.target.checked)} className="mt-1 h-5 w-5 accent-cyan-500" />
-                    </label>
                   </div>
                 </section>
               )}
@@ -785,18 +781,21 @@ export default function SettingsPage() {
 
                   <TextSizeSettings />
 
-                  {/* Theme: Light / Dark (picking one switches to Manual mode) */}
+                  {/* Theme: Light / Dark / High contrast (picking one switches to Manual mode) */}
                   <div className="space-y-3">
                     <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-400">Color Theme</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       {(["dark", "light"] as const).map((t) => (
                         <button
                           key={t}
                           type="button"
-                          aria-pressed={theme === t}
-                          onClick={() => theme !== t && toggleTheme()}
-                          className={`rounded-xl border p-5 text-left transition-all flex items-start gap-4 ${
-                            theme === t
+                          aria-pressed={theme === t && !highContrast}
+                          onClick={() => {
+                            if (theme !== t) toggleTheme();
+                            if (highContrast) setHighContrast(false);
+                          }}
+                          className={`rounded-xl border p-5 text-start transition-all flex items-start gap-4 ${
+                            theme === t && !highContrast
                               ? "border-cyan-500 bg-cyan-500/10 shadow-lg shadow-cyan-500/10"
                               : "border-slate-800 bg-slate-950/40 text-slate-400 hover:border-slate-700"
                           }`}
@@ -818,12 +817,39 @@ export default function SettingsPage() {
                             <p className="text-xs text-slate-400 mt-1">
                               {t === "dark" ? "Deep navy background with high-contrast accents." : "Light paper background for bright environments."}
                             </p>
-                            {theme === t && (
+                            {theme === t && !highContrast && (
                               <span className="inline-block mt-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500 text-slate-950">ACTIVE</span>
                             )}
                           </div>
                         </button>
                       ))}
+
+                      <button
+                        type="button"
+                        aria-pressed={highContrast}
+                        onClick={() => setHighContrast(!highContrast)}
+                        className={`rounded-xl border p-5 text-start transition-all flex items-start gap-4 ${
+                          highContrast
+                            ? "border-cyan-500 bg-cyan-500/10 shadow-lg shadow-cyan-500/10"
+                            : "border-slate-800 bg-slate-950/40 text-slate-400 hover:border-slate-700"
+                        }`}
+                      >
+                        <span className="mt-0.5 w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-black text-white border border-white">
+                          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
+                            <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" />
+                          </svg>
+                        </span>
+                        <div>
+                          <span className="text-sm font-bold text-white">High Contrast</span>
+                          <p className="text-xs text-slate-400 mt-1">
+                            Pure black surfaces and maximum-contrast text meeting WCAG AAA, layered on your theme.
+                          </p>
+                          {highContrast && (
+                            <span className="inline-block mt-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500 text-slate-950">ACTIVE</span>
+                          )}
+                        </div>
+                      </button>
                     </div>
                   </div>
 
