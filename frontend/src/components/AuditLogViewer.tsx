@@ -15,6 +15,7 @@ import {
   downloadCsv,
 } from "../lib/auditApi";
 import { EmptyState } from "./EmptyState";
+import { formatTimestamp as formatTimezoneTimestamp, timezoneLabel } from "../lib/timezone";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -381,14 +382,11 @@ function shortenAddress(address: string): string {
 
 function formatTimestamp(iso: string): string {
   try {
-    const d = new Date(iso);
-    return d.toLocaleString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
+    const mode = typeof window !== "undefined" &&
+      window.localStorage.getItem("remitmortgage:timezone:anonymous") === "UTC"
+      ? "UTC"
+      : "local";
+    return `${formatTimezoneTimestamp(iso, mode)} (${timezoneLabel(mode)})`;
   } catch {
     return iso;
   }

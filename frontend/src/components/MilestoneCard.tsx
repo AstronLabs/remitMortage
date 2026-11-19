@@ -2,7 +2,7 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useToast } from "@/context/ToastContext";
 import EvidenceUpload from "./EvidenceUpload";
 import MilestoneSubmissionForm, { MilestoneSubmission } from "./MilestoneSubmissionForm";
@@ -10,6 +10,7 @@ import MilestoneTracker, { Stage } from "./MilestoneTracker";
 import MilestoneSigningProgressPanel from "./MilestoneSigningProgressPanel";
 import { createMilestoneProposal } from "@/lib/milestoneSigning";
 import { useSignatureQueueStore } from "@/lib/signatureQueueStore";
+import QrCodeDisplay from "./QrCodeDisplay";
 
 interface MilestoneProps {
   id: string;
@@ -24,7 +25,12 @@ export default function MilestoneCard({ id, name, initialStage, shareId }: Miles
   const [submission, setSubmission] = useState<MilestoneSubmission | null>(null);
   const [proposalId, setProposalId] = useState<string | null>(null);
   const [isRequesting, setIsRequesting] = useState(false);
+  const [origin, setOrigin] = useState("");
   const { toast } = useToast();
+
+  useEffect(() => {
+    setOrigin(window.location.origin);
+  }, []);
 
   const handleShare = useCallback(async () => {
     const url = `${window.location.origin}/share/${encodeURIComponent(shareId!)}`;
@@ -98,11 +104,19 @@ export default function MilestoneCard({ id, name, initialStage, shareId }: Miles
         <h3 className="text-lg font-bold text-[var(--text-primary)]">{name}</h3>
         <div className="flex items-center gap-2 shrink-0">
           {shareId && (
-            <button
-              onClick={() => void handleShare()}
-              className="text-[11px] font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2.5 py-1 rounded-full transition-colors flex items-center gap-1.5"
-              aria-label={`Share ${name}`}
-            >
+            <div className="flex items-center gap-2">
+              {origin && (
+                <QrCodeDisplay
+                  value={`${origin}/share/${encodeURIComponent(shareId)}`}
+                  label={`${name} payment request`}
+                  testId={`payment-request-qr-${id}`}
+                />
+              )}
+              <button
+                onClick={() => void handleShare()}
+                className="text-[11px] font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2.5 py-1 rounded-full transition-colors flex items-center gap-1.5"
+                aria-label={`Share ${name}`}
+              >
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
@@ -119,7 +133,8 @@ export default function MilestoneCard({ id, name, initialStage, shareId }: Miles
                 <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
               </svg>
               Share
-            </button>
+              </button>
+            </div>
           )}
           <span
             className={`px-3 py-1 rounded-full text-xs font-semibold ${
