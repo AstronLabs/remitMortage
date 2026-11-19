@@ -100,7 +100,7 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 14 | `NotPendingAdmin` | Proposed new admin is not the caller or no transfer is pending. |
 | 16 | `TimelockActive` | A timelocked change (upgrade, haircut, deposit cap, ...) was proposed but its delay has not elapsed yet. |
 | 17 | `TrancheMismatch` | Investor cannot change tranche after the initial deposit. |
-| 20 | `DailyBorrowLimitExceeded` | The daily borrow limit has been exceeded. |
+| 20 | `DailyBorrowLimitExceeded` | The pool-wide daily borrow limit has been exceeded, or (from `repay` and `payoff_with_quote`) the repayment would push the borrower past the admin-set per-borrower daily repayment cap. The repayment is rejected outright, never partially applied. (The error enum is at Soroban's 50-variant ceiling, so both daily limits share this code.) |
 | 21 | `RefundExceedsDisbursed` | Refund amount exceeds the amount disbursed for the loan. |
 | 22 | `UnauthorizedContractor` | Disbursement recipient is not a whitelisted contractor. |
 | 23 | `InsufficientPaymentHistory` | Refinancing requires at least 3 successful payments. |
@@ -135,7 +135,7 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 63 | `CreditLimitExceeded` | Draw would exceed the approved credit limit minus the outstanding drawn balance. |
 | 64 | `ExtensionCapExceeded` | Loan extension exceeds the permitted count or term. |
 | 65 | `TrancheCapExceeded` | Deposit would push the tranche's total past its admin-set cap. |
-| 66 | `InvestorCapExceeded` | Deposit would push the investor's position past the admin-set per-investor cap. |
+| 66 | `InvestorCapExceeded` | Deposit would push the investor's position past the admin-set per-investor cap, or push their share of the tranche above the admin-set maximum per-investor tranche share. (The error enum is at Soroban's 50-variant ceiling, so both per-investor limits share this code.) |
 
 ## lending-pool (`LoanAssumptionError`)
 
@@ -150,6 +150,17 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 7 | `AssumptionAlreadyRequested` |  |
 | 8 | `AssumptionFeeCapExceeded` | The requested loan assumption fee is above the hard on-chain cap. |
 | 9 | `NotInitialized` | The pool has not been initialized. |
+
+## lending-pool (`RateAdjustmentError`)
+
+| Code | Variant | Description |
+|------|---------|-------------|
+| 1 | `NotInitialized` | The pool has not been initialized. |
+| 2 | `LoanNotFound` | Loan not found. |
+| 3 | `LoanNotActive` | Only an active (approved) loan's rate can be adjusted. |
+| 4 | `InvalidRate` | The new rate is zero or unchanged from the loan's current rate. |
+| 5 | `PeriodicCapExceeded` | The adjustment moves the rate by more than the admin-set maximum change per adjustment. |
+| 6 | `LifetimeCapExceeded` | The adjustment would move the rate further from the loan's own starting rate than the admin-set lifetime cap allows. |
 
 ## milestone (`MilestoneError`)
 
