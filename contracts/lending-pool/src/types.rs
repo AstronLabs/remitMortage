@@ -709,6 +709,9 @@ pub enum FeatureKey {
     /// Per-investor list of deposit lots still subject to a withdrawal grace
     /// window so each deposit tracks eligibility independently.
     InvestorDepositLots(Address),
+    /// Optional 32-byte SHA-256 hash referencing an off-chain promissory note
+    /// or servicing agreement for a loan. Hash-only (no document or URL).
+    LoanNoteHash(BytesN<32>),
 }
 
 /// One investor deposit lot tracked independently for the withdrawal grace window.

@@ -45,6 +45,9 @@ mod test_late_fee_lifetime_cap;
 #[cfg(test)]
 mod test_withdrawal_grace_window;
 
+#[cfg(test)]
+mod test_loan_note_hash;
+
 pub use crate::errors::{LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
     BatchDisburseItem, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot, FeatureKey,
@@ -2661,6 +2664,80 @@ impl LendingPoolContract {
         Self::check_whitelist(&env, &borrower)?;
         borrower.require_auth();
         Self::do_request_loan(&env, borrower, loan_id, principal, Some(escrow_origin))
+    }
+
+    /// Borrower requests a loan and optionally attaches a 32-byte SHA-256 hash
+    /// referencing an off-chain promissory note or servicing agreement.
+    ///
+    /// Only the 32-byte digest is stored on-chain (never a document or URL).
+    /// Passing `None` leaves the reference absent.
+    pub fn request_loan_with_note(
+        env: Env,
+        borrower: Address,
+        loan_id: BytesN<32>,
+        principal: i128,
+        note_hash: Option<BytesN<32>>,
+    ) -> Result<(), PoolError> {
+        Self::check_function_not_paused(&env, PauseGroup::LoanRequests)?;
+        Self::check_whitelist(&env, &borrower)?;
+        borrower.require_auth();
+        if let Some(ref hash) = note_hash {
+            if Self::is_zero_hash(&env, hash) {
+                return Err(PoolError::InvalidAmount);
+            }
+        }
+        Self::do_request_loan(&env, borrower, loan_id.clone(), principal, None)?;
+        if let Some(hash) = note_hash {
+            env.storage()
+                .persistent()
+                .set(&FeatureKey::LoanNoteHash(loan_id.clone()), &hash);
+            env.events()
+                .publish((Symbol::new(&env, "note_hash_set"), loan_id), hash);
+        }
+        Ok(())
+    }
+
+    /// Sets or updates a loan's 32-byte SHA-256 off-chain note reference.
+    ///
+    /// Allowed only while the loan is still unfunded (`Requested` with zero
+    /// disbursement). Once funded/approved the note hash is immutable.
+    pub fn set_loan_note_hash(
+        env: Env,
+        loan_id: BytesN<32>,
+        note_hash: BytesN<32>,
+    ) -> Result<(), PoolError> {
+        Self::check_not_paused(&env)?;
+        if Self::is_zero_hash(&env, &note_hash) {
+            return Err(PoolError::InvalidAmount);
+        }
+        let loan = Self::read_loan(&env, &loan_id)?;
+        loan.borrower.require_auth();
+        if loan.status != LoanStatus::Requested || loan.disbursed > 0 {
+            return Err(PoolError::InvalidLoanState);
+        }
+        env.storage()
+            .persistent()
+            .set(&FeatureKey::LoanNoteHash(loan_id.clone()), &note_hash);
+        env.events()
+            .publish((Symbol::new(&env, "note_hash_set"), loan_id), note_hash);
+        Ok(())
+    }
+
+    /// Returns the 32-byte SHA-256 off-chain note hash attached to `loan_id`,
+    /// or `None` if no reference was attached.
+    pub fn get_loan_note_hash(
+        env: Env,
+        loan_id: BytesN<32>,
+    ) -> Result<Option<BytesN<32>>, PoolError> {
+        let _ = Self::read_loan(&env, &loan_id)?;
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&FeatureKey::LoanNoteHash(loan_id)))
+    }
+
+    fn is_zero_hash(env: &Env, hash: &BytesN<32>) -> bool {
+        *hash == BytesN::from_array(env, &[0u8; 32])
     }
 
     fn do_request_loan(
