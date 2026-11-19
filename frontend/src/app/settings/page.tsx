@@ -11,6 +11,7 @@ import ThemeModeSettings from "@/components/ThemeModeSettings";
 import NotificationFrequencyControl, {
   type NotificationFrequency,
 } from "@/components/NotificationFrequencyControl";
+import TimezoneSettings from "@/components/TimezoneSettings";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 // Push relies on browser-only APIs (ServiceWorker, PushManager, Notification),
@@ -774,6 +775,7 @@ export default function SettingsPage() {
                   </div>
 
                   <ThemeModeSettings />
+                  <TimezoneSettings userId={stellarAddress || email || "anonymous"} />
 
                   {/* Theme: Light / Dark (picking one switches to Manual mode) */}
                   <div className="space-y-3">
