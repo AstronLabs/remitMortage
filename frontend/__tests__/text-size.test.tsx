@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { act } from "@testing-library/react";
-import { TEXT_SIZE_BOOT_SCRIPT } from "../src/app/lib/text-size-boot";
+import { runTextSizeBoot } from "../src/app/lib/text-size-boot";
 import {
   applyTextSize,
   isTextSize,
@@ -22,7 +22,7 @@ function loadFresh() {
 }
 
 function runBoot() {
-  new Function(TEXT_SIZE_BOOT_SCRIPT)();
+  runTextSizeBoot();
 }
 
 beforeEach(() => {
