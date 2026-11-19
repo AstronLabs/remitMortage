@@ -6,6 +6,7 @@ import jwt from "jsonwebtoken";
 import { verifySessionToken } from "../services/jwtKeyRing.js";
 import { loadConfig } from "../config.js";
 import { IMPERSONATION_COOKIE, isImpersonationSessionActive } from "../services/impersonation.js";
+import { runWithUserBaggage } from "./tracingBaggage.js";
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -82,7 +83,7 @@ export async function authMiddleware(req: AuthenticatedRequest, res: Response, n
       network: string;
     };
     req.user = decoded;
-    next();
+    runWithUserBaggage(decoded.walletAddress, next);
   } catch (err) {
     res.status(401).json({ error: "unauthorized", message: "Invalid or expired token" });
     return;
@@ -106,7 +107,7 @@ export function optionalAuthMiddleware(
       // Public endpoints remain available to anonymous callers.
     }
   }
-  next();
+  runWithUserBaggage(req.user?.walletAddress, next);
 }
 
 /**
@@ -148,7 +149,7 @@ export function requireAdmin(req: AuthenticatedRequest, res: Response, next: Nex
       return;
     }
 
-    next();
+    runWithUserBaggage(decoded.walletAddress, next);
   } catch (err) {
     res.status(401).json({ error: "unauthorized", message: "Invalid or expired token" });
     return;
