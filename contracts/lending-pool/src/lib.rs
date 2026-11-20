@@ -54,14 +54,26 @@ mod test_utilization_auto_pause;
 #[cfg(test)]
 mod test_pro_rata_loss_allocation;
 
+#[cfg(test)]
+mod test_proof_of_reserves;
+
+#[cfg(test)]
+mod test_rate_curve;
+
+#[cfg(test)]
+mod test_pause_guardian;
+
+#[cfg(test)]
+mod test_closing_statement;
+
 pub use crate::errors::{LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
-    BatchDisburseItem, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot, FeatureKey,
-    HalvingInfo,
-    InvestorLockupPosition, InvestorRecord, LoanAssumptionRequest, LoanCollateralRecord,
-    LoanIntroConfig, LoanOriginTerms, LoanPhase, LoanPortabilitySnapshot, LoanRecord, LoanStatus,
-    LockupTier, PauseGroup, PayoffQuote, PendingCapChange, PendingHaircutChange,
-    PendingUpgradeRecord, PendingWindDown, PoolConfig, PoolHealth, RepaymentSchedule,
+    BatchDisburseItem, BorrowRateCurve, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot,
+    FeatureKey, HalvingInfo, InvestorLockupPosition, InvestorRecord, LoanAssumptionRequest,
+    LoanClosingStatement, LoanCollateralRecord, LoanIntroConfig, LoanOriginTerms, LoanPhase,
+    LoanPortabilitySnapshot, LoanRecord, LoanStatus, LockupTier, PauseGroup, PayoffQuote,
+    PendingCapChange, PendingHaircutChange, PendingRateCurveChange, PendingUpgradeRecord,
+    PendingWindDown, PoolConfig, PoolExtKey, PoolHealth, ProofOfReserves, RepaymentSchedule,
     RestructureProposal, ScheduleView, Tranche, TrancheInfo, WindDownStatus, YieldMode,
 };
 use soroban_sdk::xdr::ToXdr;
@@ -138,6 +150,11 @@ const MAX_APPLICATION_FEE_BPS: u32 = BPS_SCALE;
 /// on prepayment, not a reduction of principal or interest, so waiving it does
 /// not touch investor revenue — which is the point of the loyalty incentive.
 const PREPAYMENT_PENALTY_BPS: u32 = 100;
+
+/// Minimum allowed annual borrow rate floor for the kinked rate curve (2% = 200 bps).
+const MIN_BORROW_RATE_BPS: u32 = 200;
+/// Maximum allowed annual borrow rate cap for the kinked rate curve (50% = 5000 bps).
+const MAX_BORROW_RATE_BPS: u32 = 5_000;
 /// Utilization threshold for low-fee tier (50%).
 const UTILIZATION_LOW_THRESHOLD_BPS: u32 = 5_000; // 50%
 /// Utilization threshold for medium-fee tier (80%).
@@ -666,6 +683,7 @@ impl LendingPoolContract {
         env.storage()
             .instance()
             .set(&DataKey::TotalApplicationFees, &(total + fee));
+        Self::add_loan_fee(env, loan_id, fee);
 
         env.events().publish(
             (Symbol::new(env, "app_fee_retained"),),
@@ -1298,6 +1316,12 @@ impl LendingPoolContract {
 
         let old_repaid = loan.repaid;
         loan.repaid += amount;
+        let principal_repaid = loan
+            .repaid
+            .min(loan.principal)
+            .saturating_sub(old_repaid.min(loan.principal))
+            .max(0);
+        Self::sub_outstanding_principal(env, principal_repaid);
         // Forgive post-quote accrual: quoted amount fully settles the loan.
         loan.outstanding_debt = 0;
         loan.status = LoanStatus::Repaid;
@@ -1312,6 +1336,7 @@ impl LendingPoolContract {
             );
         }
         Self::set_loan(env, loan_id, loan);
+        Self::record_loan_closing_statement(env, loan_id, loan);
         env.storage()
             .persistent()
             .remove(&DataKey::PayoffQuote(loan_id.clone()));
@@ -1964,16 +1989,154 @@ impl LendingPoolContract {
     }
 
     /// Resolve the borrower's loan interest rate from the configured verification
-    /// registry, or fall back to the pool default when no registry is set.
+    /// registry, or fall back to the utilization-based kinked borrow rate curve
+    /// (when configured) or the flat pool default.
     fn resolve_borrower_interest_rate(env: &Env, borrower: &Address) -> Result<u32, PoolError> {
         if let Some(registry) = Self::read_verification_registry(env) {
             match Self::try_get_verification_score(env, &registry, borrower) {
                 Some(score) => Ok(Self::interest_rate_from_score(score)),
                 None => Ok(INTEREST_RATE_FALLBACK_BPS),
             }
+        } else if let Some(curve) = Self::read_borrow_rate_curve(env) {
+            let utilization = Self::calculate_utilization(env);
+            Ok(Self::evaluate_rate_curve(&curve, utilization))
         } else {
             Ok(Self::read_config(env)?.interest_rate_bps)
         }
+    }
+
+    fn read_outstanding_principal(env: &Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&PoolExtKey::OutstandingPrincipal)
+            .unwrap_or(0)
+    }
+
+    fn add_outstanding_principal(env: &Env, amount: i128) {
+        if amount <= 0 {
+            return;
+        }
+        let next = Self::read_outstanding_principal(env).saturating_add(amount);
+        env.storage()
+            .instance()
+            .set(&PoolExtKey::OutstandingPrincipal, &next);
+    }
+
+    fn sub_outstanding_principal(env: &Env, amount: i128) {
+        if amount <= 0 {
+            return;
+        }
+        let next = Self::read_outstanding_principal(env)
+            .saturating_sub(amount)
+            .max(0);
+        env.storage()
+            .instance()
+            .set(&PoolExtKey::OutstandingPrincipal, &next);
+    }
+
+    fn read_borrow_rate_curve(env: &Env) -> Option<BorrowRateCurve> {
+        env.storage().instance().get(&PoolExtKey::BorrowRateCurve)
+    }
+
+    fn evaluate_rate_curve(curve: &BorrowRateCurve, utilization_bps: u32) -> u32 {
+        let u = utilization_bps.min(BPS_SCALE) as u64;
+        let opt = curve.optimal_utilization_bps.min(BPS_SCALE) as u64;
+        let base = curve.base_rate_bps as u64;
+        let s1 = curve.slope1_bps as u64;
+        let s2 = curve.slope2_bps as u64;
+
+        let raw = if u <= opt {
+            let below_kink = u.saturating_mul(s1).checked_div(opt).unwrap_or(0);
+            base.saturating_add(below_kink)
+        } else {
+            let excess = u.saturating_sub(opt);
+            let max_excess = (BPS_SCALE as u64).saturating_sub(opt);
+            let above_kink = excess.saturating_mul(s2).checked_div(max_excess).unwrap_or(s2);
+            base.saturating_add(s1).saturating_add(above_kink)
+        };
+
+        let clamped = raw
+            .max(curve.min_rate_bps as u64)
+            .min(curve.max_rate_bps as u64);
+        clamped as u32
+    }
+
+    fn read_loan_fees(env: &Env, loan_id: &BytesN<32>) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&PoolExtKey::LoanFees(loan_id.clone()))
+            .unwrap_or(0)
+    }
+
+    fn add_loan_fee(env: &Env, loan_id: &BytesN<32>, fee: i128) {
+        if fee <= 0 {
+            return;
+        }
+        let next = Self::read_loan_fees(env, loan_id).saturating_add(fee);
+        env.storage()
+            .persistent()
+            .set(&PoolExtKey::LoanFees(loan_id.clone()), &next);
+    }
+
+    fn read_loan_prepay_penalties(env: &Env, loan_id: &BytesN<32>) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&PoolExtKey::LoanPrepayPenalties(loan_id.clone()))
+            .unwrap_or(0)
+    }
+
+    fn add_loan_prepay_penalty(env: &Env, loan_id: &BytesN<32>, penalty: i128) {
+        if penalty <= 0 {
+            return;
+        }
+        let next = Self::read_loan_prepay_penalties(env, loan_id).saturating_add(penalty);
+        env.storage()
+            .persistent()
+            .set(&PoolExtKey::LoanPrepayPenalties(loan_id.clone()), &next);
+    }
+
+    fn read_loan_rebates(env: &Env, loan_id: &BytesN<32>) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&PoolExtKey::LoanRebates(loan_id.clone()))
+            .unwrap_or(0)
+    }
+
+    fn add_loan_rebate(env: &Env, loan_id: &BytesN<32>, rebate: i128) {
+        if rebate <= 0 {
+            return;
+        }
+        let next = Self::read_loan_rebates(env, loan_id).saturating_add(rebate);
+        env.storage()
+            .persistent()
+            .set(&PoolExtKey::LoanRebates(loan_id.clone()), &next);
+    }
+
+    fn record_loan_closing_statement(env: &Env, loan_id: &BytesN<32>, loan: &LoanRecord) {
+        let total_principal = loan.repaid.min(loan.principal).max(0);
+        let total_interest = loan.repaid.saturating_sub(loan.principal).max(0);
+        let total_fees = Self::read_loan_fees(env, loan_id);
+        let total_penalties = Self::read_loan_late_fees(env, loan_id)
+            .saturating_add(Self::read_loan_prepay_penalties(env, loan_id));
+        let total_rebates = Self::read_loan_rebates(env, loan_id);
+        let closing_ledger = env.ledger().sequence();
+
+        let statement = LoanClosingStatement {
+            total_principal,
+            total_interest,
+            total_fees,
+            total_penalties,
+            total_rebates,
+            closing_ledger,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&PoolExtKey::LoanClosingStatement(loan_id.clone()), &statement);
+        env.events().publish(
+            (Symbol::new(env, "loan_closed"), loan_id.clone()),
+            statement,
+        );
     }
 
     /// Cross-contract call to `<validator>.enforce_signatures(signers)`,
@@ -3901,6 +4064,7 @@ impl LendingPoolContract {
                     &config.treasury_address,
                     &origination_fee,
                 );
+                Self::add_loan_fee(&env, &loan_id, origination_fee);
             }
 
             // Transfer the remaining amount to the recipient.
@@ -3946,6 +4110,7 @@ impl LendingPoolContract {
             loan.disbursed += amount;
             loan.outstanding_debt = loan.outstanding_debt.saturating_add(amount);
             Self::set_loan(&env, &loan_id, &loan);
+            Self::add_outstanding_principal(&env, amount);
 
             // Reduce available liquidity.
             let new_liquidity = liquidity - amount;
@@ -4109,6 +4274,7 @@ impl LendingPoolContract {
                     &config.treasury_address,
                     &origination_fee,
                 );
+                Self::add_loan_fee(&env, &item.loan_id, origination_fee);
             }
             let recipient_amount = net_disbursement - premium;
             if recipient_amount > 0 {
@@ -4143,6 +4309,7 @@ impl LendingPoolContract {
             loan.disbursed += item.amount;
             loan.outstanding_debt = loan.outstanding_debt.saturating_add(item.amount);
             Self::set_loan(&env, &item.loan_id, &loan);
+            Self::add_outstanding_principal(&env, item.amount);
 
             let new_liquidity = liquidity - item.amount;
             env.storage()
@@ -4441,6 +4608,7 @@ impl LendingPoolContract {
                 &borrower,
                 prepayment_penalty,
             );
+            Self::add_loan_prepay_penalty(&env, &loan_id, prepayment_penalty);
         }
 
         if is_early_close {
@@ -4646,8 +4814,19 @@ impl LendingPoolContract {
             Self::add_borrower_lifetime_interest(&env, &loan.borrower, interest_paid);
         }
 
+        let principal_repaid = loan
+            .repaid
+            .min(loan.principal)
+            .saturating_sub(old_repaid.min(loan.principal))
+            .max(0);
+        Self::sub_outstanding_principal(&env, principal_repaid);
+        if protocol_fee > 0 {
+            Self::add_loan_fee(&env, &loan_id, protocol_fee);
+        }
+
         // Mark as repaid if fully paid (compound debt cleared).
-        if loan.outstanding_debt == 0 {
+        let loan_closed_now = loan.outstanding_debt == 0;
+        if loan_closed_now {
             loan.status = LoanStatus::Repaid;
             // A full repayment consumes any outstanding quote.
             env.storage()
@@ -4671,6 +4850,10 @@ impl LendingPoolContract {
         }
 
         Self::set_loan(&env, &loan_id, &loan);
+
+        if loan_closed_now {
+            Self::record_loan_closing_statement(&env, &loan_id, &loan);
+        }
 
         // Increase available liquidity with the repayment, net of any
         // protocol fee already forwarded to the treasury — those tokens have
@@ -5287,6 +5470,10 @@ impl LendingPoolContract {
 
         // Accrue any outstanding compound interest before computing the loss.
         Self::accrue_interest(&env, &mut loan);
+
+        // Remove any unreturned principal on this loan from aggregate outstanding principal.
+        let defaulted_principal = loan.disbursed.saturating_sub(loan.repaid).max(0);
+        Self::sub_outstanding_principal(&env, defaulted_principal);
 
         // Outstanding loss = principal + accrued interest - total repaid, which
         // is tracked as the compounded outstanding debt.
@@ -5907,6 +6094,174 @@ impl LendingPoolContract {
         }
     }
 
+    /// Returns a single-ledger proof-of-reserves snapshot showing whether the
+    /// pool's token balance, deployed loan principal, and insurance reserves
+    /// cover total investor claims.
+    ///
+    /// All figures are read atomically within one contract call:
+    /// - `token_balance`: actual pool token balance (`token.balance(pool)`).
+    /// - `total_investor_claims`: net investor principal claims across both
+    ///   tranches (`senior.total_deposited + junior.total_deposited`, already
+    ///   net of absorbed default losses).
+    /// - `outstanding_loan_principal`: aggregate disbursed loan principal not
+    ///   yet repaid or written off.
+    /// - `insurance_reserve`: current reserves held by the configured
+    ///   `InsurancePool` contract (`0` when unset).
+    /// - `coverage_ratio_bps`: `((token_balance + outstanding_loan_principal + insurance_reserve) * 10_000) / total_investor_claims`
+    ///   (or `10_000` when `total_investor_claims == 0`).
+    /// - `ledger`: ledger sequence at which this snapshot was read.
+    pub fn get_proof_of_reserves(env: Env) -> Result<ProofOfReserves, PoolError> {
+        let config = Self::read_config(&env)?;
+        let token_balance = Self::token_client(&env, &config.token)
+            .balance(&env.current_contract_address());
+
+        let senior = Self::read_tranche_info(&env, &Tranche::Senior);
+        let junior = Self::read_tranche_info(&env, &Tranche::Junior);
+        let total_investor_claims = senior
+            .total_deposited
+            .max(0)
+            .saturating_add(junior.total_deposited.max(0));
+
+        let outstanding_loan_principal = Self::read_outstanding_principal(&env);
+        let insurance_reserve = match Self::read_insurance_pool(&env) {
+            Some(addr) => Self::insurance_get_reserves(&env, &addr).max(0),
+            None => 0,
+        };
+
+        let backing = token_balance
+            .saturating_add(outstanding_loan_principal)
+            .saturating_add(insurance_reserve)
+            .max(0);
+        let coverage_ratio_bps = if total_investor_claims > 0 {
+            let ratio = backing.saturating_mul(BPS_SCALE as i128) / total_investor_claims;
+            ratio.clamp(0, u32::MAX as i128) as u32
+        } else {
+            BPS_SCALE
+        };
+
+        Ok(ProofOfReserves {
+            token_balance,
+            total_investor_claims,
+            outstanding_loan_principal,
+            insurance_reserve,
+            coverage_ratio_bps,
+            ledger: env.ledger().sequence(),
+        })
+    }
+
+    /// Returns the stored closing statement for a fully repaid loan, or `None`
+    /// if the loan has not yet closed.
+    pub fn get_loan_closing_statement(
+        env: Env,
+        loan_id: BytesN<32>,
+    ) -> Option<LoanClosingStatement> {
+        env.storage()
+            .persistent()
+            .get(&PoolExtKey::LoanClosingStatement(loan_id))
+    }
+
+    // ── Utilization-Based Kinked Borrow Rate Curve ──────────────────────
+
+    /// Propose or execute a timelocked update to the utilization-based kinked
+    /// borrow rate curve. Admin-only.
+    ///
+    /// - First call (no pending proposal): validates the curve parameters,
+    ///   queues them under `PoolExtKey::PendingRateCurve` with the pool's
+    ///   timelock delay, and emits `rate_crv_p`.
+    /// - Second call after the timelock elapses: applies the queued curve to
+    ///   `PoolExtKey::BorrowRateCurve` and emits `rate_crv_s`.
+    /// - Calling before the delay elapses returns `Err(PoolError::TimelockActive)`.
+    ///
+    /// Existing loans retain their snapshotted `interest_rate_bps`; only new
+    /// loans are priced from the active curve.
+    pub fn set_borrow_rate_curve(env: Env, curve: BorrowRateCurve) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        if curve.optimal_utilization_bps > BPS_SCALE
+            || curve.min_rate_bps < MIN_BORROW_RATE_BPS
+            || curve.max_rate_bps > MAX_BORROW_RATE_BPS
+            || curve.min_rate_bps > curve.max_rate_bps
+        {
+            return Err(PoolError::InvalidAmount);
+        }
+
+        let now = env.ledger().sequence();
+        let pending: Option<PendingRateCurveChange> =
+            env.storage().instance().get(&PoolExtKey::PendingRateCurve);
+        match pending {
+            None => {
+                let proposal = PendingRateCurveChange {
+                    curve: curve.clone(),
+                    execute_after: now.saturating_add(Self::deposit_cap_delay(&env)),
+                };
+                env.storage()
+                    .instance()
+                    .set(&PoolExtKey::PendingRateCurve, &proposal);
+                env.events().publish(
+                    (symbol_short!("rate_crvp"),),
+                    (curve, proposal.execute_after),
+                );
+            }
+            Some(pending) => {
+                if now < pending.execute_after {
+                    return Err(PoolError::TimelockActive);
+                }
+                env.storage()
+                    .instance()
+                    .remove(&PoolExtKey::PendingRateCurve);
+                env.storage()
+                    .instance()
+                    .set(&PoolExtKey::BorrowRateCurve, &pending.curve);
+                env.events()
+                    .publish((symbol_short!("rate_crvs"),), (pending.curve,));
+            }
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Ok(())
+    }
+
+    /// Returns the active kinked borrow rate curve, or `None` when using the
+    /// flat `PoolConfig::interest_rate_bps`.
+    pub fn get_borrow_rate_curve(env: Env) -> Option<BorrowRateCurve> {
+        Self::read_borrow_rate_curve(&env)
+    }
+
+    /// Returns any pending timelocked borrow rate curve proposal.
+    pub fn get_pending_rate_curve(env: Env) -> Option<PendingRateCurveChange> {
+        env.storage().instance().get(&PoolExtKey::PendingRateCurve)
+    }
+
+    /// Returns the borrow rate (in bps) that would apply to a new loan at the
+    /// pool's current utilization.
+    pub fn get_current_borrow_rate(env: Env) -> Result<u32, PoolError> {
+        if let Some(curve) = Self::read_borrow_rate_curve(&env) {
+            let utilization = Self::calculate_utilization(&env);
+            Ok(Self::evaluate_rate_curve(&curve, utilization))
+        } else {
+            Ok(Self::read_config(&env)?.interest_rate_bps)
+        }
+    }
+
+    /// Pure view computing the borrow rate (in bps) for an arbitrary
+    /// `utilization_bps` (`0..=10_000`) under the active curve (or flat pool
+    /// rate if no curve is configured).
+    pub fn borrow_rate_for_utilization(
+        env: Env,
+        utilization_bps: u32,
+    ) -> Result<u32, PoolError> {
+        if utilization_bps > BPS_SCALE {
+            return Err(PoolError::InvalidAmount);
+        }
+        if let Some(curve) = Self::read_borrow_rate_curve(&env) {
+            Ok(Self::evaluate_rate_curve(&curve, utilization_bps))
+        } else {
+            Ok(Self::read_config(&env)?.interest_rate_bps)
+        }
+    }
+
     /// Returns the maximum amount an investor can currently withdraw.
     pub fn get_available_withdrawal(env: Env, investor: Address) -> i128 {
         let record = Self::read_investor(&env, &investor);
@@ -6263,7 +6618,82 @@ impl LendingPoolContract {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events().publish(
+            (Symbol::new(&env, "pool_paused"),),
+            (config.admin, env.ledger().sequence()),
+        );
         Ok(())
+    }
+
+    /// Configure or rotate the pause-only guardian address. Admin-only.
+    ///
+    /// The guardian can call `pause_as_guardian` to halt the pool during an
+    /// incident, but can never unpause or modify any pool configuration.
+    pub fn set_pause_guardian(env: Env, guardian: Address) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        let old: Option<Address> = env.storage().instance().get(&PoolExtKey::PauseGuardian);
+        env.storage()
+            .instance()
+            .set(&PoolExtKey::PauseGuardian, &guardian);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events().publish(
+            (Symbol::new(&env, "guardian_set"),),
+            (old, guardian, config.admin),
+        );
+        Ok(())
+    }
+
+    /// Remove the configured pause-only guardian. Admin-only.
+    pub fn clear_pause_guardian(env: Env) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        let old: Option<Address> = env.storage().instance().get(&PoolExtKey::PauseGuardian);
+        env.storage().instance().remove(&PoolExtKey::PauseGuardian);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events()
+            .publish((Symbol::new(&env, "guardian_clr"),), (old, config.admin));
+        Ok(())
+    }
+
+    /// Returns the currently configured pause-only guardian address, if any.
+    pub fn get_pause_guardian(env: Env) -> Option<Address> {
+        env.storage().instance().get(&PoolExtKey::PauseGuardian)
+    }
+
+    /// Emergency pause callable only by the configured pause-only guardian.
+    ///
+    /// The guardian can pause immediately but cannot unpause or change any
+    /// pool configuration. Emits `guardian_pause` on every use.
+    pub fn pause_as_guardian(env: Env) -> Result<(), PoolError> {
+        let _config = Self::read_config(&env)?;
+        let guardian: Address = env
+            .storage()
+            .instance()
+            .get(&PoolExtKey::PauseGuardian)
+            .ok_or(PoolError::Unauthorized)?;
+        guardian.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events().publish(
+            (Symbol::new(&env, "guardian_pause"),),
+            (guardian, env.ledger().sequence()),
+        );
+        Ok(())
+    }
+
+    /// Returns whether the pool is currently globally paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
     }
 
     /// Resume all operations after a pause. Admin-only.
@@ -6274,6 +6704,10 @@ impl LendingPoolContract {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events().publish(
+            (Symbol::new(&env, "pool_unpaused"),),
+            (config.admin, env.ledger().sequence()),
+        );
         Ok(())
     }
 
@@ -8137,6 +8571,17 @@ impl LendingPoolContract {
 
         // Mark the rebate as claimed to prevent double-dipping.
         Self::mark_rebate_claimed(&env, &loan_id);
+        Self::add_loan_rebate(&env, &loan_id, rebate_amount);
+        if let Some(mut stmt) = env
+            .storage()
+            .persistent()
+            .get::<_, LoanClosingStatement>(&PoolExtKey::LoanClosingStatement(loan_id.clone()))
+        {
+            stmt.total_rebates = stmt.total_rebates.saturating_add(rebate_amount);
+            env.storage()
+                .persistent()
+                .set(&PoolExtKey::LoanClosingStatement(loan_id.clone()), &stmt);
+        }
 
         env.storage()
             .instance()
