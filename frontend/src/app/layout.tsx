@@ -25,6 +25,7 @@ import ImpersonationBanner from "@/components/ImpersonationBanner";
 import SkipToContent from "@/components/SkipToContent";
 import { LiveRegionAnnouncer } from "@/components/LiveRegionAnnouncer";
 import Footer from "@/components/Footer";
+import CommandPalette from "@/components/CommandPalette";
 import DashboardBreadcrumbs from "@/components/DashboardBreadcrumbs";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
@@ -142,6 +143,7 @@ export default async function RootLayout({
                     <KeyboardShortcutsProvider>
                       <NarrationProvider>
                         <main id="main-content" role="main" tabIndex={-1} className="flex-1 focus:outline-none">
+                          <CommandPalette />
                           <DashboardBreadcrumbs />
                           {children}
                         </main>

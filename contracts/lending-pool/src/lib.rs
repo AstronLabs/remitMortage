@@ -3641,7 +3641,37 @@ impl LendingPoolContract {
         Self::apply_refinance(env, loan_id)
     }
 
+    /// Configure the fee rate on the balance rolled into a refinance and its split.
+    /// A zero rate disables collection. Both shares must sum to 10,000 bps.
+    pub fn set_refinance_fee_config(
+        env: Env,
+        fee_bps: u32,
+        pool_bps: u32,
+        treasury_bps: u32,
+    ) -> Result<(), PoolError> {
+        Self::read_config(&env)?.admin.require_auth();
+        if fee_bps > BPS_SCALE || pool_bps.checked_add(treasury_bps) != Some(BPS_SCALE) {
+            return Err(PoolError::InvalidAmount);
+        }
+        env.storage().instance().set(
+            &FeatureKey::RefinanceFeeConfig,
+            &(fee_bps, pool_bps, treasury_bps),
+        );
+        Ok(())
+    }
+
+    pub fn get_refinance_fee_config(env: Env) -> (u32, u32, u32) {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::RefinanceFeeConfig)
+            .unwrap_or((0, BPS_SCALE, 0))
+    }
+
     fn apply_refinance(env: Env, loan_id: BytesN<32>) -> Result<(), PoolError> {
+        Self::non_reentrant(&env, || Self::apply_refinance_locked(&env, &loan_id))
+    }
+
+    fn apply_refinance_locked(env: &Env, loan_id: &BytesN<32>) -> Result<(), PoolError> {
         // Load and validate the rate-lock.
         let rate_lock: crate::types::RefinanceRateLock = env
             .storage()
@@ -3654,7 +3684,7 @@ impl LendingPoolContract {
             return Err(PoolError::RefinanceRateLockExpired);
         }
 
-        let mut loan = Self::read_loan(&env, &loan_id)?;
+        let mut loan = Self::read_loan(env, loan_id)?;
 
         if loan.status != LoanStatus::Approved {
             return Err(PoolError::InvalidLoanState);
@@ -3667,7 +3697,7 @@ impl LendingPoolContract {
             .ok_or(PoolError::RefinanceNotEligible)?;
 
         // Accrue any outstanding compound interest before computing what is owed.
-        Self::accrue_interest(&env, &mut loan);
+        Self::accrue_interest(env, &mut loan);
 
         let remaining_principal = loan.outstanding_debt;
         let new_interest = (remaining_principal * rate_lock.locked_rate_bps as i128) / 10_000;
@@ -3691,7 +3721,8 @@ impl LendingPoolContract {
         loan.refinanced_at_ledger = Some(current_ledger);
         loan.interest_rate_bps = rate_lock.locked_rate_bps;
 
-        Self::set_loan(&env, &loan_id, &loan);
+        Self::collect_refinance_fee(env, loan_id, &loan)?;
+        Self::set_loan(env, loan_id, &loan);
         env.storage()
             .persistent()
             .set(&DataKey::LoanSchedule(loan_id.clone()), &schedule);
@@ -3702,7 +3733,7 @@ impl LendingPoolContract {
             .remove(&FeatureKey::RefinanceRateLock(loan_id.clone()));
 
         env.events().publish(
-            (Symbol::new(&env, "loan_refinanced"),),
+            (Symbol::new(env, "loan_refinanced"),),
             (
                 loan_id.clone(),
                 rate_lock.locked_rate_bps,
@@ -3710,6 +3741,48 @@ impl LendingPoolContract {
             ),
         );
 
+        Ok(())
+    }
+
+    fn collect_refinance_fee(
+        env: &Env,
+        loan_id: &BytesN<32>,
+        loan: &LoanRecord,
+    ) -> Result<(), PoolError> {
+        let (fee_bps, _, treasury_bps) = Self::get_refinance_fee_config(env.clone());
+        // Split the multiplication so even large balances do not overflow.
+        let scale = BPS_SCALE as i128;
+        let share = |amount: i128, bps: u32| {
+            (amount / scale) * bps as i128 + (amount % scale) * bps as i128 / scale
+        };
+        let fee = share(loan.outstanding_debt.max(0), fee_bps);
+        if fee == 0 {
+            return Ok(());
+        }
+
+        let treasury_fee = share(fee, treasury_bps);
+        // Assign any rounding remainder to the pool so the full fee is routed.
+        let pool_fee = fee - treasury_fee;
+        let liquidity = Self::read_total_liquidity(env)
+            .checked_add(pool_fee)
+            .ok_or(PoolError::InvalidAmount)?;
+        let config = Self::read_config(env)?;
+        let token = Self::token_client(env, &config.token);
+        // Each transfer requires the borrower's authorization for that amount.
+        if pool_fee > 0 {
+            token.transfer(&loan.borrower, &env.current_contract_address(), &pool_fee);
+        }
+        if treasury_fee > 0 {
+            token.transfer(&loan.borrower, &config.treasury_address, &treasury_fee);
+        }
+        if pool_fee > 0 {
+            env.storage().instance().set(&DataKey::TotalLiquidity, &liquidity);
+            Self::refresh_utilization_auto_pause(env);
+        }
+        env.events().publish(
+            (Symbol::new(env, "refinance_fee"), loan_id.clone()),
+            (fee, pool_fee, treasury_fee),
+        );
         Ok(())
     }
 
@@ -14661,6 +14734,92 @@ mod test {
         }
 
         (borrower, loan_id, client)
+    }
+
+    #[test]
+    fn test_refinance_fee_routes_all_to_pool_or_splits_evenly() {
+        for (pool_bps, treasury_bps) in [(10_000u32, 0u32), (5_000, 5_000)] {
+            let env = Env::default();
+            env.mock_all_auths_allowing_non_root_auth();
+            let (borrower, loan_id, client) = setup_refinanceable_loan(&env, 50);
+            let config = client.get_pool_config();
+            let token = token::Client::new(&env, &config.token);
+            let pool_before = token.balance(&client.address);
+            let treasury_before = token.balance(&config.treasury_address);
+            let borrower_before = token.balance(&borrower);
+            let liquidity_before = client.get_pool_health().total_liquidity;
+            assert_eq!(client.get_refinance_fee_config(), (0, 10_000, 0));
+            client.set_refinance_fee_config(&100, &pool_bps, &treasury_bps);
+            client.request_refinance(&loan_id, &500, &12);
+            client.execute_refinance(&loan_id);
+
+            let fee = client.get_loan_info(&loan_id).outstanding_debt / 100;
+            assert!(fee > 0);
+            let treasury_fee = fee * treasury_bps as i128 / 10_000;
+            let pool_fee = fee - treasury_fee;
+            assert_eq!(token.balance(&borrower), borrower_before - fee);
+            assert_eq!(token.balance(&client.address), pool_before + pool_fee);
+            assert_eq!(
+                token.balance(&config.treasury_address),
+                treasury_before + treasury_fee
+            );
+            assert_eq!(
+                client.get_pool_health().total_liquidity,
+                liquidity_before + pool_fee
+            );
+
+            // A later setting is prospective and cannot move an earlier fee.
+            client.set_refinance_fee_config(&100, &0, &10_000);
+            assert_eq!(token.balance(&client.address), pool_before + pool_fee);
+            assert_eq!(
+                token.balance(&config.treasury_address),
+                treasury_before + treasury_fee
+            );
+            assert!(client.try_execute_refinance(&loan_id).is_err());
+        }
+    }
+
+    #[test]
+    fn test_refinance_fee_rejects_invalid_config_without_replacing_valid_config() {
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (_, _, _, _, client) = setup_pool(&env);
+        client.set_refinance_fee_config(&100, &5_000, &5_000);
+        assert_eq!(
+            client.try_set_refinance_fee_config(&100, &6_000, &5_000),
+            Err(Ok(PoolError::InvalidAmount)),
+        );
+        assert!(client.try_set_refinance_fee_config(&10_001, &5_000, &5_000).is_err());
+        assert_eq!(client.get_refinance_fee_config(), (100, 5_000, 5_000));
+    }
+
+    #[test]
+    fn test_refinance_fee_requires_borrower_auth_and_preserves_pending_request() {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+
+        let env = Env::default();
+        env.mock_all_auths_allowing_non_root_auth();
+        let (borrower, loan_id, client) = setup_refinanceable_loan(&env, 50);
+        let config = client.get_pool_config();
+        let token = token::Client::new(&env, &config.token);
+        let balance = token.balance(&borrower);
+        client.set_refinance_fee_config(&100, &5_000, &5_000);
+        client.request_refinance(&loan_id, &500, &12);
+
+        let attempt = client
+            .mock_auths(&[MockAuth {
+                address: &config.admin,
+                invoke: &MockAuthInvoke {
+                    contract: &client.address,
+                    fn_name: "execute_refinance",
+                    args: (loan_id.clone(),).into_val(&env),
+                    sub_invokes: &[],
+                },
+            }])
+            .try_execute_refinance(&loan_id);
+        assert!(attempt.is_err());
+        assert_eq!(token.balance(&borrower), balance);
+        assert!(client.get_refinance_rate_lock(&loan_id).is_some());
     }
 
     #[test]
