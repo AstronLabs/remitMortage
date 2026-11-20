@@ -20,7 +20,8 @@ import { loadConfig } from "../config.js";
 import logger from "../utils/logger.js";
 
 /** Availability of a review-staff member. Mirrors the Prisma `ReviewerStatus`. */
-export type ReviewerStatus = "ACTIVE" | "INACTIVE" | "ON_LEAVE";
+export const REVIEWER_STATUSES = ["ACTIVE", "INACTIVE", "ON_LEAVE"] as const;
+export type ReviewerStatus = (typeof REVIEWER_STATUSES)[number];
 
 /** The fields of a reviewer that the rotation cares about. */
 export interface ReviewerLike {

@@ -1,0 +1,4 @@
+{
+  "$comment": "Circular imports that existed when the module-cycle check (#1037) was added. Each entry should be removed once the cycle is broken so it can never return unnoticed. Regenerate with: npx tsx scripts/check-module-cycles.ts --update-baseline",
+  "cycles": []
+}
