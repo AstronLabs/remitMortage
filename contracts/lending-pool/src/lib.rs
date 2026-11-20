@@ -54,6 +54,9 @@ mod test_utilization_auto_pause;
 #[cfg(test)]
 mod test_pro_rata_loss_allocation;
 
+#[cfg(test)]
+mod test_principal_payment;
+
 pub use crate::errors::{LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
     BatchDisburseItem, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot, FeatureKey,
@@ -4695,6 +4698,148 @@ impl LendingPoolContract {
                 loan_id.clone(),
                 amount,
                 remaining - amount,
+            ),
+        );
+
+        Ok(())
+    }
+
+    /// Borrower pays down principal only, without it counting as an installment.
+    ///
+    /// The whole `amount` is applied to principal. Unlike [`Self::repay`], the
+    /// repayment schedule is never consulted or modified: `next_due_ledger`,
+    /// `monthly_amount`, `payments_made` and `payments_missed` are all left
+    /// exactly as they were, no late fee is charged, and the payment does not
+    /// cure a missed installment. Because it only lowers `outstanding_debt`,
+    /// interest that compounds from here on accrues on the lower balance.
+    ///
+    /// Outstanding principal is `principal - repaid` (floored at zero): the
+    /// pool applies repayments to principal first, so anything already repaid
+    /// has retired principal. Interest that has accrued on top is not
+    /// principal and cannot be paid through this function — use `repay`.
+    ///
+    /// # Errors
+    /// * `InvalidAmount` — `amount` is not positive.
+    /// * `InvalidLoanState` — the loan is not active (`Approved`).
+    /// * `OverPayment` — `amount` exceeds the outstanding principal.
+    ///
+    /// # Early-prepayment penalty
+    /// A principal-only payment that happens to extinguish the entire debt
+    /// (no interest has accrued) is an early prepayment like any other, so the
+    /// same penalty and loyalty waiver as `repay` apply. Otherwise this would
+    /// be a way around the penalty.
+    ///
+    /// Emits `principal_paid` (not `repay`), so indexers can tell it apart from
+    /// a scheduled installment.
+    pub fn pay_principal(
+        env: Env,
+        borrower: Address,
+        loan_id: BytesN<32>,
+        amount: i128,
+    ) -> Result<(), PoolError> {
+        Self::check_function_not_paused(&env, PauseGroup::Repayments)?;
+        borrower.require_auth();
+
+        if amount <= 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+
+        let config = Self::read_config(&env)?;
+        let mut loan = Self::read_loan(&env, &loan_id)?;
+
+        if loan.status != LoanStatus::Approved {
+            return Err(PoolError::InvalidLoanState);
+        }
+
+        // Compound interest up to now so the new balance is what is lowered.
+        Self::accrue_interest(&env, &mut loan);
+
+        let outstanding_principal = (loan.principal - loan.repaid).max(0);
+        if amount > outstanding_principal || amount > loan.outstanding_debt {
+            return Err(PoolError::OverPayment);
+        }
+
+        // Same fraud-containment cap as `repay`.
+        Self::consume_daily_repayment_allowance(&env, &borrower, amount)?;
+
+        // Penalty only when this payment leaves nothing owed at all.
+        let clears_debt = amount == loan.outstanding_debt;
+        let is_early_close = clears_debt && Self::is_early_closure(&env, &loan_id);
+        let waived = is_early_close && Self::is_prepayment_penalty_waived(&config, &loan);
+        let prepayment_penalty = if is_early_close && !waived {
+            Self::calculate_prepayment_penalty(amount)
+        } else {
+            0i128
+        };
+
+        let token = Self::token_client(&env, &config.token);
+        token.transfer(
+            &borrower,
+            &env.current_contract_address(),
+            &(amount + prepayment_penalty),
+        );
+        if prepayment_penalty > 0 {
+            Self::collect_prepayment_penalty(
+                &env,
+                &config,
+                &loan_id,
+                &borrower,
+                prepayment_penalty,
+            );
+        }
+        if is_early_close {
+            env.events().publish(
+                (Symbol::new(&env, "prepay_closed"),),
+                (loan_id.clone(), waived, prepayment_penalty),
+            );
+        }
+
+        // Apply to principal. The schedule is intentionally not touched.
+        loan.repaid += amount;
+        loan.outstanding_debt -= amount;
+
+        // Any live payoff quote was locked against the old balance.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PayoffQuote(loan_id.clone()));
+
+        if loan.outstanding_debt == 0 {
+            loan.status = LoanStatus::Repaid;
+            Self::release_borrower_loan_slot(&env, &loan.borrower);
+            Self::release_borrower_exposure(&env, &loan.borrower, loan.principal);
+
+            let undisbursed = loan.principal - loan.disbursed;
+            if undisbursed > 0 {
+                let active_commitments = Self::read_active_commitments(&env);
+                env.storage().instance().set(
+                    &DataKey::ActiveLoanCommitments,
+                    &(active_commitments - undisbursed),
+                );
+            }
+        }
+
+        Self::set_loan(&env, &loan_id, &loan);
+
+        // Pure principal: no interest, so no protocol fee or yield waterfall.
+        let liquidity = Self::read_total_liquidity(&env) + amount;
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalLiquidity, &liquidity);
+        Self::refresh_utilization_auto_pause(&env);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        let remaining_principal = (loan.principal - loan.repaid).max(0);
+        env.events().publish(
+            (Symbol::new(&env, "principal_paid"),),
+            (
+                borrower.clone(),
+                loan_id.clone(),
+                amount,
+                remaining_principal,
+                loan.outstanding_debt,
             ),
         );
 
