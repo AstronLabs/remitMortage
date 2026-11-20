@@ -42,9 +42,22 @@ mod test_rate_adjustment_caps;
 #[cfg(test)]
 mod test_late_fee_lifetime_cap;
 
+#[cfg(test)]
+mod test_withdrawal_grace_window;
+
+#[cfg(test)]
+mod test_loan_note_hash;
+
+#[cfg(test)]
+mod test_utilization_auto_pause;
+
+#[cfg(test)]
+mod test_pro_rata_loss_allocation;
+
 pub use crate::errors::{LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
-    BatchDisburseItem, CreditLine, DailyRepaymentWindow, DataKey, FeatureKey, HalvingInfo,
+    BatchDisburseItem, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot, FeatureKey,
+    HalvingInfo,
     InvestorLockupPosition, InvestorRecord, LoanAssumptionRequest, LoanCollateralRecord,
     LoanIntroConfig, LoanOriginTerms, LoanPhase, LoanPortabilitySnapshot, LoanRecord, LoanStatus,
     LockupTier, PauseGroup, PayoffQuote, PendingCapChange, PendingHaircutChange,
@@ -1376,6 +1389,79 @@ impl LendingPoolContract {
         utilization.min(BPS_SCALE as i128) as u32
     }
 
+    fn read_utilization_pause_threshold(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::UtilizationPauseThresholdBps)
+            .unwrap_or(0)
+    }
+
+    fn read_utilization_auto_paused(env: &Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::UtilizationAutoPaused)
+            .unwrap_or(false)
+    }
+
+    /// Re-evaluate the automatic origination pause against the configured
+    /// utilization safety threshold (`0` disables auto-pause).
+    ///
+    /// Latches `UtilizationAutoPaused = true` when utilization reaches or
+    /// exceeds the threshold, and automatically clears it once utilization
+    /// drops strictly below the threshold.
+    fn refresh_utilization_auto_pause(env: &Env) {
+        let threshold = Self::read_utilization_pause_threshold(env);
+        let was_paused = Self::read_utilization_auto_paused(env);
+        if threshold == 0 {
+            if was_paused {
+                env.storage()
+                    .instance()
+                    .set(&FeatureKey::UtilizationAutoPaused, &false);
+                env.events()
+                    .publish((Symbol::new(env, "util_pause_clr"),), (0u32, 0u32));
+            }
+            return;
+        }
+        let util = Self::calculate_utilization(env);
+        if util >= threshold {
+            if !was_paused {
+                env.storage()
+                    .instance()
+                    .set(&FeatureKey::UtilizationAutoPaused, &true);
+                env.events()
+                    .publish((Symbol::new(env, "util_auto_pause"),), (util, threshold));
+            }
+        } else if was_paused {
+            env.storage()
+                .instance()
+                .set(&FeatureKey::UtilizationAutoPaused, &false);
+            env.events()
+                .publish((Symbol::new(env, "util_pause_clr"),), (util, threshold));
+        }
+    }
+
+    /// Reject new loan originations while the utilization auto-pause is active.
+    ///
+    /// If utilization has already fallen below the configured threshold (or
+    /// the threshold was disabled), the auto-pause clears itself and allows
+    /// origination to proceed.
+    fn check_utilization_not_auto_paused(env: &Env) -> Result<(), PoolError> {
+        if !Self::read_utilization_auto_paused(env) {
+            return Ok(());
+        }
+        let threshold = Self::read_utilization_pause_threshold(env);
+        let util = Self::calculate_utilization(env);
+        if threshold == 0 || util < threshold {
+            env.storage()
+                .instance()
+                .set(&FeatureKey::UtilizationAutoPaused, &false);
+            env.events()
+                .publish((Symbol::new(env, "util_pause_clr"),), (util, threshold));
+            return Ok(());
+        }
+        Err(PoolError::ContractPaused)
+    }
+
     /// Calculate the dynamic withdrawal fee in basis points based on utilization.
     ///
     /// - Utilization < 50%: 10 bps (0.1%)
@@ -2205,6 +2291,20 @@ impl LendingPoolContract {
 
             let total_dep = Self::read_total_deposited(&env) + amount;
             Self::set_total_deposited(&env, total_dep);
+            Self::refresh_utilization_auto_pause(&env);
+
+            // Track this deposit's independent withdrawal grace window when enabled.
+            let grace_ledgers = Self::read_withdrawal_grace_ledgers(&env);
+            if grace_ledgers > 0 {
+                let mut lots = Self::prune_deposit_grace_lots(&env, &investor, current_ledger);
+                lots.push_back(DepositGraceLot {
+                    amount,
+                    unlock_ledger: current_ledger.saturating_add(grace_ledgers),
+                });
+                env.storage()
+                    .persistent()
+                    .set(&FeatureKey::InvestorDepositLots(investor.clone()), &lots);
+            }
 
             Ok(())
         })
@@ -2220,6 +2320,126 @@ impl LendingPoolContract {
     }
 
     // ── Deposit Cap Administration ──────────────────────────────────────
+
+    /// Configure the per-deposit withdrawal grace window in ledgers.
+    ///
+    /// Newly deposited investor funds cannot be withdrawn until at least
+    /// `grace_ledgers` ledgers have elapsed since that specific deposit.
+    /// Setting `0` disables the grace window for subsequent deposits. Admin-only.
+    pub fn set_withdrawal_grace_ledgers(env: Env, grace_ledgers: u32) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&FeatureKey::WithdrawalGraceLedgers, &grace_ledgers);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events().publish(
+            (Symbol::new(&env, "grace_win_set"),),
+            (grace_ledgers, config.admin),
+        );
+        Ok(())
+    }
+
+    /// Returns the configured per-deposit withdrawal grace window in ledgers.
+    pub fn get_withdrawal_grace_ledgers(env: Env) -> u32 {
+        Self::read_withdrawal_grace_ledgers(&env)
+    }
+
+    /// Returns the portion of `investor`'s deposited balance currently past
+    /// its per-deposit withdrawal grace window.
+    pub fn get_withdrawable_amount(env: Env, investor: Address) -> i128 {
+        let record = Self::read_investor(&env, &investor);
+        let current_ledger = env.ledger().sequence();
+        let active_lots = Self::prune_deposit_grace_lots(&env, &investor, current_ledger);
+        let mut locked: i128 = 0;
+        for lot in active_lots.iter() {
+            locked = locked.saturating_add(lot.amount);
+        }
+        record.deposited.saturating_sub(locked).max(0)
+    }
+
+    fn read_withdrawal_grace_ledgers(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::WithdrawalGraceLedgers)
+            .unwrap_or(0)
+    }
+
+    fn prune_deposit_grace_lots(
+        env: &Env,
+        investor: &Address,
+        current_ledger: u32,
+    ) -> Vec<DepositGraceLot> {
+        let stored: Vec<DepositGraceLot> = env
+            .storage()
+            .persistent()
+            .get(&FeatureKey::InvestorDepositLots(investor.clone()))
+            .unwrap_or_else(|| Vec::new(env));
+        let mut remaining = Vec::new(env);
+        for lot in stored.iter() {
+            if current_ledger < lot.unlock_ledger && lot.amount > 0 {
+                remaining.push_back(lot);
+            }
+        }
+        remaining
+    }
+
+    // ── Utilization Auto-Pause Administration ─────────────────────────────
+
+    /// Configure the pool utilization safety threshold (in basis points,
+    /// `0..=10_000`) above which new loan originations are automatically
+    /// paused. Setting `0` disables the automatic pause trigger and clears
+    /// any active auto-pause. Admin-only.
+    pub fn set_utilization_pause_threshold(
+        env: Env,
+        threshold_bps: u32,
+    ) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        if threshold_bps > BPS_SCALE {
+            return Err(PoolError::InvalidAmount);
+        }
+        env.storage()
+            .instance()
+            .set(&FeatureKey::UtilizationPauseThresholdBps, &threshold_bps);
+        Self::refresh_utilization_auto_pause(&env);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events()
+            .publish((Symbol::new(&env, "util_thresh_set"),), threshold_bps);
+        Ok(())
+    }
+
+    /// Return the configured utilization auto-pause threshold in basis points
+    /// (`0` means disabled).
+    pub fn get_utilization_pause_threshold(env: Env) -> u32 {
+        Self::read_utilization_pause_threshold(&env)
+    }
+
+    /// Return whether new loan originations are currently auto-paused due to
+    /// pool utilization reaching or exceeding the safety threshold.
+    pub fn is_utilization_auto_paused(env: Env) -> bool {
+        Self::read_utilization_auto_paused(&env)
+    }
+
+    /// Manually lift an active utilization auto-pause without waiting for
+    /// utilization to drop below the threshold. Admin-only.
+    pub fn clear_utilization_auto_pause(env: Env) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&FeatureKey::UtilizationAutoPaused, &false);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events()
+            .publish((Symbol::new(&env, "util_pause_lift"),), ());
+        Ok(())
+    }
 
     /// Set the number of ledgers a deposit-cap change must wait between being
     /// proposed and being executed. Cannot be set below one day, so the
@@ -2415,6 +2635,7 @@ impl LendingPoolContract {
 
             let total_dep = Self::read_total_deposited(&env) + amount;
             Self::set_total_deposited(&env, total_dep);
+            Self::refresh_utilization_auto_pause(&env);
 
             env.events().publish(
                 (symbol_short!("dep_tier"), investor.clone()),
@@ -2581,6 +2802,80 @@ impl LendingPoolContract {
         Self::do_request_loan(&env, borrower, loan_id, principal, Some(escrow_origin))
     }
 
+    /// Borrower requests a loan and optionally attaches a 32-byte SHA-256 hash
+    /// referencing an off-chain promissory note or servicing agreement.
+    ///
+    /// Only the 32-byte digest is stored on-chain (never a document or URL).
+    /// Passing `None` leaves the reference absent.
+    pub fn request_loan_with_note(
+        env: Env,
+        borrower: Address,
+        loan_id: BytesN<32>,
+        principal: i128,
+        note_hash: Option<BytesN<32>>,
+    ) -> Result<(), PoolError> {
+        Self::check_function_not_paused(&env, PauseGroup::LoanRequests)?;
+        Self::check_whitelist(&env, &borrower)?;
+        borrower.require_auth();
+        if let Some(ref hash) = note_hash {
+            if Self::is_zero_hash(&env, hash) {
+                return Err(PoolError::InvalidAmount);
+            }
+        }
+        Self::do_request_loan(&env, borrower, loan_id.clone(), principal, None)?;
+        if let Some(hash) = note_hash {
+            env.storage()
+                .persistent()
+                .set(&FeatureKey::LoanNoteHash(loan_id.clone()), &hash);
+            env.events()
+                .publish((Symbol::new(&env, "note_hash_set"), loan_id), hash);
+        }
+        Ok(())
+    }
+
+    /// Sets or updates a loan's 32-byte SHA-256 off-chain note reference.
+    ///
+    /// Allowed only while the loan is still unfunded (`Requested` with zero
+    /// disbursement). Once funded/approved the note hash is immutable.
+    pub fn set_loan_note_hash(
+        env: Env,
+        loan_id: BytesN<32>,
+        note_hash: BytesN<32>,
+    ) -> Result<(), PoolError> {
+        Self::check_not_paused(&env)?;
+        if Self::is_zero_hash(&env, &note_hash) {
+            return Err(PoolError::InvalidAmount);
+        }
+        let loan = Self::read_loan(&env, &loan_id)?;
+        loan.borrower.require_auth();
+        if loan.status != LoanStatus::Requested || loan.disbursed > 0 {
+            return Err(PoolError::InvalidLoanState);
+        }
+        env.storage()
+            .persistent()
+            .set(&FeatureKey::LoanNoteHash(loan_id.clone()), &note_hash);
+        env.events()
+            .publish((Symbol::new(&env, "note_hash_set"), loan_id), note_hash);
+        Ok(())
+    }
+
+    /// Returns the 32-byte SHA-256 off-chain note hash attached to `loan_id`,
+    /// or `None` if no reference was attached.
+    pub fn get_loan_note_hash(
+        env: Env,
+        loan_id: BytesN<32>,
+    ) -> Result<Option<BytesN<32>>, PoolError> {
+        let _ = Self::read_loan(&env, &loan_id)?;
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&FeatureKey::LoanNoteHash(loan_id)))
+    }
+
+    fn is_zero_hash(env: &Env, hash: &BytesN<32>) -> bool {
+        *hash == BytesN::from_array(env, &[0u8; 32])
+    }
+
     fn do_request_loan(
         env: &Env,
         borrower: Address,
@@ -2588,6 +2883,7 @@ impl LendingPoolContract {
         principal: i128,
         escrow_origin: Option<Address>,
     ) -> Result<(), PoolError> {
+        Self::check_utilization_not_auto_paused(env)?;
         if principal <= 0 {
             return Err(PoolError::InvalidAmount);
         }
@@ -2712,6 +3008,7 @@ impl LendingPoolContract {
         interest_only_months: u32,
     ) -> Result<(), PoolError> {
         Self::check_not_paused(&env)?;
+        Self::check_utilization_not_auto_paused(&env)?;
         let config = Self::read_config(&env)?;
         config.admin.require_auth();
 
@@ -2784,6 +3081,7 @@ impl LendingPoolContract {
         env.storage()
             .instance()
             .set(&DataKey::ActiveLoanCommitments, &new_commitments);
+        Self::refresh_utilization_auto_pause(&env);
 
         // From approval the loan counts against the borrower's exposure cap.
         let exposure = Self::read_borrower_exposure(&env, &loan.borrower);
@@ -3588,6 +3886,7 @@ impl LendingPoolContract {
                 &DataKey::ActiveLoanCommitments,
                 &(active_commitments - amount),
             );
+            Self::refresh_utilization_auto_pause(&env);
 
             env.storage()
                 .instance()
@@ -4310,6 +4609,7 @@ impl LendingPoolContract {
         env.storage()
             .instance()
             .set(&DataKey::TotalLiquidity, &liquidity);
+        Self::refresh_utilization_auto_pause(&env);
 
         env.storage()
             .instance()
@@ -5084,6 +5384,7 @@ impl LendingPoolContract {
         env.storage()
             .instance()
             .set(&DataKey::TotalLiquidity, &liquidity);
+        Self::refresh_utilization_auto_pause(&env);
 
         // Reduce the recorded loss, capped at the recovered amount.
         let current_loss = Self::read_total_defaulted_loss(&env);
@@ -5239,6 +5540,30 @@ impl LendingPoolContract {
                 }
             }
 
+            // ── Per-Deposit Withdrawal Grace Window Check ─────────────────
+            // Each deposit carries its own unlock ledger so earlier eligible
+            // deposits remain withdrawable while newer deposits are still
+            // inside their grace window.
+            let current_ledger = env.ledger().sequence();
+            let active_lots = Self::prune_deposit_grace_lots(&env, &investor, current_ledger);
+            let mut locked_in_grace: i128 = 0;
+            for lot in active_lots.iter() {
+                locked_in_grace = locked_in_grace.saturating_add(lot.amount);
+            }
+            let eligible_for_withdrawal = record.deposited.saturating_sub(locked_in_grace);
+            if amount > eligible_for_withdrawal {
+                return Err(PoolError::LockupPeriodActive);
+            }
+            if active_lots.is_empty() {
+                env.storage()
+                    .persistent()
+                    .remove(&FeatureKey::InvestorDepositLots(investor.clone()));
+            } else {
+                env.storage()
+                    .persistent()
+                    .set(&FeatureKey::InvestorDepositLots(investor.clone()), &active_lots);
+            }
+
             // ── Max Single Withdrawal Check ───────────────────────────────
             // Caps the blast radius of a compromised key or contract bug: a
             // larger position must be split across multiple calls.
@@ -5290,6 +5615,7 @@ impl LendingPoolContract {
             env.storage()
                 .instance()
                 .set(&DataKey::TotalDeposited, &total_dep);
+            Self::refresh_utilization_auto_pause(&env);
 
             // Track total fees collected
             let total_fees = Self::read_total_withdrawal_fees(&env) + fee_amount;
@@ -5535,6 +5861,31 @@ impl LendingPoolContract {
     /// Returns an investor's record.
     pub fn get_investor_info(env: Env, investor: Address) -> InvestorRecord {
         Self::read_investor(&env, &investor)
+    }
+
+    /// Returns an investor's pro-rata share of their tranche's absorbed default
+    /// losses based on their principal-claim share
+    /// (`floor(tranche.total_loss_absorbed * debt_balance / debt_total_supply)`).
+    /// Any sub-unit truncation remainder remains accounted for at the pool's
+    /// tranche level (`tranche.total_loss_absorbed`) rather than being lost.
+    pub fn get_investor_absorbed_loss(env: Env, investor: Address) -> i128 {
+        let record = Self::read_investor(&env, &investor);
+        let tranche_supply = Self::read_debt_total_supply(&env, &record.tranche);
+        if tranche_supply <= 0 {
+            return 0;
+        }
+        let investor_claim = Self::read_debt_balance(&env, &investor, &record.tranche);
+        if investor_claim <= 0 {
+            return 0;
+        }
+        let tranche_info = Self::read_tranche_info(&env, &record.tranche);
+        if tranche_info.total_loss_absorbed <= 0 {
+            return 0;
+        }
+        tranche_info
+            .total_loss_absorbed
+            .saturating_mul(investor_claim)
+            / tranche_supply
     }
 
     /// Returns transferable principal-claim balance for an investor/tranche.
