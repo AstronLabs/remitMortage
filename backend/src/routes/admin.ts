@@ -51,6 +51,7 @@ import {
   getShadowMetrics,
   updateModelConfig,
 } from "../services/scoring.js";
+import { getScoreLineage } from "../services/scoreLineage.js";
 import {
   getStageDurationSummary,
   DEFAULT_STAGE_SUMMARY_WINDOW_DAYS,
@@ -788,6 +789,51 @@ adminRouter.post("/waitlist/promote", requireAdmin, async (req: AuthenticatedReq
   } catch (err) {
     logger.error("[AdminRouter] waitlist promote failed", { err });
     return res.status(500).json({ error: "waitlist_promote_failed" });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/scoring/scores/{scoreId}/lineage:
+ *   get:
+ *     summary: Retrieve the data lineage behind a stored credit score
+ *     description: >
+ *       Returns the exact inputs, model version and computation timestamp that
+ *       produced a stored score, so it can be recomputed during a dispute.
+ *       `scoreId` is the verification result id returned by the verification
+ *       flow. Lineage is only available until its retention window elapses.
+ *     tags:
+ *       - Admin
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: scoreId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The score's lineage record.
+ *       404:
+ *         description: No lineage exists for the given score (never computed, or already purged).
+ */
+adminRouter.get("/scoring/scores/:scoreId/lineage", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const rawScoreId = req.params.scoreId;
+  const scoreId = Array.isArray(rawScoreId) ? rawScoreId[0] : rawScoreId;
+
+  try {
+    const lineage = await getScoreLineage(scoreId);
+    if (!lineage) {
+      return res.status(404).json({
+        error: "score_lineage_not_found",
+        message: `No lineage found for score ${scoreId}`,
+      });
+    }
+    return res.json({ lineage });
+  } catch (error) {
+    logger.error("Failed to fetch score lineage", { error, scoreId });
+    return res.status(500).json({ error: "failed_to_fetch_score_lineage" });
   }
 });
 
