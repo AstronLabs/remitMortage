@@ -9,6 +9,7 @@ import { runKycExpiryReminderJob } from "./kycExpiryReminder.js";
 import { runInvestorReverificationJob } from "./investorReverificationReminder.js";
 import { runEscrowReconciliation } from "./escrowReconciliation.js";
 import { runApplicationSlaMonitorJob } from "./applicationSlaMonitor.js";
+import { runStuckStageAlertScan } from "../services/loanReviewStages.js";
 import { runAdminPortfolioDigestJob } from "./adminPortfolioDigest.js";
 import { runSlowQueryDigestJob } from "./slowQueryDigest.js";
 import { runSessionTokenPurgeJob } from "./sessionTokenPurge.js";
@@ -35,6 +36,7 @@ let kycExpiryTask: ReturnType<typeof cron.schedule> | null = null;
 let investorReverificationTask: ReturnType<typeof cron.schedule> | null = null;
 let escrowReconciliationTask: ReturnType<typeof cron.schedule> | null = null;
 let applicationSlaTask: ReturnType<typeof cron.schedule> | null = null;
+let reviewStageStuckTask: ReturnType<typeof cron.schedule> | null = null;
 let adminDigestTask: ReturnType<typeof cron.schedule> | null = null;
 let slowQueryDigestTask: ReturnType<typeof cron.schedule> | null = null;
 let sessionTokenPurgeTask: ReturnType<typeof cron.schedule> | null = null;
@@ -129,6 +131,18 @@ export function startScheduler() {
   applicationSlaTask = cron.schedule(slaSchedule, scheduledJob("application-sla", async () => {
     console.log("[Scheduler] Triggering application SLA monitor job...");
     await runApplicationSlaMonitorJob();
+  }), { timezone: "UTC" });
+
+  // Every 30 minutes: alert on applications stuck in a review stage past the
+  // configured threshold (issue #1047). Delivery is exactly-once per interval;
+  // the threshold is admin-configurable via REVIEW_STAGE_STUCK_THRESHOLD_HOURS.
+  const stageStuckSchedule = process.env.REVIEW_STAGE_STUCK_ALERT_CRON_SCHEDULE || "*/30 * * * *";
+  reviewStageStuckTask = cron.schedule(stageStuckSchedule, scheduledJob("review-stage-stuck-alert", async () => {
+    try {
+      await runStuckStageAlertScan();
+    } catch (error) {
+      logger.error("[Scheduler] Review-stage stuck alert scan failed", { error });
+    }
   }), { timezone: "UTC" });
 
   // Weekly (Mon 08:00 UTC) by default: admin portfolio summary digest.
@@ -288,6 +302,10 @@ export function stopScheduler() {
   if (applicationSlaTask) {
     applicationSlaTask.stop();
     applicationSlaTask = null;
+  }
+  if (reviewStageStuckTask) {
+    reviewStageStuckTask.stop();
+    reviewStageStuckTask = null;
   }
   if (adminDigestTask) {
     adminDigestTask.stop();

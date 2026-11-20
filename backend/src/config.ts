@@ -109,6 +109,11 @@ export interface Config {
   rpcHealthCheckIntervalMs: number;
   /** Per-status SLA window in hours for loan applications. */
   applicationSlaHours: Record<string, number>;
+  /**
+   * Hours an application may sit in a single review stage before the
+   * stuck-stage alert fires. Overridable per scan from the admin endpoint.
+   */
+  reviewStageStuckThresholdHours: number;
   /** Fallback recipient email for ops SLA alerts. */
   opsFallbackAlertEmail: string;
   /** Incoming Slack webhook URL for ops SLA alerts. */
@@ -342,6 +347,10 @@ export function loadConfig(): Config {
       10
     ),
     applicationSlaHours: parseApplicationSlaHours(process.env.APPLICATION_SLA_HOURS),
+    reviewStageStuckThresholdHours: parseInt(
+      process.env.REVIEW_STAGE_STUCK_THRESHOLD_HOURS || "72",
+      10
+    ),
     opsFallbackAlertEmail:
       process.env.OPS_FALLBACK_ALERT_EMAIL ||
       process.env.ALERT_DEFAULT_RECIPIENT ||
