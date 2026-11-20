@@ -51,6 +51,9 @@ mod test_loan_note_hash;
 #[cfg(test)]
 mod test_utilization_auto_pause;
 
+#[cfg(test)]
+mod test_pro_rata_loss_allocation;
+
 pub use crate::errors::{LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
     BatchDisburseItem, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot, FeatureKey,
@@ -5858,6 +5861,31 @@ impl LendingPoolContract {
     /// Returns an investor's record.
     pub fn get_investor_info(env: Env, investor: Address) -> InvestorRecord {
         Self::read_investor(&env, &investor)
+    }
+
+    /// Returns an investor's pro-rata share of their tranche's absorbed default
+    /// losses based on their principal-claim share
+    /// (`floor(tranche.total_loss_absorbed * debt_balance / debt_total_supply)`).
+    /// Any sub-unit truncation remainder remains accounted for at the pool's
+    /// tranche level (`tranche.total_loss_absorbed`) rather than being lost.
+    pub fn get_investor_absorbed_loss(env: Env, investor: Address) -> i128 {
+        let record = Self::read_investor(&env, &investor);
+        let tranche_supply = Self::read_debt_total_supply(&env, &record.tranche);
+        if tranche_supply <= 0 {
+            return 0;
+        }
+        let investor_claim = Self::read_debt_balance(&env, &investor, &record.tranche);
+        if investor_claim <= 0 {
+            return 0;
+        }
+        let tranche_info = Self::read_tranche_info(&env, &record.tranche);
+        if tranche_info.total_loss_absorbed <= 0 {
+            return 0;
+        }
+        tranche_info
+            .total_loss_absorbed
+            .saturating_mul(investor_claim)
+            / tranche_supply
     }
 
     /// Returns transferable principal-claim balance for an investor/tranche.
