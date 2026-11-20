@@ -65,6 +65,9 @@ import { notificationTemplatesAdminRouter } from "./routes/notificationTemplates
 import { adminSearchRouter } from "./routes/adminSearch.js";
 import { adminLatencyRouter } from "./routes/adminLatency.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { errorCatalogRouter } from "./routes/errorCatalog.js";
+import { sessionsRouter } from "./routes/sessions.js";
+import { dsarAdminRouter } from "./routes/dsar.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { logMasker } from "./middleware/logMasker.js";
 import { payloadLimits } from "./middleware/payloadLimits.js";
@@ -306,6 +309,8 @@ app.use("/api/health/rpc", rpcHealthRouter);
 app.use("/api/health", healthRouter);
 // Public, cache-backed up/down summary — no authentication, no internal detail.
 app.use("/api/status", statusRouter);
+app.use("/api/errors", errorCatalogRouter);
+app.use("/api/sessions", authMiddleware, readYourWritesMiddleware, sessionsRouter);
 app.use("/api/verification", verificationLimiter, verificationRouter);
 app.use("/api/verify", verificationLimiter, verifyRouter);
 app.use("/api/borrower", mutationRateLimiter, authMiddleware, readYourWritesMiddleware, borrowerRouter);
@@ -347,6 +352,7 @@ app.use("/api/admin", adminAuthRouter);
 // ends an active impersonation session.
 app.use("/api/admin", impersonationRouter);
 app.use("/api/admin/api-keys", apiKeysRouter);
+app.use("/api/admin/dsar", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), dsarAdminRouter);
 app.use("/api/exports", exportsRouter);
 app.use("/api/keys", apiKeyUsageRouter);
 app.use("/api/webhooks/pagerduty", incidentWebhookRouter);
