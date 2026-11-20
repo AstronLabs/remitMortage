@@ -11,6 +11,7 @@
 import { Router, Response } from "express";
 import logger from "../utils/logger.js";
 import type { AuthenticatedRequest } from "../middleware/auth.js";
+import { strongEtag } from "../middleware/etag.js";
 import {
   OfferingWatchError,
   listUpcomingOfferings,
@@ -37,7 +38,7 @@ watchlistRouter.get("/", async (req: AuthenticatedRequest, res: Response) => {
 });
 
 /** GET /api/watchlist/upcoming — offerings not yet open for investment, flagged with whether the caller watches each. */
-watchlistRouter.get("/upcoming", async (req: AuthenticatedRequest, res: Response) => {
+watchlistRouter.get("/upcoming", strongEtag({ userScoped: true }), async (req: AuthenticatedRequest, res: Response) => {
   const walletAddress = req.user?.walletAddress;
   if (!walletAddress) {
     return res.status(401).json({ error: "unauthorized" });

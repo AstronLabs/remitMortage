@@ -16,6 +16,7 @@ import {
 import { getLendingPoolRates } from "../services/soroban.js";
 import { feeEstimator } from "../services/feeEstimator.js";
 import { cacheMiddleware } from "../middleware/cache.js";
+import { strongEtag } from "../middleware/etag.js";
 import { loadConfig } from "../config.js";
 import { convertUsdTo } from "../services/fx.js";
 import { authMiddleware, requireAdmin } from "../middleware/auth.js";
@@ -281,7 +282,7 @@ analyticsRouter.get("/volume", cacheMiddleware(60), async (req, res) => {
  *       503:
  *         description: Lending pool contract is not configured.
  */
-analyticsRouter.get("/pool-rates", cacheMiddleware(60), async (_req, res) => {
+analyticsRouter.get("/pool-rates", strongEtag(), cacheMiddleware(60), async (_req, res) => {
   const { lendingPoolContractId } = loadConfig();
 
   if (!lendingPoolContractId) {

@@ -6,6 +6,7 @@ import { StrKey } from "@stellar/stellar-sdk";
 import logger from "../utils/logger.js";
 import { validatePositiveNumber } from "../middleware/validate.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
+import { strongEtag } from "../middleware/etag.js";
 import {
   createApplication,
   getApplication,
@@ -220,7 +221,7 @@ loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"
 // ---------------------------------------------------------------------------
 // GET /api/loan/borrower/:address
 // ---------------------------------------------------------------------------
-loanRouter.get("/borrower/:address", async (req, res) => {
+loanRouter.get("/borrower/:address", strongEtag({ userScoped: true }), async (req, res) => {
   const address = String(req.params?.address ?? "");
   try {
     StrKey.decodeEd25519PublicKey(address);
@@ -238,7 +239,7 @@ loanRouter.get("/borrower/:address", async (req, res) => {
 // ---------------------------------------------------------------------------
 // GET /api/loan/pending
 // ---------------------------------------------------------------------------
-loanRouter.get("/pending", async (req, res) => {
+loanRouter.get("/pending", strongEtag(), async (req, res) => {
   const pending = await getPendingApplications();
   return res.json(pending);
 });
