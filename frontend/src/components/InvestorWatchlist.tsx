@@ -1,4 +1,6 @@
 "use client";
+
+import { EmptyState } from "@/components/EmptyState";
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
@@ -135,14 +137,14 @@ export function InvestorWatchlist() {
       ) : (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-6">
-            <h3 className="mb-1 text-sm font-bold text-white">Upcoming offerings</h3>
+            <h3 id="upcoming-offerings" className="mb-1 text-sm font-bold text-white">Upcoming offerings</h3>
             <p className="mb-4 text-xs text-slate-500">
               Still in underwriting. Watch one to be notified when it opens for investment.
             </p>
             {loading && upcoming.length === 0 ? (
               <p className="text-xs text-slate-400">Loading…</p>
             ) : upcoming.length === 0 ? (
-              <p className="text-xs text-slate-400">No upcoming offerings right now.</p>
+              <EmptyState title="No upcoming offerings right now." message="New offerings appear here when underwriting begins." action={{ label: "Check again", onClick: () => void load() }} />
             ) : (
               <ul className="space-y-2">
                 {upcoming.map((offering) => (
@@ -196,7 +198,7 @@ export function InvestorWatchlist() {
               Offerings you&apos;re tracking — separate from your active holdings.
             </p>
             {watchlist.length === 0 ? (
-              <p className="text-xs text-slate-400">You aren&apos;t watching any offerings yet.</p>
+              <EmptyState title="You aren't watching any offerings yet." message="Watch an offering to follow its progress." action={{ label: "Browse offerings", href: "#upcoming-offerings" }} />
             ) : (
               <ul className="space-y-2">
                 {watchlist.map((item) => (

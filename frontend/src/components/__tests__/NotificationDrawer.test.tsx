@@ -59,6 +59,31 @@ describe("NotificationDrawer Component", () => {
     jest.clearAllMocks();
   });
 
+  it("shows an onboarding action when the inbox has no history", () => {
+    const original = mockHistory.splice(0);
+    try {
+      render(<NotificationDrawer />);
+      expect(screen.getByText("No notifications yet")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Go to dashboard" })).toHaveAttribute("href", "/dashboard");
+    } finally {
+      mockHistory.push(...original);
+    }
+  });
+
+  it("clears the unread filter when only read notifications exist", () => {
+    const original = mockHistory.splice(0);
+    mockHistory.push({ ...original[0], read: true });
+    try {
+      render(<NotificationDrawer />);
+      fireEvent.click(screen.getByRole("button", { name: /unread/i }));
+      expect(screen.getByText("No unread notifications")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+      expect(screen.getAllByRole("article")).toHaveLength(1);
+    } finally {
+      mockHistory.splice(0, mockHistory.length, ...original);
+    }
+  });
+
   it("renders notification inbox drawer when panel is open", () => {
     render(<NotificationDrawer />);
 

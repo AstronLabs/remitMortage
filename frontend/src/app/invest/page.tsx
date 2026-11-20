@@ -1,4 +1,6 @@
 "use client";
+
+import { EmptyState } from "@/components/EmptyState";
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
@@ -578,6 +580,8 @@ function InvestPageInner() {
 
                 {!isConnected ? (
                   <p className="text-xs text-slate-500">Connect wallet to view portfolio status.</p>
+                ) : position && Number(position.deposited) === 0 ? (
+                  <EmptyState title="No active investments" message="A pool deposit will appear in your position here." action={isReadOnly ? undefined : { label: "Make a deposit", href: "#deposit-amount" }} />
                 ) : position ? (
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-3">
