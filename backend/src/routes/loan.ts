@@ -6,6 +6,7 @@ import { StrKey } from "@stellar/stellar-sdk";
 import logger from "../utils/logger.js";
 import { validatePositiveNumber } from "../middleware/validate.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
+import { requireRpcAvailable } from "../middleware/rpcDegradedMode.js";
 import {
   createApplication,
   getApplication,
@@ -92,7 +93,7 @@ function missingExpectedVersionResponse(res: Response) {
 }
 
 // POST /api/loan/apply
-loanRouter.post("/apply", idempotencyMiddleware, validatePositiveNumber("amount"), async (req, res) => {
+loanRouter.post("/apply", requireRpcAvailable(), idempotencyMiddleware, validatePositiveNumber("amount"), async (req, res) => {
   try {
     const { borrowerAddress, amount, fullName, address, idDocumentNumber, taxId } = req.body ?? {};
 
@@ -245,7 +246,7 @@ loanRouter.get("/pending", async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // POST /api/loan/:id/approve
-loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
+loanRouter.post("/:id/approve", requireRpcAvailable(), idempotencyMiddleware, async (req, res) => {
   const id = String(req.params?.id ?? "");
   // Issue #760: approval is operator-only — even the owning borrower is rejected.
   const app = await requireLoanAdmin(req as AuthenticatedRequest, res, id);
