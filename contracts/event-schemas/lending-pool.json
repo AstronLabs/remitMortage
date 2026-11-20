@@ -774,6 +774,15 @@
         ]
       }
     ],
+    "set_drmnt": [
+      {
+        "topicArgs": [],
+        "dataKind": "value",
+        "data": [
+          "period"
+        ]
+      }
+    ],
     "set_eicap": [
       {
         "topicArgs": [],

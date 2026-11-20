@@ -236,6 +236,14 @@ pub struct PoolConfig {
     /// valid. A payoff executed within the window settles at exactly the
     /// quoted amount. `0` disables quoting (quotes cannot be created).
     pub payoff_quote_window_ledgers: u32,
+    /// Number of ledgers of inactivity after which an investor position is
+    /// reported as dormant by the read-only `is_investor_dormant`. The clock
+    /// is the investor's most recent deposit, withdrawal or claim.
+    ///
+    /// `0` — the deployment default — disables the report entirely (no
+    /// position is ever flagged), so existing behaviour is unchanged until an
+    /// admin opts in via `set_dormant_period_ledgers`.
+    pub dormant_period_ledgers: u32,
 }
 
 /// Tracks an individual investor's capital contribution.
@@ -586,6 +594,11 @@ pub enum FeatureKey {
     /// Absent until the investor makes their first deposit.
     /// Used to enforce `deposit_cooldown_ledgers`.
     InvestorLastDeposit(Address),
+    /// Ledger sequence of an investor's most recent deposit, withdrawal or
+    /// claim. Absent until the investor's first position-changing action.
+    /// Used to report dormant positions; kept separate from the
+    /// deposit-only `InvestorLastDeposit` so cooldown semantics are unaffected.
+    InvestorLastActivity(Address),
     /// Rate-lock snapshot stored when `request_refinance` is called.
     /// Cleared on successful `execute_refinance` or when superseded by a
     /// new request.  Keyed by loan ID.
