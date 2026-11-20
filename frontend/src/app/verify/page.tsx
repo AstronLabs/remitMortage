@@ -89,7 +89,7 @@ function VerifyPageInner() {
 
       <div className="rm-verify-content max-w-4xl mx-auto px-4 md:px-6 pt-32 pb-20 relative z-10">
         {/* Header */}
-        <div className="mb-10 text-center md:text-left">
+        <div className="mb-10 text-center md:text-start">
           <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-cyan-500/10 text-cyan-400 text-xs font-semibold uppercase tracking-wider mb-4 border border-cyan-500/20">
             <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
             {t("eyebrow")}
@@ -387,9 +387,9 @@ function Timeline({ stats }: { stats: VerificationStats }) {
           </span>
         </div>
         <div className="flex-1 relative h-3 rounded-full bg-slate-950 border border-slate-800 overflow-hidden flex items-center">
-          <span className="absolute inset-0 rounded-full bg-gradient-to-r from-cyan-400 via-indigo-500 to-emerald-400" />
+          <span className="absolute inset-0 rounded-full bg-gradient-to-r rtl:bg-gradient-to-l from-cyan-400 via-indigo-500 to-emerald-400" />
         </div>
-        <div className="text-right shrink-0">
+        <div className="text-end shrink-0">
           <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-0.5">
             Latest Recorded
           </span>

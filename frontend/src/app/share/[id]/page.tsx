@@ -133,7 +133,7 @@ export default async function SharePage({ params }: Props) {
                   </span>
                 </div>
                 <div className="w-full h-2 rounded-full bg-slate-900 border border-slate-800 overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                  <div className="h-full bg-gradient-to-r rtl:bg-gradient-to-l from-cyan-400 to-emerald-400 rounded-full transition-all" style={{ width: `${pct}%` }} />
                 </div>
                 <div className="flex justify-between mt-1.5 text-[11px]">
                   <span className="text-slate-500">Loan: {data.loanStatus}</span>

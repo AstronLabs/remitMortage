@@ -93,13 +93,13 @@ export default function ApplicantCommunicationTimeline({ adminToken }: { adminTo
           <h3 className="text-sm font-semibold">Applicant Communication Timeline</h3>
         </div>
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--text-muted)]" />
+          <Search className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--text-muted)]" />
           <input
             type="text"
             placeholder="Applicant id or stellar address..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-primary)]"
+            className="w-full ps-9 pe-3 py-2 text-sm rounded-lg border border-[var(--border-color)] bg-[var(--bg-secondary)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-primary)]"
           />
         </div>
         <button

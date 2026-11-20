@@ -16,6 +16,7 @@ import {
   AreaChart,
   Legend,
 } from "recharts";
+import { useChartDirection } from "@/hooks/useChartDirection";
 
 type CreditTier = "Insufficient" | "Fair" | "Good" | "Excellent";
 
@@ -27,6 +28,8 @@ interface SimulationDataPoint {
 }
 
 export default function CreditScoreSimulator() {
+  const chartDirection = useChartDirection();
+
   // Input states
   const [monthlyPayment, setMonthlyPayment] = useState<number>(500);
   const [consistency, setConsistency] = useState<number>(95);
@@ -181,7 +184,10 @@ export default function CreditScoreSimulator() {
       {/* Credit Score Graph */}
       <div className="mb-6 p-6 bg-slate-950/60 border border-slate-800 rounded-xl">
         <ResponsiveContainer width="100%" height={300}>
-          <AreaChart data={simulationData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+          <AreaChart
+            data={simulationData}
+            margin={chartDirection.margin({ top: 10, right: 30, left: 0, bottom: 0 })}
+          >
             <defs>
               <linearGradient id="scoreGradient" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3} />
@@ -191,11 +197,13 @@ export default function CreditScoreSimulator() {
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
             <XAxis
               dataKey="month"
+              reversed={chartDirection.reversed}
               stroke="#94a3b8"
               tick={{ fill: "#94a3b8", fontSize: 12 }}
               label={{ value: "Months", position: "insideBottom", offset: -5, fill: "#94a3b8" }}
             />
             <YAxis
+              orientation={chartDirection.yAxisOrientation}
               stroke="#94a3b8"
               tick={{ fill: "#94a3b8", fontSize: 12 }}
               domain={[0, 100]}

@@ -98,7 +98,7 @@ export default function AccessibleChart({
             tabIndex={0}
             className="max-h-[320px] overflow-auto rounded-lg border border-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
           >
-            <table className="w-full border-collapse text-left text-xs text-slate-300">
+            <table className="w-full border-collapse text-start text-xs text-slate-300">
               <caption className="sr-only">{caption}</caption>
               <thead className="sticky top-0 bg-slate-900">
                 <tr>

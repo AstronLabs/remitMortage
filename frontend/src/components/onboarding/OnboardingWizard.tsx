@@ -22,6 +22,7 @@ import {
   readPersistedReferralCode,
   REFERRAL_QUERY_PARAM,
 } from "@/lib/referralApi";
+import { Illustration } from "@/components/illustrations/Illustration";
 
 const STEPS = ["Connect Wallet", "Verify History", "Set Goal", "Documents", "Submit Application"];
 const FIELD_STEPS: Record<keyof OnboardingFormValues, number> = {
@@ -384,6 +385,10 @@ export default function OnboardingWizard() {
       case 1: // Connect Wallet
         return (
           <div className="text-center space-y-6">
+            <Illustration
+              name="onboarding-connect-wallet"
+              className="w-full max-w-[180px] mx-auto"
+            />
             <div>
               <h3 className="text-xl font-bold text-white mb-2">Connect Freighter Wallet</h3>
               <p className="text-xs text-slate-400">
@@ -566,6 +571,10 @@ export default function OnboardingWizard() {
       case 4: // Required loan documents
         return (
           <div className="space-y-5">
+            <Illustration
+              name="onboarding-documents"
+              className="w-full max-w-[180px] mx-auto"
+            />
             <label className="block text-xs text-slate-300 font-semibold">
               Loan purpose
               <select

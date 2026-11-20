@@ -26,6 +26,7 @@ import {
   getTier,
   TIER_CONFIG,
 } from "@/lib/creditRecovery";
+import { useChartDirection } from "@/hooks/useChartDirection";
 
 interface CreditRecoveryTimelineProps {
   plan: CreditRecoveryPlan;
@@ -39,6 +40,8 @@ interface ChartDataPoint {
 }
 
 export function CreditRecoveryTimeline({ plan }: CreditRecoveryTimelineProps) {
+  // Mirror the time axis and value axis in right-to-left locales.
+  const chartDirection = useChartDirection();
   const allCompletedUpTo = Math.max(0, plan.onTimePayments - plan.missedPayments);
 
   const chartData: ChartDataPoint[] = [
@@ -80,7 +83,10 @@ export function CreditRecoveryTimeline({ plan }: CreditRecoveryTimelineProps) {
       {/* Chart */}
       <div className="p-4 bg-zinc-900/60 border border-zinc-800 rounded-xl">
         <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+          <AreaChart
+            data={chartData}
+            margin={chartDirection.margin({ top: 10, right: 10, left: -10, bottom: 0 })}
+          >
             <defs>
               <linearGradient id="pastGradient" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#ef4444" stopOpacity={0.15} />
@@ -96,11 +102,13 @@ export function CreditRecoveryTimeline({ plan }: CreditRecoveryTimelineProps) {
               dataKey="label"
               stroke="#52525b"
               tick={{ fill: "#a1a1aa", fontSize: 10 }}
+              reversed={chartDirection.reversed}
             />
             <YAxis
               domain={[0, 100]}
               stroke="#52525b"
               tick={{ fill: "#a1a1aa", fontSize: 10 }}
+              orientation={chartDirection.yAxisOrientation}
             />
             <Tooltip
               contentStyle={{
