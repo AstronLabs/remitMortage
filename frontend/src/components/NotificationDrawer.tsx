@@ -195,15 +195,15 @@ export function NotificationDrawer() {
               <EmptyState
                 className="h-full"
                 icon={<BellRing className="h-5 w-5" />}
-                title={activeTab === "unread" ? "No unread notifications" : "No notifications yet"}
+                title={activeTab === "unread" && notificationHistory.length > 0 ? "No unread notifications" : "No notifications yet"}
                 message={
-                  activeTab === "unread"
+                  activeTab === "unread" && notificationHistory.length > 0
                     ? "You've read all your notifications!"
                     : "Contract activity, escrow deposits, and loan events will appear here."
                 }
                 action={
-                  activeTab === "unread"
-                    ? undefined
+                  activeTab === "unread" && notificationHistory.length > 0
+                    ? { label: "Clear filters", onClick: () => setActiveTab("all") }
                     : { label: "Go to dashboard", href: "/dashboard" }
                 }
               />

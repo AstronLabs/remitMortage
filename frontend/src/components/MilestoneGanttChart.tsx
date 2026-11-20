@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 import React, { useState, useMemo } from "react";
+import { useDirection } from "@/context/DirectionContext";
+import { mirrorInterval } from "@/lib/direction";
 
 export type GanttMilestoneStatus =
   | "Proposed"
@@ -67,6 +69,7 @@ interface MilestoneGanttChartProps {
 }
 
 export function MilestoneGanttChart({ milestones, title }: MilestoneGanttChartProps) {
+  const { isRtl } = useDirection();
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
   const [sortBy, setSortBy] = useState<"start" | "status" | "title">("start");
 
@@ -108,7 +111,15 @@ export function MilestoneGanttChart({ milestones, title }: MilestoneGanttChartPr
   const LABEL_WIDTH = 180;
   const HEADER_HEIGHT = 50;
   const ROW_HEIGHT = 48;
+  const CHART_W = 600;
   const CHART_HEIGHT = sorted.length * ROW_HEIGHT + HEADER_HEIGHT + 20;
+
+  // In RTL the time axis flows right→left and the label column moves to the
+  // right, so every time-axis coordinate is mirrored within the chart area.
+  const timeX = (offset: number) =>
+    isRtl ? mirrorInterval(offset, 0, CHART_W) : LABEL_WIDTH + offset;
+  const barXFor = (offset: number, width: number) =>
+    isRtl ? mirrorInterval(offset, width, CHART_W) : LABEL_WIDTH + offset;
 
   function handleMouseEnter(e: React.MouseEvent, milestone: GanttMilestone) {
     const rect = (e.target as SVGElement).closest("svg")?.getBoundingClientRect();
@@ -171,7 +182,7 @@ export function MilestoneGanttChart({ milestones, title }: MilestoneGanttChartPr
         >
           {/* Grid lines */}
           {Array.from({ length: 6 }).map((_, i) => {
-            const x = LABEL_WIDTH + (i / 5) * 600;
+            const x = timeX((i / 5) * CHART_W);
             const date = new Date(
               minDate.getTime() + (i / 5) * (maxDate.getTime() - minDate.getTime())
             );
@@ -204,11 +215,13 @@ export function MilestoneGanttChart({ milestones, title }: MilestoneGanttChartPr
             const y = HEADER_HEIGHT + index * ROW_HEIGHT + 10;
             const offsetPct = getBarOffset(milestone.startDate);
             const widthPct = getBarWidth(milestone.startDate, milestone.endDate);
-            const barX = LABEL_WIDTH + (offsetPct / 100) * 600;
-            const barW = Math.max(4, (widthPct / 100) * 600);
+            const barW = Math.max(4, (widthPct / 100) * CHART_W);
+            const barX = barXFor((offsetPct / 100) * CHART_W, barW);
             const color = STATUS_COLORS[milestone.status];
             const barH = 28;
             const progressW = (milestone.progress / 100) * barW;
+            // In RTL the fill grows from the bar's leading (right) edge.
+            const progressX = isRtl ? barX + barW - progressW : barX;
 
             return (
               <g
@@ -220,11 +233,11 @@ export function MilestoneGanttChart({ milestones, title }: MilestoneGanttChartPr
               >
                 {/* Label */}
                 <text
-                  x={LABEL_WIDTH - 8}
+                  x={isRtl ? CHART_W + 8 : LABEL_WIDTH - 8}
                   y={y + barH / 2 + 4}
                   fill="var(--text-primary)"
                   fontSize="11"
-                  textAnchor="end"
+                  textAnchor={isRtl ? "start" : "end"}
                   className="select-none"
                 >
                   {milestone.title}
@@ -245,7 +258,7 @@ export function MilestoneGanttChart({ milestones, title }: MilestoneGanttChartPr
 
                 {/* Progress fill */}
                 <rect
-                  x={barX}
+                  x={progressX}
                   y={y}
                   width={progressW}
                   height={barH}
@@ -260,15 +273,25 @@ export function MilestoneGanttChart({ milestones, title }: MilestoneGanttChartPr
                     dur="0.5s"
                     fill="freeze"
                   />
+                  {isRtl && (
+                    <animate
+                      attributeName="x"
+                      from={barX + barW}
+                      to={progressX}
+                      dur="0.5s"
+                      fill="freeze"
+                    />
+                  )}
                 </rect>
 
                 {/* Status badge */}
                 <text
-                  x={barX + barW + 6}
+                  x={isRtl ? barX - 6 : barX + barW + 6}
                   y={y + barH / 2 + 4}
                   fill={color.text}
                   fontSize="9"
                   fontWeight="600"
+                  textAnchor={isRtl ? "end" : "start"}
                 >
                   {milestone.status} {milestone.progress}%
                 </text>
@@ -283,8 +306,9 @@ export function MilestoneGanttChart({ milestones, title }: MilestoneGanttChartPr
         <div
           className="fixed z-50 pointer-events-none bg-[var(--bg-card)] border border-[var(--border-color)] rounded-[var(--radius-md)] p-4 shadow-xl"
           style={{
-            left: tooltip.x + 16,
+            left: isRtl ? tooltip.x - 16 : tooltip.x + 16,
             top: tooltip.y - 10,
+            transform: isRtl ? "translateX(-100%)" : undefined,
             maxWidth: "280px",
           }}
         >
@@ -312,15 +336,15 @@ export function MilestoneGanttChart({ milestones, title }: MilestoneGanttChartPr
 
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
             <span className="text-[var(--text-muted)]">Start</span>
-            <span className="text-[var(--text-primary)] text-right font-mono">
+            <span className="text-[var(--text-primary)] text-end font-mono">
               {formatDate(tooltip.milestone.startDate)}
             </span>
             <span className="text-[var(--text-muted)]">End</span>
-            <span className="text-[var(--text-primary)] text-right font-mono">
+            <span className="text-[var(--text-primary)] text-end font-mono">
               {formatDate(tooltip.milestone.endDate)}
             </span>
             <span className="text-[var(--text-muted)]">Progress</span>
-            <span className="text-[var(--text-primary)] text-right font-mono">
+            <span className="text-[var(--text-primary)] text-end font-mono">
               {tooltip.milestone.progress}%
             </span>
           </div>
@@ -348,7 +372,9 @@ export function MilestoneGanttChart({ milestones, title }: MilestoneGanttChartPr
                   className="h-full rounded-full transition-all"
                   style={{
                     width: `${(tooltip.milestone.votesFor / tooltip.milestone.votesTotal) * 100}%`,
-                    background: "linear-gradient(90deg, #10b981, #06b6d4)",
+                    background: isRtl
+                      ? "linear-gradient(270deg, #10b981, #06b6d4)"
+                      : "linear-gradient(90deg, #10b981, #06b6d4)",
                   }}
                 />
               </div>

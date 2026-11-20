@@ -17,6 +17,7 @@ import {
 import AccessibleChart from "@/components/charts/AccessibleChart";
 import type { ChartExportData } from "@/lib/chart-export";
 import { summarizeTrend } from "@/lib/chart-summary";
+import { useChartDirection } from "@/hooks/useChartDirection";
 
 interface HistoricalData {
   date: string;
@@ -28,6 +29,8 @@ export default function YieldAnalyticsChart() {
   const [data, setData] = useState<HistoricalData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Mirror the time axis and value axis in right-to-left locales.
+  const chartDirection = useChartDirection();
 
   useEffect(() => {
     async function fetchData() {
@@ -104,7 +107,10 @@ export default function YieldAnalyticsChart() {
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <AreaChart
+                data={data}
+                margin={chartDirection.margin({ top: 10, right: 10, left: -20, bottom: 0 })}
+              >
                 <defs>
                   <linearGradient id="colorTvl" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3} />
@@ -118,6 +124,7 @@ export default function YieldAnalyticsChart() {
                   fontSize={12} 
                   tickLine={false}
                   axisLine={false}
+                  reversed={chartDirection.reversed}
                 />
                 <YAxis 
                   stroke="#64748b" 
@@ -125,6 +132,7 @@ export default function YieldAnalyticsChart() {
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={formatCurrency}
+                  orientation={chartDirection.yAxisOrientation}
                 />
                 <Tooltip 
                   contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px' }}
@@ -164,7 +172,10 @@ export default function YieldAnalyticsChart() {
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <LineChart
+                data={data}
+                margin={chartDirection.margin({ top: 10, right: 10, left: -20, bottom: 0 })}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
                 <XAxis 
                   dataKey="date" 
@@ -172,6 +183,7 @@ export default function YieldAnalyticsChart() {
                   fontSize={12} 
                   tickLine={false}
                   axisLine={false}
+                  reversed={chartDirection.reversed}
                 />
                 <YAxis 
                   stroke="#64748b" 
@@ -179,6 +191,7 @@ export default function YieldAnalyticsChart() {
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={formatPercent}
+                  orientation={chartDirection.yAxisOrientation}
                 />
                 <Tooltip 
                   contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px' }}

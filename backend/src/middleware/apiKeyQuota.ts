@@ -26,6 +26,33 @@ export interface ApiKeyQuotaConfig {
 }
 
 /**
+ * The per-endpoint counter delegate. Reached through a cast because the
+ * generated Prisma client may predate the model (the same pattern used for
+ * other new models); a migration ships the table and the client is
+ * regenerated on install.
+ */
+function endpointUsageDelegate(client?: unknown) {
+  return (client ?? (prisma as any)).apiKeyEndpointUsage as {
+    findMany: (args: unknown) => Promise<any[]>;
+    upsert: (args: unknown) => Promise<unknown>;
+  };
+}
+
+/**
+ * Stable label for the endpoint a metered request hit, e.g.
+ * "GET /api/exports/transactions". Prefers the matched route *pattern* so
+ * dynamic segments (e.g. an application id) collapse to one label instead of
+ * fanning the breakdown out into one bucket per id.
+ */
+export function endpointLabel(req: Request): string {
+  const routePath = (req as Request & { route?: { path?: string } }).route?.path;
+  const base = req.baseUrl || "";
+  const path = routePath ?? (req.path || "").split("?")[0];
+  const full = `${base}${path}`.replace(/\/+$/, "") || "/";
+  return `${req.method.toUpperCase()} ${full}`;
+}
+
+/**
  * Parses `API_KEY_QUOTA_BY_PLAN`, a comma-separated list of `plan=requests`
  * pairs (e.g. "free=1000,pro=50000,enterprise=1000000"). Malformed or
  * non-positive entries are ignored. Mirrors
@@ -83,12 +110,18 @@ export function resolveBillingPeriod(
  * the counter always increments, even for a request later rejected as
  * over-quota — a request that reached this far already cost the backend
  * the work of authenticating and routing it, so it's fair to count it.
+ *
+ * When `endpoint` is supplied the same increment is also recorded against
+ * that endpoint's per-period counter, so the per-client report's breakdown
+ * sums back to the total. That write is best-effort: a failure there must
+ * never affect the authoritative total or the request itself.
  */
 export async function recordApiKeyRequest(
   apiKeyId: string,
   keyCreatedAt: Date,
   periodDays: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  endpoint?: string
 ): Promise<{ requestCount: number; periodStart: Date; periodEnd: Date }> {
   const { periodStart, periodEnd } = resolveBillingPeriod(keyCreatedAt, periodDays, now);
 
@@ -97,6 +130,19 @@ export async function recordApiKeyRequest(
     create: { apiKeyId, periodStart, periodEnd, requestCount: 1 },
     update: { requestCount: { increment: 1 } },
   });
+
+  if (endpoint) {
+    try {
+      await endpointUsageDelegate().upsert({
+        where: { apiKeyId_periodStart_endpoint: { apiKeyId, periodStart, endpoint } },
+        create: { apiKeyId, periodStart, endpoint, requestCount: 1 },
+        update: { requestCount: { increment: 1 } },
+      });
+    } catch {
+      // The total above is the metering of record; a dropped endpoint row
+      // only under-reports the breakdown, never the total or the request.
+    }
+  }
 
   return { requestCount: usage.requestCount, periodStart, periodEnd };
 }
@@ -117,6 +163,95 @@ export async function readApiKeyUsage(
     where: { apiKeyId_periodStart: { apiKeyId, periodStart } },
   });
   return { requestCount: usage?.requestCount ?? 0, periodStart, periodEnd };
+}
+
+/** One endpoint's share of a report's total, e.g. `{ endpoint, requestCount }`. */
+export interface ApiKeyEndpointUsageSummary {
+  endpoint: string;
+  requestCount: number;
+}
+
+/** A single key's request totals and per-endpoint breakdown for a period. */
+export interface ApiKeyUsageReport {
+  apiKeyId: string;
+  generatedAt: string;
+  /** Inclusive period start; defaults to the current billing period. */
+  since: string;
+  /** Inclusive period end; defaults to the current billing period. */
+  until: string;
+  /** Total metered requests in the period (authoritative, from ApiKeyUsage). */
+  totalRequests: number;
+  /** Per-endpoint counts, most-used first. */
+  byEndpoint: ApiKeyEndpointUsageSummary[];
+}
+
+/**
+ * Builds a usage report for a single API key over a selectable period.
+ *
+ * The period is a range over billing-period *start* dates (the granularity the
+ * existing metering records at): pass `since`/`until` to cover a span of
+ * periods, or omit both to read the current billing period only. The total is
+ * summed straight from `ApiKeyUsage` — the same rows quotas are enforced
+ * against — so it always matches the underlying metering exactly; the
+ * breakdown is summed from the per-endpoint counters recorded alongside it.
+ *
+ * The query is always scoped to `apiKeyId`; callers pass the id of the
+ * *authenticated* key, so a key can never read another key's report.
+ */
+export async function getApiKeyUsageReport(options: {
+  apiKeyId: string;
+  keyCreatedAt: Date;
+  periodDays: number;
+  since?: Date;
+  until?: Date;
+  now?: Date;
+  client?: unknown;
+}): Promise<ApiKeyUsageReport> {
+  const now = options.now ?? new Date();
+  const current = resolveBillingPeriod(options.keyCreatedAt, options.periodDays, now);
+
+  let since: Date;
+  let until: Date;
+  if (options.since || options.until) {
+    since = options.since ?? options.keyCreatedAt;
+    until = options.until ?? now;
+  } else {
+    since = current.periodStart;
+    until = current.periodStart;
+  }
+
+  const periodStartRange = { gte: since, lte: until };
+
+  const usageRows = await prisma.apiKeyUsage.findMany({
+    where: { apiKeyId: options.apiKeyId, periodStart: periodStartRange },
+    select: { requestCount: true },
+  });
+  const totalRequests = usageRows.reduce(
+    (sum: number, row: { requestCount: number }) => sum + (row.requestCount ?? 0),
+    0
+  );
+
+  const endpointRows = await endpointUsageDelegate(options.client).findMany({
+    where: { apiKeyId: options.apiKeyId, periodStart: periodStartRange },
+    select: { endpoint: true, requestCount: true },
+  });
+
+  const perEndpoint = new Map<string, number>();
+  for (const row of endpointRows) {
+    perEndpoint.set(row.endpoint, (perEndpoint.get(row.endpoint) ?? 0) + (row.requestCount ?? 0));
+  }
+  const byEndpoint = [...perEndpoint.entries()]
+    .map(([endpoint, requestCount]) => ({ endpoint, requestCount }))
+    .sort((a, b) => b.requestCount - a.requestCount || a.endpoint.localeCompare(b.endpoint));
+
+  return {
+    apiKeyId: options.apiKeyId,
+    generatedAt: now.toISOString(),
+    since: since.toISOString(),
+    until: until.toISOString(),
+    totalRequests,
+    byEndpoint,
+  };
 }
 
 /**
@@ -144,7 +279,9 @@ export function apiKeyQuotaMiddleware(config: ApiKeyQuotaConfig = loadApiKeyQuot
       const { requestCount, periodEnd } = await recordApiKeyRequest(
         apiKey.id,
         apiKey.createdAt,
-        config.periodDays
+        config.periodDays,
+        new Date(),
+        endpointLabel(req)
       );
 
       const resetUnixSeconds = Math.ceil(periodEnd.getTime() / 1000);

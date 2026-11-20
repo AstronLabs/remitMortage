@@ -4,6 +4,7 @@
 
 import React, { useMemo, useState } from "react";
 import { IPFSMediaPlayer } from "../IPFSMediaPlayer";
+import EvidenceThumbnail from "../EvidenceThumbnail";
 import type { EvidenceRevision } from "../../lib/milestoneRevisionsStore";
 
 export interface EvidenceDiffViewerProps {
@@ -46,7 +47,9 @@ function RevisionPane({ rev, changedFields, side }: { rev: EvidenceRevision; cha
       </div>
 
       <div className="overflow-hidden rounded-lg border border-slate-700 bg-black">
-        <IPFSMediaPlayer cid={rev.cid} />
+        {rev.cid.toLowerCase().endsWith(".mp4")
+          ? <IPFSMediaPlayer cid={rev.cid} />
+          : <EvidenceThumbnail key={rev.cid} cid={rev.cid} label={`revision ${rev.version} evidence`} />}
       </div>
 
       <div className="space-y-1.5">

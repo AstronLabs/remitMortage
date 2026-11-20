@@ -4,10 +4,13 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
+import { useLocale } from "next-intl";
 import { ArrowRight, CheckCircle2, FileText, Landmark, WalletCards } from "lucide-react";
 import { useWallet, OptionalWalletProvider } from "@/context/WalletContext";
 import { EmptyState } from "@/components/EmptyState";
 import HelpLink from "@/components/help/HelpLink";
+import CurrencyAmountInput from "@/components/forms/CurrencyAmountInput";
+import type { Locale } from "@/i18n/locales";
 import { track } from "@/lib/analytics";
 import { announce } from "@/lib/announcer";
 import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
@@ -25,14 +28,15 @@ type Application = {
 
 function ApplicationPageInner() {
   const { publicKey, isConnected, connect } = useWallet();
-  const [amount, setAmount] = useState("");
+  const locale = useLocale() as Locale;
+  const [amount, setAmount] = useState<number | null>(null);
   const [applications, setApplications] = useState<Application[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   // A typed-but-unsubmitted amount is lost on navigation; submitting clears it.
   const { dialogProps: unsavedChangesDialog } = useUnsavedChangesGuard({
-    isDirty: amount.trim() !== "",
+    isDirty: amount !== null,
   });
 
   useEffect(() => {
@@ -45,7 +49,7 @@ function ApplicationPageInner() {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!publicKey || !amount) return;
+    if (!publicKey || amount === null) return;
     setLoading(true);
     setMessage(null);
     track("loan_application_started");
@@ -53,12 +57,12 @@ function ApplicationPageInner() {
       const response = await fetch("/api/loan/applications", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ borrowerAddress: publicKey, amount }),
+        body: JSON.stringify({ borrowerAddress: publicKey, amount: String(amount) }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || data.error || "Application failed");
       setApplications((current) => [data, ...current]);
-      setAmount("");
+      setAmount(null);
       setMessage("Application submitted for underwriting review.");
       announce("Loan application submitted for underwriting review.");
       track("loan_application_submitted");
@@ -103,26 +107,24 @@ function ApplicationPageInner() {
             ) : (
               <form onSubmit={submit} className="rm-form-stack">
                 <label htmlFor="loan-amount">Requested principal</label>
-                <div className="rm-amount-field">
-                  <input
-                    data-testid="loan-amount"
-                    id="loan-amount"
-                    type="number"
-                    min="1"
-                    step="0.01"
-                    value={amount}
-                    onChange={(event) => setAmount(event.target.value)}
-                    placeholder="70,000"
-                  />
-                  <span>USDC</span>
-                </div>
+                <CurrencyAmountInput
+                  id="loan-amount"
+                  data-testid="loan-amount"
+                  locale={locale}
+                  value={amount}
+                  onChange={setAmount}
+                  min={1}
+                  placeholder="70,000"
+                  currencyLabel="USDC"
+                  showInvalidError
+                />
                 <p>
                   Connected borrower: {publicKey?.slice(0, 8)}…{publicKey?.slice(-6)}
                 </p>
                 <button
                   data-testid="loan-submit"
                   className="rm-action-button"
-                  disabled={loading || !amount}
+                  disabled={loading || amount === null}
                 >
                   {loading ? "Submitting…" : "Submit application"}
                   <ArrowRight size={17} />

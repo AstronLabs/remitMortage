@@ -603,6 +603,8 @@ pub enum FeatureKey {
     /// Cleared on successful `execute_refinance` or when superseded by a
     /// new request.  Keyed by loan ID.
     RefinanceRateLock(BytesN<32>),
+    /// Refinance fee rate and pool/treasury shares, all in basis points.
+    RefinanceFeeConfig,
     /// Address of the Governance contract used to gate
     /// `inject_emergency_liquidity`.  Absent until `set_governance_contract`
     /// is called by the admin.
@@ -716,6 +718,32 @@ pub enum FeatureKey {
     /// Cumulative late fees charged on a loan so far, in token stroops.
     /// Absent means zero.
     LoanLateFeesCharged(BytesN<32>),
+    /// Minimum number of ledgers each new investor deposit must wait before
+    /// becoming eligible for withdrawal (`0` disables the grace window).
+    WithdrawalGraceLedgers,
+    /// Per-investor list of deposit lots still subject to a withdrawal grace
+    /// window so each deposit tracks eligibility independently.
+    InvestorDepositLots(Address),
+    /// Optional 32-byte SHA-256 hash referencing an off-chain promissory note
+    /// or servicing agreement for a loan. Hash-only (no document or URL).
+    LoanNoteHash(BytesN<32>),
+    /// Admin-configured pool utilization safety threshold in basis points
+    /// (0..=10_000). When non-zero, new loan originations are automatically
+    /// paused once pool utilization reaches or exceeds this threshold.
+    UtilizationPauseThresholdBps,
+    /// Latched automatic origination-pause flag triggered when pool
+    /// utilization reached or exceeded `UtilizationPauseThresholdBps`.
+    UtilizationAutoPaused,
+}
+
+/// One investor deposit lot tracked independently for the withdrawal grace window.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DepositGraceLot {
+    /// Principal deposited in this lot (token stroops).
+    pub amount: i128,
+    /// Ledger sequence at which this lot becomes eligible for withdrawal.
+    pub unlock_ledger: u32,
 }
 
 /// Terms a loan was originated with, latched at creation and never changed

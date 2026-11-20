@@ -51,6 +51,10 @@ import {
   getShadowMetrics,
   updateModelConfig,
 } from "../services/scoring.js";
+import {
+  getStageDurationSummary,
+  DEFAULT_STAGE_SUMMARY_WINDOW_DAYS,
+} from "../services/loanReviewStages.js";
 
 export const adminRouter = Router();
 
@@ -482,6 +486,88 @@ function positiveIntParam(raw: unknown, fallback: number): number | null {
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : null;
 }
+
+/** Hard cap on the stage-duration look-back window (one year). */
+const MAX_STAGE_SUMMARY_WINDOW_DAYS = 365;
+
+/**
+ * Resolve the [periodStart, periodEnd] window for the stage-duration summary.
+ * Accepts either an explicit `since`/`until` ISO range or a `windowDays`
+ * look-back ending now. Returns null when the supplied values are unusable so
+ * the caller can answer 400 rather than silently widening the window.
+ */
+function resolveStageSummaryPeriod(
+  query: Record<string, unknown>
+): { periodStart: Date; periodEnd: Date } | null {
+  const parseDate = (raw: unknown): Date | null => {
+    if (typeof raw !== "string" || raw === "") return null;
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
+  const hasSince = query.since !== undefined;
+  const hasUntil = query.until !== undefined;
+  const since = hasSince ? parseDate(query.since) : null;
+  const until = hasUntil ? parseDate(query.until) : null;
+  if ((hasSince && since === null) || (hasUntil && until === null)) return null;
+
+  const periodEnd = until ?? new Date();
+
+  let periodStart: Date;
+  if (since) {
+    periodStart = since;
+  } else {
+    const windowDays = positiveIntParam(query.windowDays, DEFAULT_STAGE_SUMMARY_WINDOW_DAYS);
+    if (windowDays === null || windowDays > MAX_STAGE_SUMMARY_WINDOW_DAYS) return null;
+    periodStart = new Date(periodEnd.getTime() - windowDays * 86_400_000);
+  }
+
+  if (periodStart.getTime() > periodEnd.getTime()) return null;
+  return { periodStart, periodEnd };
+}
+
+/**
+ * @openapi
+ * /api/admin/loans/stage-durations:
+ *   get:
+ *     summary: Average and worst-case time per loan review stage
+ *     description: >-
+ *       Aggregates how long applications spend in each review stage over a
+ *       selectable period, reporting the average and worst-case duration per
+ *       stage plus how many intervals are still open (currently in-flight).
+ *       The period is an explicit ISO `since`/`until` range or a `windowDays`
+ *       look-back ending now.
+ *     tags:
+ *       - Admin
+ *     parameters:
+ *       - in: query
+ *         name: since
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: until
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: windowDays
+ *         schema: { type: integer, minimum: 1, maximum: 365 }
+ *     responses:
+ *       200:
+ *         description: Per-stage duration report.
+ *       400:
+ *         description: Invalid period parameters.
+ */
+adminRouter.get("/loans/stage-durations", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const period = resolveStageSummaryPeriod(req.query as Record<string, unknown>);
+  if (!period) {
+    return res.status(400).json({ error: "invalid_period" });
+  }
+
+  try {
+    return res.json(await getStageDurationSummary(period));
+  } catch (error) {
+    logger.error("Stage duration summary error", { error });
+    return res.status(500).json({ error: "stage_duration_summary_failed" });
+  }
+});
 
 /**
  * @openapi

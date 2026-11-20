@@ -11,6 +11,11 @@
  * resolution lives here and both import it.
  */
 
+import {
+  buildStatementTimeoutOption,
+  getStatementTimeoutMs,
+} from "./statementTimeout.js";
+
 /** Defaults applied when the corresponding env var is unset or unparseable. */
 export const DB_POOL_DEFAULTS = {
   /** Maximum open connections to PostgreSQL for this process. */
@@ -81,6 +86,12 @@ export function resolveReadReplicaSettings(
 /**
  * Append the pool settings to a database URL as query-string parameters, which
  * is how Prisma accepts them. Returns undefined when no base URL is set.
+ *
+ * The `options` parameter installs a per-session `statement_timeout` on every
+ * connection the pool opens, so the database cuts off a runaway statement
+ * before it can hold a pooled connection indefinitely (issue #1034). Long-
+ * running jobs raise this limit for a single transaction via
+ * `runWithStatementTimeout` rather than by changing the connection default.
  */
 export function buildDatabaseUrl(
   env: NodeJS.ProcessEnv = process.env,
@@ -91,11 +102,13 @@ export function buildDatabaseUrl(
 
   const { connectionLimit, poolTimeout, connectTimeout } = resolvePoolSettings(env);
   const separator = base.includes("?") ? "&" : "?";
+  const statementTimeout = buildStatementTimeoutOption(getStatementTimeoutMs(env));
 
   return (
     `${base}${separator}` +
     `connection_limit=${connectionLimit}` +
     `&pool_timeout=${poolTimeout}` +
-    `&connect_timeout=${connectTimeout}`
+    `&connect_timeout=${connectTimeout}` +
+    `&options=${statementTimeout}`
   );
 }

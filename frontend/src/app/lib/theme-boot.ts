@@ -18,4 +18,5 @@ theme=a!==b&&(a<b?(m>=a&&m<b):(m>=a||m<b))?"dark":"light";}}
 if(!theme)theme=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";
 d.setAttribute("data-theme",theme);d.style.colorScheme=theme;
 var p=ls.getItem("remitmortgage-palette");if(p==="default"||p==="colorblind")d.setAttribute("data-palette",p);
+if(ls.getItem("remitmortgage-high-contrast")==="on")d.setAttribute("data-high-contrast","");
 }catch(e){}})();`;

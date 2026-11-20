@@ -32,7 +32,7 @@ function RateBar({
           style={{ width: `${pct}%`, backgroundColor: color }}
         />
       </div>
-      <span className="text-sm font-bold text-[var(--text-primary)] w-16 text-right">
+      <span className="text-sm font-bold text-[var(--text-primary)] w-16 text-end">
         {bpsToPercent(rateBps)}%
       </span>
     </div>
@@ -162,7 +162,7 @@ export default function RateBenchmarkWidget({
           </p>
         </div>
         {diff !== null && (
-          <div className="text-right">
+          <div className="text-end">
             <span className={`text-xl font-extrabold ${diffColor}`}>
               {diffLabel}
             </span>

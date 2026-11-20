@@ -344,6 +344,31 @@ model KycDocumentForensics {
   @@index([applicantAddress])
 }
 
+/// Service-level timer for a single review-stage interval.
+///
+/// A row is opened (leftAt = null) the moment an application enters a review
+/// stage and closed when it moves on. The closed intervals feed the per-stage
+/// duration summary; the open one is what the stuck-application alert watches.
+/// `alertSentAt` marks that the stuck alert fired for this interval, so each
+/// stuck interval alerts exactly once even across overlapping scans.
+model LoanReviewStageTimer {
+  id            String        @id @default(uuid())
+  applicationId String
+  application   LoanApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  stage         LoanStatus
+  enteredAt     DateTime      @default(now())
+  leftAt        DateTime?
+  alertSentAt   DateTime?
+  createdAt     DateTime      @default(now())
+
+  // Backs "the open/closed intervals of one application, in order".
+  @@index([applicationId, enteredAt])
+  // Backs the summary scan: filter by stage then range on enteredAt.
+  @@index([stage, enteredAt])
+  // Backs the stuck-application scan for intervals that are still open.
+  @@index([leftAt])
+}
+
 model LoanApplication {
   id                 String           @id @default(uuid())
   applicantId        String
@@ -406,6 +431,7 @@ model LoanApplication {
   servicerContact        String?
   servicingTransfers     LoanServicingTransfer[]
   offeringWatches        OfferingWatch[]
+  reviewStageTimers      LoanReviewStageTimer[]
 
   // Index backing getApplicationsByBorrower(): filter by applicant then sort by createdAt
   @@index([applicantId, createdAt])
@@ -961,6 +987,9 @@ model ApiKey {
   updatedAt DateTime @updatedAt
 
   usage     ApiKeyUsage[]
+  /// Per-endpoint drill-down of `usage` (issue #1053): one row per
+  /// (apiKeyId, periodStart, endpoint), written alongside the period total.
+  endpointUsage ApiKeyEndpointUsage[]
 
   @@index([key])
   @@index([revoked])
@@ -1094,5 +1123,25 @@ model ApiKeyUsage {
   updatedAt    DateTime @updatedAt
 
   @@unique([apiKeyId, periodStart])
+  @@index([apiKeyId, periodStart])
+}
+
+/// Per-key, per-billing-period, per-endpoint request counter (issue #1053).
+/// The drill-down behind ApiKeyUsage's per-period total: exactly one row per
+/// (apiKeyId, periodStart, endpoint), incremented on each metered request.
+/// Written alongside the total by apiKeyQuota.ts, so a key's per-endpoint
+/// breakdown sums back to the same period total it is metered against.
+model ApiKeyEndpointUsage {
+  id           String   @id @default(uuid())
+  apiKeyId     String
+  apiKey       ApiKey   @relation(fields: [apiKeyId], references: [id])
+  periodStart  DateTime
+  /// Stable endpoint label, e.g. "GET /api/exports/transactions".
+  endpoint     String
+  requestCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([apiKeyId, periodStart, endpoint])
   @@index([apiKeyId, periodStart])
 }

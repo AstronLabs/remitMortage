@@ -71,7 +71,7 @@ export default function IdleSessionModal({
             {/* Visual Progress Bar */}
             <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
               <div
-                className="bg-gradient-to-r from-amber-500 to-amber-400 h-full transition-all duration-1000 ease-linear rounded-full"
+                className="bg-gradient-to-r rtl:bg-gradient-to-l from-amber-500 to-amber-400 h-full transition-all duration-1000 ease-linear rounded-full"
                 style={{ width: `${progressPercent}%` }}
               />
             </div>
