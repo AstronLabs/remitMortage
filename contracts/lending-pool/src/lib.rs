@@ -48,6 +48,9 @@ mod test_withdrawal_grace_window;
 #[cfg(test)]
 mod test_loan_note_hash;
 
+#[cfg(test)]
+mod test_utilization_auto_pause;
+
 pub use crate::errors::{LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
     BatchDisburseItem, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot, FeatureKey,
@@ -1383,6 +1386,79 @@ impl LendingPoolContract {
         utilization.min(BPS_SCALE as i128) as u32
     }
 
+    fn read_utilization_pause_threshold(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::UtilizationPauseThresholdBps)
+            .unwrap_or(0)
+    }
+
+    fn read_utilization_auto_paused(env: &Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&FeatureKey::UtilizationAutoPaused)
+            .unwrap_or(false)
+    }
+
+    /// Re-evaluate the automatic origination pause against the configured
+    /// utilization safety threshold (`0` disables auto-pause).
+    ///
+    /// Latches `UtilizationAutoPaused = true` when utilization reaches or
+    /// exceeds the threshold, and automatically clears it once utilization
+    /// drops strictly below the threshold.
+    fn refresh_utilization_auto_pause(env: &Env) {
+        let threshold = Self::read_utilization_pause_threshold(env);
+        let was_paused = Self::read_utilization_auto_paused(env);
+        if threshold == 0 {
+            if was_paused {
+                env.storage()
+                    .instance()
+                    .set(&FeatureKey::UtilizationAutoPaused, &false);
+                env.events()
+                    .publish((Symbol::new(env, "util_pause_clr"),), (0u32, 0u32));
+            }
+            return;
+        }
+        let util = Self::calculate_utilization(env);
+        if util >= threshold {
+            if !was_paused {
+                env.storage()
+                    .instance()
+                    .set(&FeatureKey::UtilizationAutoPaused, &true);
+                env.events()
+                    .publish((Symbol::new(env, "util_auto_pause"),), (util, threshold));
+            }
+        } else if was_paused {
+            env.storage()
+                .instance()
+                .set(&FeatureKey::UtilizationAutoPaused, &false);
+            env.events()
+                .publish((Symbol::new(env, "util_pause_clr"),), (util, threshold));
+        }
+    }
+
+    /// Reject new loan originations while the utilization auto-pause is active.
+    ///
+    /// If utilization has already fallen below the configured threshold (or
+    /// the threshold was disabled), the auto-pause clears itself and allows
+    /// origination to proceed.
+    fn check_utilization_not_auto_paused(env: &Env) -> Result<(), PoolError> {
+        if !Self::read_utilization_auto_paused(env) {
+            return Ok(());
+        }
+        let threshold = Self::read_utilization_pause_threshold(env);
+        let util = Self::calculate_utilization(env);
+        if threshold == 0 || util < threshold {
+            env.storage()
+                .instance()
+                .set(&FeatureKey::UtilizationAutoPaused, &false);
+            env.events()
+                .publish((Symbol::new(env, "util_pause_clr"),), (util, threshold));
+            return Ok(());
+        }
+        Err(PoolError::ContractPaused)
+    }
+
     /// Calculate the dynamic withdrawal fee in basis points based on utilization.
     ///
     /// - Utilization < 50%: 10 bps (0.1%)
@@ -2212,6 +2288,7 @@ impl LendingPoolContract {
 
             let total_dep = Self::read_total_deposited(&env) + amount;
             Self::set_total_deposited(&env, total_dep);
+            Self::refresh_utilization_auto_pause(&env);
 
             // Track this deposit's independent withdrawal grace window when enabled.
             let grace_ledgers = Self::read_withdrawal_grace_ledgers(&env);
@@ -2304,6 +2381,61 @@ impl LendingPoolContract {
             }
         }
         remaining
+    }
+
+    // ── Utilization Auto-Pause Administration ─────────────────────────────
+
+    /// Configure the pool utilization safety threshold (in basis points,
+    /// `0..=10_000`) above which new loan originations are automatically
+    /// paused. Setting `0` disables the automatic pause trigger and clears
+    /// any active auto-pause. Admin-only.
+    pub fn set_utilization_pause_threshold(
+        env: Env,
+        threshold_bps: u32,
+    ) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        if threshold_bps > BPS_SCALE {
+            return Err(PoolError::InvalidAmount);
+        }
+        env.storage()
+            .instance()
+            .set(&FeatureKey::UtilizationPauseThresholdBps, &threshold_bps);
+        Self::refresh_utilization_auto_pause(&env);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events()
+            .publish((Symbol::new(&env, "util_thresh_set"),), threshold_bps);
+        Ok(())
+    }
+
+    /// Return the configured utilization auto-pause threshold in basis points
+    /// (`0` means disabled).
+    pub fn get_utilization_pause_threshold(env: Env) -> u32 {
+        Self::read_utilization_pause_threshold(&env)
+    }
+
+    /// Return whether new loan originations are currently auto-paused due to
+    /// pool utilization reaching or exceeding the safety threshold.
+    pub fn is_utilization_auto_paused(env: Env) -> bool {
+        Self::read_utilization_auto_paused(&env)
+    }
+
+    /// Manually lift an active utilization auto-pause without waiting for
+    /// utilization to drop below the threshold. Admin-only.
+    pub fn clear_utilization_auto_pause(env: Env) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&FeatureKey::UtilizationAutoPaused, &false);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events()
+            .publish((Symbol::new(&env, "util_pause_lift"),), ());
+        Ok(())
     }
 
     /// Set the number of ledgers a deposit-cap change must wait between being
@@ -2500,6 +2632,7 @@ impl LendingPoolContract {
 
             let total_dep = Self::read_total_deposited(&env) + amount;
             Self::set_total_deposited(&env, total_dep);
+            Self::refresh_utilization_auto_pause(&env);
 
             env.events().publish(
                 (symbol_short!("dep_tier"), investor.clone()),
@@ -2747,6 +2880,7 @@ impl LendingPoolContract {
         principal: i128,
         escrow_origin: Option<Address>,
     ) -> Result<(), PoolError> {
+        Self::check_utilization_not_auto_paused(env)?;
         if principal <= 0 {
             return Err(PoolError::InvalidAmount);
         }
@@ -2871,6 +3005,7 @@ impl LendingPoolContract {
         interest_only_months: u32,
     ) -> Result<(), PoolError> {
         Self::check_not_paused(&env)?;
+        Self::check_utilization_not_auto_paused(&env)?;
         let config = Self::read_config(&env)?;
         config.admin.require_auth();
 
@@ -2943,6 +3078,7 @@ impl LendingPoolContract {
         env.storage()
             .instance()
             .set(&DataKey::ActiveLoanCommitments, &new_commitments);
+        Self::refresh_utilization_auto_pause(&env);
 
         // From approval the loan counts against the borrower's exposure cap.
         let exposure = Self::read_borrower_exposure(&env, &loan.borrower);
@@ -3747,6 +3883,7 @@ impl LendingPoolContract {
                 &DataKey::ActiveLoanCommitments,
                 &(active_commitments - amount),
             );
+            Self::refresh_utilization_auto_pause(&env);
 
             env.storage()
                 .instance()
@@ -4469,6 +4606,7 @@ impl LendingPoolContract {
         env.storage()
             .instance()
             .set(&DataKey::TotalLiquidity, &liquidity);
+        Self::refresh_utilization_auto_pause(&env);
 
         env.storage()
             .instance()
@@ -5243,6 +5381,7 @@ impl LendingPoolContract {
         env.storage()
             .instance()
             .set(&DataKey::TotalLiquidity, &liquidity);
+        Self::refresh_utilization_auto_pause(&env);
 
         // Reduce the recorded loss, capped at the recovered amount.
         let current_loss = Self::read_total_defaulted_loss(&env);
@@ -5473,6 +5612,7 @@ impl LendingPoolContract {
             env.storage()
                 .instance()
                 .set(&DataKey::TotalDeposited, &total_dep);
+            Self::refresh_utilization_auto_pause(&env);
 
             // Track total fees collected
             let total_fees = Self::read_total_withdrawal_fees(&env) + fee_amount;

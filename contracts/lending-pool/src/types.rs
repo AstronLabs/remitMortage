@@ -712,6 +712,13 @@ pub enum FeatureKey {
     /// Optional 32-byte SHA-256 hash referencing an off-chain promissory note
     /// or servicing agreement for a loan. Hash-only (no document or URL).
     LoanNoteHash(BytesN<32>),
+    /// Admin-configured pool utilization safety threshold in basis points
+    /// (0..=10_000). When non-zero, new loan originations are automatically
+    /// paused once pool utilization reaches or exceeds this threshold.
+    UtilizationPauseThresholdBps,
+    /// Latched automatic origination-pause flag triggered when pool
+    /// utilization reached or exceeded `UtilizationPauseThresholdBps`.
+    UtilizationAutoPaused,
 }
 
 /// One investor deposit lot tracked independently for the withdrawal grace window.
