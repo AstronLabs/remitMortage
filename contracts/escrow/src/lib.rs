@@ -3,6 +3,13 @@
 
 #![no_std]
 
+#[cfg(test)]
+#[path = "../../storage_key_check.rs"]
+mod storage_key_check;
+
+#[cfg(test)]
+mod test_storage_keys;
+
 mod auto_deposit;
 mod errors;
 mod token_utils;
