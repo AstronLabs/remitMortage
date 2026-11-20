@@ -6,6 +6,7 @@ import { validateBorrowerParams } from "../middleware/validate.js";
 import { getApplicant, getBorrowerStatus } from "../services/db.js";
 import { requireBorrowerAddressOwnership } from "../security/requireResourceOwnership.js";
 import type { AuthenticatedRequest } from "../middleware/auth.js";
+import { explainScore } from "../services/scoreExplanation.js";
 
 export const borrowerRouter = Router();
 
@@ -141,6 +142,64 @@ borrowerRouter.get("/:address/status", validateBorrowerParams, async (req, res) 
   } catch (error) {
     console.error("Borrower status error:", error);
     return res.status(500).json({ error: "Failed to fetch borrower status" });
+  }
+});
+
+/**
+ * @openapi
+ * /api/borrower/{address}/score-explanation:
+ *   get:
+ *     summary: Explain a borrower's credit score
+ *     description: >-
+ *       Breaks the latest stored credit score into per-factor contributions
+ *       (which sum to the score) and, for the three factors holding it back
+ *       the most, the smallest change to that factor that would lift the
+ *       score into the next band. Only the applicant and admins may read it.
+ *     tags:
+ *       - Borrower
+ *     parameters:
+ *       - in: path
+ *         name: address
+ *         required: true
+ *         schema:
+ *           type: string
+ *           pattern: '^G[A-Z2-7]{55}$'
+ *     responses:
+ *       200:
+ *         description: Score explanation.
+ *       401:
+ *         description: No authenticated caller.
+ *       403:
+ *         description: Applicants may only read their own explanation (admins exempt).
+ *       404:
+ *         description: No score has been computed for this address yet.
+ *       500:
+ *         description: Explanation failed unexpectedly.
+ */
+borrowerRouter.get("/:address/score-explanation", validateBorrowerParams, async (req, res) => {
+  const address = String(Array.isArray(req.params.address) ? req.params.address[0] : req.params.address);
+
+  if (!requireBorrowerAddressOwnership(req as AuthenticatedRequest, res, address)) return;
+
+  try {
+    const applicant = await getApplicant(address);
+    const latest = applicant?.verificationResults?.[0];
+    if (!latest) {
+      return res.status(404).json({
+        error: "score_not_found",
+        message: "No credit score has been computed for this address yet.",
+      });
+    }
+
+    return res.json({
+      address,
+      modelVersion: latest.modelVersion ?? null,
+      analyzedAt: latest.analyzedAt,
+      ...explainScore(latest),
+    });
+  } catch (error) {
+    console.error("Score explanation error:", error);
+    return res.status(500).json({ error: "Failed to explain credit score" });
   }
 });
 

@@ -150,6 +150,15 @@ export const IDOR_ENDPOINT_REGISTRY: IdorEndpointEntry[] = [
   },
   {
     method: "GET",
+    route: "GET /api/borrower/:address/score-explanation",
+    param: "address",
+    paramSource: "path",
+    resource: "borrower",
+    ownershipCheck: "requireBorrowerAddressOwnership (address === req.user.walletAddress or admin) runs before the score explanation is built",
+    coveredBy: "src/__tests__/idorAudit.test.ts",
+  },
+  {
+    method: "GET",
     route: "GET /api/verification/report/:reportId",
     param: "reportId",
     paramSource: "path",

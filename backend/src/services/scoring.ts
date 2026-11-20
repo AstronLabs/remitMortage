@@ -258,6 +258,24 @@ function scoreWithWeights(analysis: RemittanceAnalysis, weights: typeof WEIGHTS_
   };
 }
 
+/** Factor weights (maximum points per factor) of the active model. */
+export function activeModelWeights(): Record<ScoreReason["factor"], number> {
+  return {
+    consistency: WEIGHTS_V1.CONSISTENCY,
+    frequency: WEIGHTS_V1.FREQUENCY,
+    duration: WEIGHTS_V1.DURATION,
+    volume: WEIGHTS_V1.VOLUME,
+  };
+}
+
+/**
+ * Scores an analysis with the active model only: no shadow run and nothing
+ * logged, so it is safe for evaluating hypothetical inputs.
+ */
+export function scoreActiveModel(analysis: RemittanceAnalysis) {
+  return scoreWithWeights(analysis, WEIGHTS_V1);
+}
+
 export function calculateCreditScore(analysis: RemittanceAnalysis): CreditScoreResult {
   const activeResult = scoreWithWeights(analysis, WEIGHTS_V1);
   let shadowResult: CreditScoreResult["shadowScore"] | undefined;

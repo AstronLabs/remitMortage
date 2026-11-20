@@ -18,6 +18,7 @@ import {
   recordEscrowWithdrawal,
   recordLoanDisbursement,
   recordLoanRepayment,
+  findBorrowerAddressByLoanId,
 } from "./db.js";
 
 export const DEFAULT_EVENT_INDEXER_POLL_MS = 5_000;
@@ -154,6 +155,10 @@ export class SorobanEventIndexer {
   private async processEvent(event: NormalizedEvent): Promise<void> {
     const kind = classifyTopic(event.topic);
     if (!kind) return;
+    // `disburse` names the loan, not the borrower.
+    if (!event.borrower && event.loanId) {
+      event = { ...event, borrower: await findBorrowerAddressByLoanId(event.loanId) };
+    }
     if (!event.borrower || !event.amount) {
       this.logger.warn(
         `[event-indexer] skipping ${event.topic} event missing borrower/amount ledger=${event.ledger}`

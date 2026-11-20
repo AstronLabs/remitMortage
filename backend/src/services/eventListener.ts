@@ -45,7 +45,21 @@ export interface NormalizedEvent {
   borrower: string | null;
   amount: string | null;
   ledger: number;
+  /** On-chain loan id (hex) when the event carries one, e.g. `disburse`. */
+  loanId?: string;
 }
+
+/**
+ * Field positions in the tuple data the contracts actually publish, per
+ * topic (see contracts/event-schemas/CATALOG.md). `disburse` names only the
+ * loan and the contractor, so its borrower is resolved from the loan id.
+ */
+const TUPLE_LAYOUTS: Readonly<Record<string, { borrower?: number; amount: number; loanId?: number }>> = {
+  deposit: { borrower: 0, amount: 1 },
+  withdraw: { borrower: 0, amount: 1 },
+  repay: { borrower: 0, loanId: 1, amount: 2 },
+  disburse: { loanId: 0, amount: 2 },
+};
 
 export interface EventBatch {
   events: NormalizedEvent[];
@@ -114,14 +128,31 @@ export function decodeEvent(raw: {
   const topics = (raw.topic ?? []).map((t) => scValToNative(t));
   const topic = topics.length > 0 ? String(topics[0]) : "";
 
+  // A symbol in the second topic is an identifier such as an escrow goal id,
+  // never a borrower.
   let borrower: string | null = null;
-  if (topics.length > 1 && typeof topics[1] === "string") {
+  if (topics.length > 1 && typeof topics[1] === "string" && raw.topic[1].switch().name !== "scvSymbol") {
     borrower = topics[1];
   }
 
   let amount: string | null = null;
+  let loanId: string | null = null;
   const value = raw.value ? scValToNative(raw.value) : null;
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+  if (Array.isArray(value)) {
+    const layout = TUPLE_LAYOUTS[topic];
+    if (layout) {
+      if (layout.borrower !== undefined && typeof value[layout.borrower] === "string") {
+        borrower = value[layout.borrower];
+      }
+      const rawAmount = value[layout.amount];
+      if (typeof rawAmount === "bigint" || typeof rawAmount === "number" || typeof rawAmount === "string") {
+        amount = String(rawAmount);
+      }
+      if (layout.loanId !== undefined && value[layout.loanId] instanceof Uint8Array) {
+        loanId = Buffer.from(value[layout.loanId]).toString("hex");
+      }
+    }
+  } else if (value !== null && typeof value === "object") {
     const obj = value as Record<string, unknown>;
     if (obj.borrower != null) borrower = String(obj.borrower);
     if (obj.amount != null) amount = String(obj.amount);
@@ -139,6 +170,7 @@ export function decodeEvent(raw: {
     borrower,
     amount,
     ledger: raw.ledger,
+    ...(loanId ? { loanId } : {}),
   };
 }
 

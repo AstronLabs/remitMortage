@@ -47,6 +47,7 @@ import {
   requireLoanOwnership,
 } from "../security/requireResourceOwnership.js";
 import type { AuthenticatedRequest } from "../middleware/auth.js";
+import { countryForBorrower, paymentCutoff } from "../services/businessCalendar.js";
 
 export const loanRouter = Router();
 
@@ -497,11 +498,20 @@ loanRouter.post("/:id/trigger-payment-due", async (req, res) => {
   const targetWebhookUrl =
     webhookUrl || "https://partner-platform.com/webhooks";
   const targetAmount = amount || app.amount;
-  const targetDueDate =
+  const requestedDueDate =
     dueDate ||
     new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
   try {
+    // Remind borrowers of the date that actually counts: a due date on a
+    // weekend or bank holiday in their country moves to the next business day.
+    let targetDueDate = requestedDueDate;
+    const parsedDueDate = new Date(requestedDueDate);
+    if (!Number.isNaN(parsedDueDate.getTime())) {
+      const cutoff = await paymentCutoff(parsedDueDate, await countryForBorrower(app.borrowerAddress));
+      if (cutoff.getTime() !== parsedDueDate.getTime()) targetDueDate = cutoff.toISOString();
+    }
+
     const emailNotif = await queueNotification(
       targetEmail,
       "EMAIL",
