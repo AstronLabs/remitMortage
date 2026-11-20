@@ -97,6 +97,30 @@ export interface JobLeaderElectionDeps {
 export const DEFAULT_MIN_INTERVAL_MS = 30_000;
 export const DEFAULT_MAX_HOLD_MS = 30 * 60_000;
 
+/**
+ * Per-job lock hold timeouts. Each value must comfortably exceed the job's
+ * expected run time: the timeout is the upper bound on how long the lock
+ * transaction stays open, so a run that outlives it loses the lock and a
+ * second instance may start the same job. Jobs not listed use
+ * {@link DEFAULT_MAX_HOLD_MS}.
+ */
+export const JOB_LOCK_TIMEOUTS_MS: Readonly<Record<string, number>> = {
+  "repayment-audit": 30 * 60_000,
+  "outbox-relay": 5 * 60_000,
+  "outbox-cleanup": 15 * 60_000,
+  "investor-position-reconciliation": 60 * 60_000,
+  "audit-chain-verification": 30 * 60_000,
+  "partition-manager": 60 * 60_000,
+};
+
+/** Lock hold timeout for a job: explicit override, per-job config, then default. */
+export function resolveMaxHoldMs(
+  jobName: string,
+  overrides: Readonly<Record<string, number>> = JOB_LOCK_TIMEOUTS_MS
+): number {
+  return overrides[jobName] ?? DEFAULT_MAX_HOLD_MS;
+}
+
 // ── Lock keys & instance identity ────────────────────────────────────────────
 
 /** Stable signed 64-bit advisory-lock key for a job name (as a decimal string). */
@@ -141,7 +165,9 @@ export function createJobLeaderElection(deps: JobLeaderElectionDeps): JobLeaderE
 
     async run<T>(jobName: string, job: () => Promise<T>, options: JobRunOptions = {}): Promise<JobRunResult<T>> {
       const minIntervalMs = options.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
-      const maxHoldMs = options.maxHoldMs ?? DEFAULT_MAX_HOLD_MS;
+      // Every scheduled job gets a bounded hold so a killed process cannot
+      // keep the lock (the transaction ends and PostgreSQL releases it).
+      const maxHoldMs = options.maxHoldMs ?? resolveMaxHoldMs(jobName);
 
       const handle = await deps.backend.tryAcquire(advisoryLockKey(jobName), { maxHoldMs });
       if (!handle) return skip(jobName, "lock_held");

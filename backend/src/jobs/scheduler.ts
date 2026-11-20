@@ -246,10 +246,14 @@ export function startScheduler() {
   startAnalyticsRefreshScheduler();
 
   const investorSchedule = process.env.INVESTOR_POSITION_RECONCILIATION_CRON_SCHEDULE || "30 1 * * *";
-  investorPositionReconciliationTask = cron.schedule(investorSchedule, async () => {
-    console.log("[Scheduler] Triggering investor position reconciliation job...");
-    await runInvestorPositionReconciliation();
-  }, { timezone: "UTC" });
+  investorPositionReconciliationTask = cron.schedule(
+    investorSchedule,
+    scheduledJob("investor-position-reconciliation", async () => {
+      console.log("[Scheduler] Triggering investor position reconciliation job...");
+      await runInvestorPositionReconciliation();
+    }),
+    { timezone: "UTC" }
+  );
 
   console.log(
     "[Scheduler] Started: repayment audit, session purge, KYC expiry reminder, escrow reconciliation, investor reconciliation, application SLA monitor, and admin portfolio digest jobs scheduled."
