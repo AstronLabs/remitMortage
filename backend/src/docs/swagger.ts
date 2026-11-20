@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import swaggerJsdoc from "swagger-jsdoc";
+import { applyOperationExamples, OPERATION_EXAMPLES, type LooseSpec } from "./openapiExamples.js";
 
 const apiVersion = process.env.npm_package_version || "0.1.0";
 
-export const swaggerSpec = swaggerJsdoc({
+const generatedSpec = swaggerJsdoc({
   definition: {
     openapi: "3.0.3",
     info: {
@@ -428,3 +429,11 @@ export const swaggerSpec = swaggerJsdoc({
   },
   apis: ["./src/routes/*.ts", "./dist/routes/*.js"],
 });
+
+// Every operation needs realistic request/response examples for integrators
+// (issue #986). The registry is the single place to add them; the coverage and
+// schema-validation tests live in `__tests__/openapiExamples.test.ts`.
+export const swaggerSpec = applyOperationExamples(
+  generatedSpec as unknown as LooseSpec,
+  OPERATION_EXAMPLES
+);

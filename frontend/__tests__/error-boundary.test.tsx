@@ -50,6 +50,22 @@ describe("error boundary", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("reports a route crash once and keeps the surrounding navigation usable", () => {
+    render(
+      <React.StrictMode>
+        <nav><a href="/dashboard">Dashboard</a></nav>
+        <ErrorBoundary><Bomb /></ErrorBoundary>
+      </React.StrictMode>,
+    );
+
+    expect(screen.getByRole("link", { name: "Dashboard" })).toHaveAttribute("href", "/dashboard");
+    expect(screen.getByRole("alert")).toHaveTextContent("Something went wrong");
+    expect(mockCaptureException).toHaveBeenCalledTimes(1);
+    shouldThrow = false;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(screen.getByText("All good")).toBeInTheDocument();
+  });
+
   it("recovers when the resetKey changes (navigation)", () => {
     const { rerender } = render(<ErrorBoundary resetKey="/a"><Bomb /></ErrorBoundary>);
     shouldThrow = false;

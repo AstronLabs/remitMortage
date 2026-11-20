@@ -19,8 +19,11 @@ export default function RouteErrorFallback({ error, reset }: RouteErrorFallbackP
   const [errorId] = useState(generateErrorId);
   const [open, setOpen] = useState(false);
   const eventId = useRef<string>(undefined);
+  const reportedError = useRef<Error | null>(null);
 
   useEffect(() => {
+    if (reportedError.current === error) return;
+    reportedError.current = error;
     eventId.current = captureRenderError(error, errorId, pathname);
   }, [error, errorId, pathname]);
 
@@ -28,7 +31,7 @@ export default function RouteErrorFallback({ error, reset }: RouteErrorFallbackP
     <div role="alert" className="mx-auto flex max-w-lg flex-col items-center gap-4 px-6 py-24 text-center">
       <h1 className="text-2xl font-bold text-white">Something went wrong</h1>
       <p className="text-sm text-slate-400">
-        This page hit an unexpected error. Your data is safe. Try again, and if it keeps happening let us know.
+        This page hit an unexpected error. Try again, and if it keeps happening let us know.
       </p>
       <p className="text-xs text-slate-500">
         Error ID: <code data-testid="fallback-error-id">{errorId}</code>

@@ -94,7 +94,7 @@ function isValidUrl(raw: string): boolean {
  *               label:       { type: string, example: "Acme Underwriter" }
  *               url:         { type: string, format: uri, example: "https://partner.example.com/hooks" }
  *               topics:      { type: array, items: { type: string }, example: ["deposit","disburse"] }
- *               ownerAddress:{ type: string, example: "GABC..." }
+ *               ownerAddress: { type: string, example: "GABC..." }
  *     responses:
  *       201:
  *         description: Subscription created — secret shown once
