@@ -25,7 +25,13 @@ import {
 } from "./slowQueryLog.js";
 import { configuredSecretId, secrets } from "./secretsManager.js";
 
-export type VerificationStatus = "PENDING" | "ELIGIBLE" | "INELIGIBLE";
+/**
+ * Applicant verification states, mirroring the Prisma `VerificationStatus`
+ * enum. Kept as a runtime list so `prismaEnumMirrors.test.ts` can assert the
+ * two never drift; the union below is derived from it.
+ */
+export const VERIFICATION_STATUSES = ["PENDING", "ELIGIBLE", "INELIGIBLE"] as const;
+export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];
 
 // ── Connection pool configuration ────────────────────────────────────────────
 //
@@ -608,7 +614,8 @@ export async function createLoanApplication(data: {
  * so this module doesn't require `prisma generate` to have run for a type
  * check — the two are interchangeable at the Prisma Client boundary.
  */
-export type NotificationFrequency = "IMMEDIATE" | "DAILY_DIGEST" | "WEEKLY_DIGEST";
+export const NOTIFICATION_FREQUENCIES = ["IMMEDIATE", "DAILY_DIGEST", "WEEKLY_DIGEST"] as const;
+export type NotificationFrequency = (typeof NOTIFICATION_FREQUENCIES)[number];
 
 export type NotificationPreferenceData = {
   email?: string;

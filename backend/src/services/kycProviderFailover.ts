@@ -24,6 +24,7 @@ import axios from "axios";
 import logger from "../utils/logger.js";
 import { loadConfig } from "../config.js";
 import { recordApiCapabilityUsage } from "./apiScopeUsageTracker.js";
+import { FAULT_INJECTION_KEYS, withFaultInjection } from "./faultInjection.js";
 import type { OcrExtractedFields, OcrProvider, OcrResult } from "./ocrService.js";
 
 // ---------------------------------------------------------------------------
@@ -206,7 +207,7 @@ export class FailoverKycProvider implements OcrProvider {
 
     this.lastPrimaryAttempt = this.now();
     try {
-      const result = await this.call(this.primary, buffer, mimeType);
+      const result = await this.call(this.primary, buffer, mimeType, FAULT_INJECTION_KEYS.kycPrimary);
       this.recordPrimarySuccess();
       return result;
     } catch (err) {
@@ -217,7 +218,7 @@ export class FailoverKycProvider implements OcrProvider {
 
   private async runBackup(buffer: Buffer, mimeType: string): Promise<OcrResult> {
     try {
-      return await this.call(this.backup, buffer, mimeType);
+      return await this.call(this.backup, buffer, mimeType, FAULT_INJECTION_KEYS.kycBackup);
     } catch (err) {
       const message = errorMessage(err);
       logger.error("[kyc-failover] backup provider failed", { error: message });
@@ -226,13 +227,22 @@ export class FailoverKycProvider implements OcrProvider {
   }
 
   /** Runs a provider with a timeout. A result with success=false counts as a failure. */
-  private async call(provider: OcrProvider, buffer: Buffer, mimeType: string): Promise<OcrResult> {
+  private async call(
+    provider: OcrProvider,
+    buffer: Buffer,
+    mimeType: string,
+    faultKey: string
+  ): Promise<OcrResult> {
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new ProviderTimeoutError(this.timeoutMs)), this.timeoutMs);
     });
     try {
-      const result = await Promise.race([provider.extract(buffer, mimeType), timeout]);
+      const result = await Promise.race([
+        // Dev-only fault hook; a transparent pass-through in production.
+        withFaultInjection(faultKey, () => provider.extract(buffer, mimeType)),
+        timeout,
+      ]);
       if (!result.success) {
         throw new Error(result.error ?? "KYC provider reported failure");
       }

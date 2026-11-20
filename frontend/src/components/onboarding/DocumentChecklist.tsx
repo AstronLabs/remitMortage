@@ -1,4 +1,6 @@
 "use client";
+
+import { EmptyState } from "@/components/EmptyState";
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
@@ -209,12 +211,16 @@ export default function DocumentChecklist({
 
       {error && <p role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">{error}</p>}
 
+      {applicantAddress && !loading && !needsAuthentication && !error && documents.length === 0 && (
+        <EmptyState title="No documents uploaded yet" message="Start with the first item in the checklist." action={{ label: "Choose a document", href: "#required-document-list" }} />
+      )}
+
       {loading && documents.length === 0 ? (
         <p role="status" className="flex items-center gap-2 text-xs text-slate-400">
           <LoaderCircle className="h-4 w-4 animate-spin" /> Loading documents…
         </p>
       ) : (
-        <ul className="space-y-3">
+        <ul id="required-document-list" className="space-y-3">
           {REQUIRED_DOCUMENTS[loanType].map((required) => {
             const status = getChecklistStatus(required.type, documents);
             const latest = getLatestDocument(required.type, documents);

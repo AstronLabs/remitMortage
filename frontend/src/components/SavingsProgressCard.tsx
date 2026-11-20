@@ -100,7 +100,7 @@ export default function SavingsProgressCard({ deposited, target, progress, share
             </div>
             <div className="w-full h-2.5 rounded-full bg-slate-900 border border-slate-800 overflow-hidden">
               <div
-                className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 rounded-full transition-all duration-700"
+                className="h-full bg-gradient-to-r rtl:bg-gradient-to-l from-cyan-400 to-emerald-400 rounded-full transition-all duration-700"
                 style={{ width: `${pct}%` }}
               />
             </div>

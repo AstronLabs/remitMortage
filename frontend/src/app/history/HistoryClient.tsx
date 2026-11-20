@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import { ReceiptText } from "lucide-react";
 import { Horizon } from "@stellar/stellar-sdk";
 import { EmptyState } from "@/components/EmptyState";
+import CopyValueButton from "@/components/CopyValueButton";
 import {
   createStatementMetadata,
   downloadStatementCsv,
@@ -175,15 +176,18 @@ export default function HistoryClient() {
         defaultWidth: 160,
         required: true,
         render: (tx) => (
-          <a
-            href={`${STELLARCHAIN_BASE}${tx.hash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-mono text-[var(--accent-primary-light)] hover:underline text-xs"
-            title={tx.hash}
-          >
-            {shorten(tx.hash)}
-          </a>
+          <span className="inline-flex items-center gap-1">
+            <a
+              href={`${STELLARCHAIN_BASE}${tx.hash}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-[var(--accent-primary-light)] hover:underline text-xs"
+              title={tx.hash}
+            >
+              {shorten(tx.hash)}
+            </a>
+            <CopyValueButton value={tx.hash} label="transaction hash" />
+          </span>
         ),
       },
     ],

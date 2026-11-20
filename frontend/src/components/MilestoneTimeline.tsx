@@ -151,20 +151,20 @@ function VoterTable({ voters }: { voters: VoterRecord[] }) {
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-[var(--border-color)]">
-            <th className="pb-2 pr-4 text-left font-semibold text-[var(--text-secondary)]">
+            <th className="pb-2 pe-4 text-start font-semibold text-[var(--text-secondary)]">
               Voter
             </th>
-            <th className="pb-2 pr-4 text-left font-semibold text-[var(--text-secondary)]">Vote</th>
-            <th className="pb-2 text-right font-semibold text-[var(--text-secondary)]">Weight</th>
+            <th className="pb-2 pe-4 text-start font-semibold text-[var(--text-secondary)]">Vote</th>
+            <th className="pb-2 text-end font-semibold text-[var(--text-secondary)]">Weight</th>
           </tr>
         </thead>
         <tbody>
           {voters.map((v, i) => (
             <tr key={i} className="border-b border-[var(--border-color)] last:border-0">
-              <td className="py-1.5 pr-4 font-mono text-[var(--text-muted)]">
+              <td className="py-1.5 pe-4 font-mono text-[var(--text-muted)]">
                 {shortAddr(v.address)}
               </td>
-              <td className="py-1.5 pr-4">
+              <td className="py-1.5 pe-4">
                 <span
                   className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold
                     ${
@@ -201,7 +201,7 @@ function VoterTable({ voters }: { voters: VoterRecord[] }) {
                   {v.vote}
                 </span>
               </td>
-              <td className="py-1.5 text-right text-[var(--text-secondary)]">{v.weight}%</td>
+              <td className="py-1.5 text-end text-[var(--text-secondary)]">{v.weight}%</td>
             </tr>
           ))}
         </tbody>
@@ -244,7 +244,7 @@ function TimelineNode({ milestone, isLast }: { milestone: MilestoneNode; isLast:
       {/* Vertical connector line */}
       {!isLast && (
         <div
-          className="absolute left-[15px] md:left-[19px] top-[36px] bottom-0 w-0.5 bg-[var(--border-color)]"
+          className="absolute start-[15px] md:start-[19px] top-[36px] bottom-0 w-0.5 bg-[var(--border-color)]"
           aria-hidden="true"
         />
       )}
@@ -268,7 +268,7 @@ function TimelineNode({ milestone, isLast }: { milestone: MilestoneNode; isLast:
       <div className="min-w-0 flex-1 pb-6">
         <button
           onClick={() => setExpanded(!expanded)}
-          className="w-full text-left"
+          className="w-full text-start"
           aria-expanded={expanded}
         >
           <div

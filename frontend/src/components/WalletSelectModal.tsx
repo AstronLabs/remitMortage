@@ -20,6 +20,7 @@ import React, { useState } from "react";
 import { X, Wallet, CheckCircle2, AlertCircle, Loader2, ChevronDown, ChevronUp, Copy, ExternalLink } from "lucide-react";
 import { useWallet } from "../context/WalletContext";
 import { DEFAULT_LEDGER_PATH } from "../lib/ledger";
+import QrCodeDisplay from "./QrCodeDisplay";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -190,6 +191,7 @@ export const WalletSelectModal: React.FC<WalletSelectModalProps> = ({
 
         {/* Public key row */}
         <div className="flex items-center gap-2 bg-zinc-950 rounded-lg px-3 py-2.5 border border-zinc-800 mb-4">
+          <QrCodeDisplay value={publicKey ?? ""} label="wallet address" testId="wallet-address-qr" />
           <span
             data-testid="connected-public-key"
             className="text-zinc-300 font-mono text-xs flex-1 truncate"

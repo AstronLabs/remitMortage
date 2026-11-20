@@ -43,6 +43,12 @@ const reportTo = JSON.stringify({
 const nextConfig: NextConfig = {
   // The production Dockerfile copies .next/standalone, so the build must emit it.
   output: "standalone",
+  images: {
+    remotePatterns: [
+      new URL("https://cloudflare-ipfs.com/ipfs/**"),
+      new URL("https://ipfs.io/ipfs/**"),
+    ],
+  },
   // Browser source maps are only emitted for the CI client-bundle secret scan
   // (scripts/client-bundle-secret-scan.mjs); they are never shipped to users.
   productionBrowserSourceMaps: process.env.CLIENT_BUNDLE_SOURCEMAPS === "true",

@@ -44,6 +44,7 @@ import {
   rejectRequest,
   FourEyesError,
 } from "../services/fourEyesApproval.js";
+import { requireRecentAdminReauthentication } from "../services/adminReauthentication.js";
 import {
   getModelConfig,
   getShadowEvaluations,
@@ -268,7 +269,7 @@ adminRouter.get("/applicants/:id/communications", requireAdmin, async (req: Auth
 
 // ── Loan servicing transfer ──────────────────────────────────────────────
 
-adminRouter.post("/loans/:id/servicing-transfer", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post("/loans/:id/servicing-transfer", requireAdmin, requireRecentAdminReauthentication, async (req: AuthenticatedRequest, res: Response) => {
   const body = req.body ?? {};
   const loanId = String(req.params.id);
   const requestedBy = req.user?.walletAddress ?? "admin-api-key";
@@ -373,7 +374,7 @@ async function executeApprovedRequest(request: { id: string; actionType: string;
   await markExecuted(request.id);
 }
 
-adminRouter.post("/four-eyes/requests/:id/approve", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post("/four-eyes/requests/:id/approve", requireAdmin, requireRecentAdminReauthentication, async (req: AuthenticatedRequest, res: Response) => {
   const approverAddress = req.user?.walletAddress ?? "admin-api-key";
   try {
     const approved = await approveRequest(String(req.params.id), approverAddress);

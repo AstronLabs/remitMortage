@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { NextRequest, NextResponse } from "next/server";
+import { DEFAULT_TEXT_SIZE, isTextSize, type TextSize } from "@/app/lib/textSize";
 
 type NotificationFrequency = "IMMEDIATE" | "DAILY_DIGEST" | "WEEKLY_DIGEST";
 
@@ -32,6 +33,7 @@ type UserSettingsPayload = {
     registrationNumber?: string;
     serviceRegion?: string;
   };
+  textSize?: TextSize;
 };
 
 const settingsStore = new Map<string, UserSettingsPayload & { updatedAt: string }>();
@@ -83,6 +85,7 @@ export async function GET(request: NextRequest) {
       webhookUrl: "",
     },
     contractor: { businessName: "", registrationNumber: "", serviceRegion: "" },
+    textSize: DEFAULT_TEXT_SIZE,
     updatedAt: new Date().toISOString(),
   };
 
@@ -131,6 +134,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (body.textSize !== undefined && !isTextSize(body.textSize)) {
+      return NextResponse.json(
+        { error: "invalid_text_size", field: "textSize", message: "textSize must be one of: default, large, x-large" },
+        { status: 400 }
+      );
+    }
+
     const savedSettings = {
       profile: {
         displayName: body.profile?.displayName?.trim() ?? "",
@@ -156,6 +166,7 @@ export async function POST(request: NextRequest) {
         registrationNumber: body.contractor?.registrationNumber?.trim() ?? "",
         serviceRegion: body.contractor?.serviceRegion?.trim() ?? "",
       },
+      textSize: isTextSize(body.textSize) ? body.textSize : DEFAULT_TEXT_SIZE,
       updatedAt: new Date().toISOString(),
     };
 

@@ -109,6 +109,47 @@ export const httpRequestsByVersionTotal = new Counter({
   registers: [metricsRegistry],
 });
 
+/**
+ * HTTP request body size in bytes, labelled by method and matched route
+ * template (never the raw URL, so ids cannot create new label values).
+ * Sizes are taken from the `Content-Length` header.
+ */
+export const httpRequestBodySizeBytes = new Histogram({
+  name: "remitmortgage_http_request_body_size_bytes",
+  help: "HTTP request body size in bytes.",
+  labelNames: ["method", "route"] as const,
+  buckets: [100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000],
+  registers: [metricsRegistry],
+});
+
+/**
+ * HTTP response body size in bytes, counted from the bytes actually written
+ * to the socket, labelled by method and matched route template.
+ */
+export const httpResponseBodySizeBytes = new Histogram({
+  name: "remitmortgage_http_response_body_size_bytes",
+  help: "HTTP response body size in bytes.",
+  labelNames: ["method", "route"] as const,
+  buckets: [100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000],
+  registers: [metricsRegistry],
+});
+
+// ---------------------------------------------------------------------------
+// Per-route latency budgets (issue #988)
+// ---------------------------------------------------------------------------
+
+/**
+ * Requests that took longer than their route's latency budget. A non-zero
+ * rate is the signal behind the admin budget-violation summary; see
+ * `services/latencyBudgetMonitor.ts` and `config/routeLatencyBudgets.ts`.
+ */
+export const routeLatencyBudgetExceededTotal = new Counter({
+  name: "remitmortgage_route_latency_budget_exceeded_total",
+  help: "Requests that exceeded the latency budget for their method and route.",
+  labelNames: ["method", "route"] as const,
+  registers: [metricsRegistry],
+});
+
 // ---------------------------------------------------------------------------
 // Indexer / event-listener metrics
 // ---------------------------------------------------------------------------

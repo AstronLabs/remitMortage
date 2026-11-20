@@ -1,4 +1,6 @@
 "use client";
+
+import { EmptyState } from "@/components/EmptyState";
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
@@ -102,7 +104,7 @@ function UtilizationGauge({ rate }: { rate: number }) {
       </div>
       <div className="w-full bg-slate-950 rounded-full h-2.5 border border-slate-800 overflow-hidden">
         <div
-          className="h-2.5 rounded-full bg-gradient-to-r from-cyan-400 to-indigo-500 transition-all duration-700"
+          className="h-2.5 rounded-full bg-gradient-to-r rtl:bg-gradient-to-l from-cyan-400 to-indigo-500 transition-all duration-700"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -579,6 +581,8 @@ function InvestPageInner() {
 
                 {!isConnected ? (
                   <p className="text-xs text-slate-500">Connect wallet to view portfolio status.</p>
+                ) : position && Number(position.deposited) === 0 ? (
+                  <EmptyState title="No active investments" message="A pool deposit will appear in your position here." action={isReadOnly ? undefined : { label: "Make a deposit", href: "#deposit-amount" }} />
                 ) : position ? (
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-3">

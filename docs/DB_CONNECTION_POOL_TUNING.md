@@ -108,10 +108,36 @@ sized for peak but has no headroom for growth.
 | `DB_CONNECTION_LIMIT` | `20` | Max connections per process |
 | `DB_POOL_TIMEOUT` | `15` | Seconds to wait for a connection before P2024 |
 | `DB_CONNECT_TIMEOUT` | `30` | Seconds for the initial TCP handshake |
+| `DB_STATEMENT_TIMEOUT_MS` | `15000` | Per-statement timeout for ordinary requests |
+| `DB_LONG_RUNNING_STATEMENT_TIMEOUT_MS` | `300000` | Per-statement timeout for explicitly long-running jobs |
 
 Resolved in `backend/src/services/dbPoolConfig.ts` and appended to
 `DATABASE_URL` as query parameters. A value that is missing, non-numeric or
 non-positive falls back to the default rather than being honoured.
+
+### Statement timeouts
+
+A runaway or badly-planned query can hold a pooled connection indefinitely, so
+the pool drains one request at a time until every caller times out. To stop that
+at the source, the pool installs a PostgreSQL `statement_timeout` on every
+connection via the libpq `options` startup parameter, and the database cancels
+any statement that outruns it — releasing the connection instead of holding it.
+
+- `DB_STATEMENT_TIMEOUT_MS` is the limit for ordinary requests. It is a safety
+  net, not a latency budget: it should sit comfortably above normal request
+  latency and below the runaway-query killer's threshold (`queryKiller.ts`).
+- `DB_LONG_RUNNING_STATEMENT_TIMEOUT_MS` is the limit for explicitly
+  long-running jobs (for example the transaction export in
+  `backend/src/routes/exports.ts`). Such a job runs inside
+  `runWithStatementTimeout`, which raises the limit for a single transaction via
+  `SET LOCAL statement_timeout`, so the longer budget reverts when the
+  transaction ends and never leaks to ordinary requests sharing the connection.
+
+When a statement is cancelled, the request fails cleanly with HTTP `503` and a
+`Retry-After` header — the response body is `{ error: "statement_timeout",
+retryable: true }`. Causing this on a healthy service means either a query
+regressed or the limit is set too tight; investigate the former before raising
+the latter.
 
 ### Sizing
 

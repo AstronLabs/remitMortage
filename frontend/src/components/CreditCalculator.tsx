@@ -4,6 +4,7 @@
 
 import React, { useState, useMemo } from "react";
 import FieldTooltip from "./ui/FieldTooltip";
+import { useDirection } from "@/context/DirectionContext";
 
 // Types
 type FrequencyOption =
@@ -11,6 +12,7 @@ type FrequencyOption =
 type MortgageTermOption = 15 | 20 | 30;
 
 export default function CreditCalculator() {
+  const { isRtl } = useDirection();
   // ─── Input States ──────────────────────────────────────────────────────────
   const [monthlyRemittance, setMonthlyRemittance] = useState<number>(500);
   const [consistency, setConsistency] = useState<number>(95);
@@ -219,8 +221,11 @@ export default function CreditCalculator() {
     const minRate = 3.0;
     const maxRate = 9.0;
 
-    const getX = (months: number) =>
-      padding + ((months - minMonths) / (maxMonths - minMonths)) * (width - 2 * padding);
+    const getX = (months: number) => {
+      const raw = padding + ((months - minMonths) / (maxMonths - minMonths)) * (width - 2 * padding);
+      // RTL mirrors the time axis so the series reads from the start edge.
+      return isRtl ? width - raw : raw;
+    };
     const getY = (rate: number) =>
       height - padding - ((rate - minRate) / (maxRate - minRate)) * (height - 2 * padding);
 
@@ -232,7 +237,7 @@ export default function CreditCalculator() {
     const currentY = getY(tierConfig.rate);
 
     return { path, currentX, currentY, getX, getY };
-  }, [chartPoints, safeHistory, tierConfig]);
+  }, [chartPoints, safeHistory, tierConfig, isRtl]);
 
   return (
     <div className="p-6 md:p-8 animate-fade-in-up w-full bg-[#0D1536] border border-white/10 rounded-2xl relative overflow-hidden shadow-xl">
@@ -449,7 +454,7 @@ export default function CreditCalculator() {
             </div>
 
             {/* Score Details */}
-            <div className="flex-1 text-center sm:text-left">
+            <div className="flex-1 text-center sm:text-start">
               <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">
                 Stellar Credit Rating
               </span>
@@ -627,11 +632,11 @@ export default function CreditCalculator() {
                         strokeDasharray="4 4"
                       />
                       <text
-                        x={padding - 8}
+                        x={isRtl ? width - padding + 8 : padding - 8}
                         y={y + 3}
                         fill="#64748b"
                         fontSize="8"
-                        textAnchor="end"
+                        textAnchor={isRtl ? "start" : "end"}
                         className="font-mono font-bold"
                       >
                         {rate.toFixed(1)}%
@@ -708,7 +713,13 @@ export default function CreditCalculator() {
 
                 {/* Gradients */}
                 <defs>
-                  <linearGradient id="chart-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <linearGradient
+                    id="chart-gradient"
+                    x1={isRtl ? "100%" : "0%"}
+                    y1="0%"
+                    x2={isRtl ? "0%" : "100%"}
+                    y2="0%"
+                  >
                     <stop offset="0%" stopColor="#ef4444" />
                     <stop offset="40%" stopColor="#f59e0b" />
                     <stop offset="80%" stopColor="#06b6d4" />

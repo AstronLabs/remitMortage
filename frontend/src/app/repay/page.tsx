@@ -18,9 +18,7 @@ import {
 import { computePayoffCountdown, isFinalPayment } from "../../lib/payoffCountdown";
 import { track } from "../../lib/analytics";
 import ConfirmationDialog from "../../components/ConfirmationDialog";
-import { useLocale } from "next-intl";
-import CurrencyAmountInput from "../../components/forms/CurrencyAmountInput";
-import type { Locale } from "../../i18n/locales";
+import PaymentSimulator from "../../components/PaymentSimulator";
 
 const Navbar = loadDynamic(() => import("../../components/Navbar"), { ssr: false });
 
@@ -770,6 +768,14 @@ function RepayInner() {
                       );
                     })}
                   </div>
+                  {!isRepaid && schedule.monthlyAmount > 0 && paymentsRemaining !== null && (
+                    <PaymentSimulator
+                      balance={remaining}
+                      monthlyAmount={schedule.monthlyAmount}
+                      paymentsRemaining={paymentsRemaining}
+                      totalInterest={interest}
+                    />
+                  )}
                 </div>
               ) : (
                 <div className="p-6 bg-[var(--bg-card)] rounded-lg text-sm text-[var(--text-muted)]">

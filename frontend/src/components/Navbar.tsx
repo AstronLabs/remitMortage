@@ -13,6 +13,7 @@ import { useKeyboardShortcuts } from "@/context/KeyboardShortcutsContext";
 import { describeNetworkMismatch } from "../lib/wallet-errors";
 import { LocaleSwitcher } from "@/i18n/LocaleSwitcher";
 import { ChevronDown, Landmark, Menu, X, Keyboard } from "lucide-react";
+import CopyValueButton from "./CopyValueButton";
 
 function shorten(pk: string) {
   return `${pk.slice(0, 6)}...${pk.slice(-4)}`;
@@ -451,6 +452,7 @@ function WalletButton({
             >
               {publicKey ? shorten(publicKey) : "Connected"}
             </span>
+            {publicKey && <CopyValueButton key={publicKey} value={publicKey} label="wallet address" />}
           </div>
           <button
             onClick={disconnect}
@@ -494,6 +496,7 @@ function WalletButton({
       >
         {publicKey ? shorten(publicKey) : "Conn"}
       </span>
+      {publicKey && <CopyValueButton key={publicKey} value={publicKey} label="wallet address" />}
       {!compact && (
         <button
           onClick={disconnect}

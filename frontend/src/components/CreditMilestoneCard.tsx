@@ -68,7 +68,7 @@ export function CreditMilestoneCard({
           </div>
         </div>
 
-        <div className="text-right shrink-0">
+        <div className="text-end shrink-0">
           <div className="flex items-center gap-1 justify-end">
             {milestone.scoreImprovement > 0 && !isFuture && (
               <ArrowUp className="h-3 w-3 text-emerald-400" />

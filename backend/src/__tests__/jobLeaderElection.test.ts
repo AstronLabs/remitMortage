@@ -6,7 +6,10 @@ import {
   createJobLeaderElection,
   createPrismaAdvisoryLockBackend,
   createPrismaJobRunStore,
+  DEFAULT_MAX_HOLD_MS,
+  JOB_LOCK_TIMEOUTS_MS,
   resolveInstanceId,
+  resolveMaxHoldMs,
   scheduledJob,
   type JobLeaderElection,
 } from "../services/jobLeaderElection.js";
@@ -63,6 +66,40 @@ describe("resolveInstanceId", () => {
   it("prefers INSTANCE_ID and otherwise generates a unique id", () => {
     expect(resolveInstanceId({ INSTANCE_ID: " web-3 " } as any)).toBe("web-3");
     expect(resolveInstanceId({} as any)).not.toBe(resolveInstanceId({} as any));
+  });
+});
+
+describe("lock hold timeouts", () => {
+  it("uses a configured per-job timeout and falls back to the default", () => {
+    expect(resolveMaxHoldMs("investor-position-reconciliation")).toBe(
+      JOB_LOCK_TIMEOUTS_MS["investor-position-reconciliation"]
+    );
+    expect(resolveMaxHoldMs("not-configured")).toBe(DEFAULT_MAX_HOLD_MS);
+    expect(resolveMaxHoldMs("not-configured", { "not-configured": 90_000 })).toBe(90_000);
+    expect(resolveMaxHoldMs("repayment-audit", {})).toBe(DEFAULT_MAX_HOLD_MS);
+  });
+
+  it("passes the configured hold time to the lock backend", async () => {
+    const seen: Array<{ maxHoldMs?: number } | undefined> = [];
+    const election = createJobLeaderElection({
+      backend: {
+        tryAcquire: async (_key, options) => {
+          seen.push(options);
+          return { lost: false, release: async () => undefined };
+        },
+      },
+      runs: new InMemoryJobRunStore(),
+      instanceId: "i1",
+      now: () => new Date("2026-10-17T00:00:00.000Z"),
+    });
+
+    await election.run("investor-position-reconciliation", async () => undefined);
+    await election.run("not-configured", async () => undefined);
+    await election.run("override-job", async () => undefined, { maxHoldMs: 12_345 });
+
+    expect(seen[0]).toMatchObject({ maxHoldMs: JOB_LOCK_TIMEOUTS_MS["investor-position-reconciliation"] });
+    expect(seen[1]).toMatchObject({ maxHoldMs: DEFAULT_MAX_HOLD_MS });
+    expect(seen[2]).toMatchObject({ maxHoldMs: 12_345 });
   });
 });
 

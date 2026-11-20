@@ -29,7 +29,8 @@ export type LoanStatus =
   | "MANUAL_REVIEW";
 
 /** Authorization state of an attached guarantor — mirrors the Prisma enum. */
-export type GuarantorStatus = "Accepted" | "Rejected";
+export const GUARANTOR_STATUSES = ["Accepted", "Rejected"] as const;
+export type GuarantorStatus = (typeof GUARANTOR_STATUSES)[number];
 
 export interface LoanApplication {
   id: string;

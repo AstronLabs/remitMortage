@@ -17,6 +17,7 @@ import ChartExportControls from "@/components/charts/ChartExportControls";
 import AccessibleChart from "@/components/charts/AccessibleChart";
 import type { ChartExportData, ChartSeries } from "@/lib/chart-export";
 import { summarizeTrend } from "@/lib/chart-summary";
+import { useChartDirection } from "@/hooks/useChartDirection";
 
 type TimeRange = "1m" | "6m" | "1y" | "Max";
 
@@ -53,6 +54,8 @@ export default function ROIProjectionWidget({
   const [historicalData, setHistoricalData] = useState<HistoricalYield[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Mirror the time axis and value axis in right-to-left locales.
+  const chartDirection = useChartDirection();
 
   useEffect(() => {
     let active = true;
@@ -236,7 +239,7 @@ export default function ROIProjectionWidget({
           className="flex-1 accent-indigo-500"
           aria-label="Projected months of future repayment-driven yield"
         />
-        <span className="text-xs font-mono text-indigo-400 w-20 text-right shrink-0">
+        <span className="text-xs font-mono text-indigo-400 w-20 text-end shrink-0">
           {projectionMonths} {projectionMonths === 1 ? "month" : "months"}
         </span>
       </div>
@@ -258,7 +261,10 @@ export default function ROIProjectionWidget({
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <AreaChart
+                data={chartData}
+                margin={chartDirection.margin({ top: 10, right: 10, left: -20, bottom: 0 })}
+              >
                 <defs>
                   <linearGradient id="colorHistory" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.4} />
@@ -276,6 +282,7 @@ export default function ROIProjectionWidget({
                   fontSize={12}
                   tickLine={false}
                   axisLine={false}
+                  reversed={chartDirection.reversed}
                 />
                 <YAxis
                   stroke="#64748b"
@@ -283,6 +290,7 @@ export default function ROIProjectionWidget({
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={formatCurrency}
+                  orientation={chartDirection.yAxisOrientation}
                 />
                 <Tooltip
                   contentStyle={{
