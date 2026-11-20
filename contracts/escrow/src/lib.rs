@@ -3,6 +3,13 @@
 
 #![no_std]
 
+#[cfg(test)]
+#[path = "../../storage_key_check.rs"]
+mod storage_key_check;
+
+#[cfg(test)]
+mod test_storage_keys;
+
 mod auto_deposit;
 mod errors;
 mod token_utils;
@@ -28,6 +35,9 @@ mod test_auto_deposit;
 
 #[cfg(test)]
 mod test_goal_consolidation;
+
+#[cfg(test)]
+mod test_escrow_yield;
 
 #[cfg(test)]
 mod test_attestor_change_timelock;
@@ -519,7 +529,14 @@ impl EscrowContract {
                 let shares: i128 =
                     env.invoke_contract(vault, &Symbol::new(&env, "deposit"), invoke_args);
 
-                record.yield_shares += shares;
+                // Track the per-goal claim exactly as `deposit` does, so the
+                // topped-up principal keeps earning yield for this borrower
+                // instead of being stranded in the vault with no owner.
+                let yield_key = DataKey::YieldShares(borrower.clone(), goal_id.clone());
+                let goal_shares = Self::read_yield_shares(&env, &borrower, &goal_id) + shares;
+                env.storage().persistent().set(&yield_key, &goal_shares);
+                Self::extend_persistent_ttl(&env, &yield_key);
+
                 let total_shares = Self::read_total_yield_shares(&env) + shares;
                 env.storage()
                     .instance()
@@ -619,9 +636,37 @@ impl EscrowContract {
 
             // Move the balance internally: no external token transfer and the
             // total pooled balance is unchanged.
+            let from_deposited_before = from.deposited;
             from.deposited -= amount;
             to.deposited += amount;
             to.start_ledger = preserved_start;
+
+            // Carry the holding-yield claim with the funds: move the source
+            // goal's yield shares pro-rata to the principal moved, so a partial
+            // consolidation neither strands yield on the source goal nor hands
+            // the destination yield it did not hold. Escrows with no yield
+            // source have no shares, so this is a no-op for them. The shares
+            // only move between two goals owned by the same borrower, so the
+            // aggregate `TotalYieldShares` is unchanged.
+            let from_shares = Self::read_yield_shares(&env, &borrower, &from_goal_id);
+            if from_shares > 0 {
+                let moved_shares = from_shares
+                    .checked_mul(amount)
+                    .and_then(|value| value.checked_div(from_deposited_before))
+                    .unwrap_or(0);
+                if moved_shares > 0 {
+                    let from_key = DataKey::YieldShares(borrower.clone(), from_goal_id.clone());
+                    let to_key = DataKey::YieldShares(borrower.clone(), to_goal_id.clone());
+                    let to_shares =
+                        Self::read_yield_shares(&env, &borrower, &to_goal_id) + moved_shares;
+                    env.storage()
+                        .persistent()
+                        .set(&from_key, &(from_shares - moved_shares));
+                    env.storage().persistent().set(&to_key, &to_shares);
+                    Self::extend_persistent_ttl(&env, &from_key);
+                    Self::extend_persistent_ttl(&env, &to_key);
+                }
+            }
 
             // Keep the contribution clock anchored to the earlier of the two as
             // well, so default detection cannot be reset by consolidating.
@@ -1121,7 +1166,12 @@ impl EscrowContract {
                 }
             }
 
-            let mut amount_withdrawn = record.deposited;
+            // The escrowed principal is what the recipient is owed; anything the
+            // balance earned on top of it while held is holding yield that
+            // belongs to this escrow's own borrower (see the standard-release
+            // branch below).
+            let principal = record.deposited;
+            let mut amount_withdrawn = principal;
             if let Some(vault) = &config.yield_vault {
                 let yield_shares = Self::read_yield_shares(&env, &borrower, &goal_id);
                 if yield_shares > 0 {
@@ -1159,15 +1209,22 @@ impl EscrowContract {
                     (borrower.clone(), amount_withdrawn),
                 );
             } else {
-                // Standard release: transfer to recipient
-                let token = get_token_client(&env, &config.token);
-                token.transfer(
-                    &env.current_contract_address(),
-                    &recipient,
-                    &amount_withdrawn,
-                );
+                // Standard release: the escrowed principal is paid to the
+                // recipient, while any holding yield earned on that same
+                // balance is credited to the escrow's own borrower. Yield is
+                // never pooled or forwarded to the recipient, and an escrow
+                // without a yield source has `amount_withdrawn == principal`,
+                // so `holding_yield` is zero and this is unchanged from before.
+                let holding_yield = amount_withdrawn.saturating_sub(principal).max(0);
+                let principal_out = amount_withdrawn - holding_yield;
 
-                let total = Self::read_total_pooled(&env) - record.deposited;
+                let token = get_token_client(&env, &config.token);
+                token.transfer(&env.current_contract_address(), &recipient, &principal_out);
+                if holding_yield > 0 {
+                    token.transfer(&env.current_contract_address(), &borrower, &holding_yield);
+                }
+
+                let total = Self::read_total_pooled(&env) - principal;
                 env.storage().instance().set(&DataKey::TotalPooled, &total);
 
                 record.released = true;

@@ -3,6 +3,13 @@
 
 #![no_std]
 
+#[cfg(test)]
+#[path = "../../storage_key_check.rs"]
+mod storage_key_check;
+
+#[cfg(test)]
+mod test_storage_keys;
+
 mod errors;
 mod types;
 
@@ -32,6 +39,9 @@ mod test_yield_mode;
 
 #[cfg(test)]
 mod test_daily_repayment_cap;
+
+#[cfg(test)]
+mod test_payoff_quote_expiry;
 
 #[cfg(test)]
 mod test_tranche_share_cap;
@@ -65,6 +75,7 @@ mod test_pause_guardian;
 
 #[cfg(test)]
 mod test_closing_statement;
+mod test_principal_payment;
 
 pub use crate::errors::{LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
@@ -1538,6 +1549,21 @@ impl LendingPoolContract {
         record.claimed_yield = Self::current_yield_share(env, record.deposited);
     }
 
+    // ── Dormant Position Tracking ───────────────────────────────────────
+
+    /// Stamps `investor`'s last-activity ledger as the current ledger.
+    ///
+    /// Called from every position-changing entry point — deposit, withdrawal
+    /// and claim — so `is_investor_dormant` measures genuine inactivity. This
+    /// is purely informational bookkeeping; it never gates any operation and
+    /// nothing downstream reads it as a guard.
+    fn touch_investor_activity(env: &Env, investor: &Address) {
+        env.storage().persistent().set(
+            &FeatureKey::InvestorLastActivity(investor.clone()),
+            &env.ledger().sequence(),
+        );
+    }
+
     // ── Deposit Caps ────────────────────────────────────────────────────
 
     fn deposit_cap_delay(env: &Env) -> u32 {
@@ -2280,9 +2306,14 @@ impl LendingPoolContract {
             // utilization-based fee exactly as before until an admin opts in
             // via `set_redemption_waiver_ledgers`.
             redemption_fee_waiver_ledgers: 0,
-            // Payoff quoting disabled at deployment until an admin sets a
-            // window via `set_payoff_quote_window`.
-            payoff_quote_window_ledgers: 0,
+            // Payoff quotes are valid for one ledger day out of the box so
+            // the feature works without any admin action; an admin can widen
+            // or narrow the window via `set_payoff_quote_window` without a
+            // redeploy (and `0` disables quoting entirely).
+            payoff_quote_window_ledgers: LEDGERS_PER_DAY,
+            // Dormancy reporting is off at deployment; admin opts in via
+            // `set_dormant_period_ledgers`. When 0 no position is ever flagged.
+            dormant_period_ledgers: 0,
         };
 
         env.storage().instance().set(&DataKey::Config, &config);
@@ -2417,6 +2448,9 @@ impl LendingPoolContract {
                 &FeatureKey::InvestorLastDeposit(investor.clone()),
                 &current_ledger,
             );
+
+            // Mark the position as active for dormant-position reporting.
+            Self::touch_investor_activity(&env, &investor);
 
             // Update investor record.
             let mut record = Self::read_investor(&env, &investor);
@@ -2742,6 +2776,9 @@ impl LendingPoolContract {
             let token = Self::token_client(&env, &config.token);
             token.transfer(&investor, &env.current_contract_address(), &amount);
 
+            // Mark the position as active for dormant-position reporting.
+            Self::touch_investor_activity(&env, &investor);
+
             let mut record = Self::read_investor(&env, &investor);
             if record.deposited == 0 {
                 record.start_ledger = env.ledger().sequence();
@@ -2879,6 +2916,9 @@ impl LendingPoolContract {
             (symbol_short!("bonus_pay"), investor.clone()),
             (payout, lockup.tier as u32),
         );
+
+        // Mark the position as active for dormant-position reporting.
+        Self::touch_investor_activity(&env, &investor);
 
         env.storage()
             .instance()
@@ -4884,6 +4924,148 @@ impl LendingPoolContract {
         Ok(())
     }
 
+    /// Borrower pays down principal only, without it counting as an installment.
+    ///
+    /// The whole `amount` is applied to principal. Unlike [`Self::repay`], the
+    /// repayment schedule is never consulted or modified: `next_due_ledger`,
+    /// `monthly_amount`, `payments_made` and `payments_missed` are all left
+    /// exactly as they were, no late fee is charged, and the payment does not
+    /// cure a missed installment. Because it only lowers `outstanding_debt`,
+    /// interest that compounds from here on accrues on the lower balance.
+    ///
+    /// Outstanding principal is `principal - repaid` (floored at zero): the
+    /// pool applies repayments to principal first, so anything already repaid
+    /// has retired principal. Interest that has accrued on top is not
+    /// principal and cannot be paid through this function — use `repay`.
+    ///
+    /// # Errors
+    /// * `InvalidAmount` — `amount` is not positive.
+    /// * `InvalidLoanState` — the loan is not active (`Approved`).
+    /// * `OverPayment` — `amount` exceeds the outstanding principal.
+    ///
+    /// # Early-prepayment penalty
+    /// A principal-only payment that happens to extinguish the entire debt
+    /// (no interest has accrued) is an early prepayment like any other, so the
+    /// same penalty and loyalty waiver as `repay` apply. Otherwise this would
+    /// be a way around the penalty.
+    ///
+    /// Emits `principal_paid` (not `repay`), so indexers can tell it apart from
+    /// a scheduled installment.
+    pub fn pay_principal(
+        env: Env,
+        borrower: Address,
+        loan_id: BytesN<32>,
+        amount: i128,
+    ) -> Result<(), PoolError> {
+        Self::check_function_not_paused(&env, PauseGroup::Repayments)?;
+        borrower.require_auth();
+
+        if amount <= 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+
+        let config = Self::read_config(&env)?;
+        let mut loan = Self::read_loan(&env, &loan_id)?;
+
+        if loan.status != LoanStatus::Approved {
+            return Err(PoolError::InvalidLoanState);
+        }
+
+        // Compound interest up to now so the new balance is what is lowered.
+        Self::accrue_interest(&env, &mut loan);
+
+        let outstanding_principal = (loan.principal - loan.repaid).max(0);
+        if amount > outstanding_principal || amount > loan.outstanding_debt {
+            return Err(PoolError::OverPayment);
+        }
+
+        // Same fraud-containment cap as `repay`.
+        Self::consume_daily_repayment_allowance(&env, &borrower, amount)?;
+
+        // Penalty only when this payment leaves nothing owed at all.
+        let clears_debt = amount == loan.outstanding_debt;
+        let is_early_close = clears_debt && Self::is_early_closure(&env, &loan_id);
+        let waived = is_early_close && Self::is_prepayment_penalty_waived(&config, &loan);
+        let prepayment_penalty = if is_early_close && !waived {
+            Self::calculate_prepayment_penalty(amount)
+        } else {
+            0i128
+        };
+
+        let token = Self::token_client(&env, &config.token);
+        token.transfer(
+            &borrower,
+            &env.current_contract_address(),
+            &(amount + prepayment_penalty),
+        );
+        if prepayment_penalty > 0 {
+            Self::collect_prepayment_penalty(
+                &env,
+                &config,
+                &loan_id,
+                &borrower,
+                prepayment_penalty,
+            );
+        }
+        if is_early_close {
+            env.events().publish(
+                (Symbol::new(&env, "prepay_closed"),),
+                (loan_id.clone(), waived, prepayment_penalty),
+            );
+        }
+
+        // Apply to principal. The schedule is intentionally not touched.
+        loan.repaid += amount;
+        loan.outstanding_debt -= amount;
+
+        // Any live payoff quote was locked against the old balance.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PayoffQuote(loan_id.clone()));
+
+        if loan.outstanding_debt == 0 {
+            loan.status = LoanStatus::Repaid;
+            Self::release_borrower_loan_slot(&env, &loan.borrower);
+            Self::release_borrower_exposure(&env, &loan.borrower, loan.principal);
+
+            let undisbursed = loan.principal - loan.disbursed;
+            if undisbursed > 0 {
+                let active_commitments = Self::read_active_commitments(&env);
+                env.storage().instance().set(
+                    &DataKey::ActiveLoanCommitments,
+                    &(active_commitments - undisbursed),
+                );
+            }
+        }
+
+        Self::set_loan(&env, &loan_id, &loan);
+
+        // Pure principal: no interest, so no protocol fee or yield waterfall.
+        let liquidity = Self::read_total_liquidity(&env) + amount;
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalLiquidity, &liquidity);
+        Self::refresh_utilization_auto_pause(&env);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        let remaining_principal = (loan.principal - loan.repaid).max(0);
+        env.events().publish(
+            (Symbol::new(&env, "principal_paid"),),
+            (
+                borrower.clone(),
+                loan_id.clone(),
+                amount,
+                remaining_principal,
+                loan.outstanding_debt,
+            ),
+        );
+
+        Ok(())
+    }
+
     /// Execute a payoff using a previously locked quote.
     ///
     /// `amount` must equal the stored quoted amount exactly. A live quote
@@ -5896,6 +6078,9 @@ impl LendingPoolContract {
                 );
             }
 
+            // Mark the position as active for dormant-position reporting.
+            Self::touch_investor_activity(&env, &investor);
+
             env.storage()
                 .instance()
                 .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
@@ -5956,6 +6141,9 @@ impl LendingPoolContract {
         // Transfer yield
         let token = Self::token_client(&env, &config.token);
         token.transfer(&env.current_contract_address(), &investor, &pending_yield);
+
+        // Mark the position as active for dormant-position reporting.
+        Self::touch_investor_activity(&env, &investor);
 
         env.storage()
             .instance()
@@ -8213,6 +8401,74 @@ impl LendingPoolContract {
             .persistent()
             .get(&FeatureKey::InvestorLastDeposit(investor))
             .unwrap_or(0)
+    }
+
+    // ── Dormant Position Reporting ──────────────────────────────────────
+
+    /// Configure the inactivity period, in ledgers, after which an investor
+    /// position is reported as dormant by `is_investor_dormant`. Admin-only.
+    ///
+    /// Pass `0` to disable dormant reporting entirely (the deployment
+    /// default). This is a reporting-only knob: a flagged position is never
+    /// restricted from depositing, withdrawing or claiming.
+    pub fn set_dormant_period_ledgers(env: Env, period: u32) -> Result<(), PoolError> {
+        let mut config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        config.dormant_period_ledgers = period;
+        env.storage().instance().set(&DataKey::Config, &config);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events().publish((symbol_short!("set_drmnt"),), period);
+
+        Ok(())
+    }
+
+    /// Get the configured dormancy period in ledgers. `0` means dormant
+    /// reporting is disabled.
+    pub fn get_dormant_period_ledgers(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get::<DataKey, PoolConfig>(&DataKey::Config)
+            .map(|config| config.dormant_period_ledgers)
+            .unwrap_or(0)
+    }
+
+    /// Get the ledger sequence of `investor`'s most recent deposit,
+    /// withdrawal or claim, or `0` if they have no recorded activity.
+    pub fn get_investor_last_activity(env: Env, investor: Address) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&FeatureKey::InvestorLastActivity(investor))
+            .unwrap_or(0)
+    }
+
+    /// Whether `investor`'s position is dormant — i.e. it has had no deposit,
+    /// withdrawal or claim for at least `dormant_period_ledgers` ledgers.
+    ///
+    /// Read-only and informational only: the result never gates any
+    /// operation, and a flagged position can still deposit, withdraw and
+    /// claim exactly as before. Returns `false` when dormant reporting is
+    /// disabled (`dormant_period_ledgers == 0`) or when the investor has no
+    /// recorded activity to measure from.
+    pub fn is_investor_dormant(env: Env, investor: Address) -> bool {
+        let period = Self::read_config(&env)
+            .map(|config| config.dormant_period_ledgers)
+            .unwrap_or(0);
+        if period == 0 {
+            return false;
+        }
+
+        match env
+            .storage()
+            .persistent()
+            .get::<FeatureKey, u32>(&FeatureKey::InvestorLastActivity(investor))
+        {
+            Some(last) => env.ledger().sequence() >= last.saturating_add(period),
+            None => false,
+        }
     }
 
     /// Get the currently configured per-day late-payment penalty in basis points.
