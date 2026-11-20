@@ -590,6 +590,8 @@ pub enum FeatureKey {
     /// Cleared on successful `execute_refinance` or when superseded by a
     /// new request.  Keyed by loan ID.
     RefinanceRateLock(BytesN<32>),
+    /// Refinance fee rate and pool/treasury shares, all in basis points.
+    RefinanceFeeConfig,
     /// Address of the Governance contract used to gate
     /// `inject_emergency_liquidity`.  Absent until `set_governance_contract`
     /// is called by the admin.
