@@ -205,11 +205,19 @@ impl GovernanceContract {
         if proposal.vote_count >= required_votes {
             proposal.status = ProposalStatus::Passed;
         }
+        let passed = proposal.status == ProposalStatus::Passed;
 
         // Save updated proposal
         env.storage()
             .instance()
             .set(&DataKey::Proposal(proposal_id), &proposal);
+
+        // A passed proposal can never be voted on again, so its frozen
+        // weights have done their job: drop the snapshot to keep it only for
+        // as long as it was needed to resolve the proposal.
+        if passed {
+            Self::prune_power_snapshot(&env, proposal_id);
+        }
     }
 
     /// Executes an approved proposal. Callable only by regular governance signers.
@@ -235,6 +243,8 @@ impl GovernanceContract {
         env.storage()
             .instance()
             .set(&DataKey::Proposal(proposal_id), &proposal);
+        // Executed is terminal: the proposal's snapshot is no longer needed.
+        Self::prune_power_snapshot(&env, proposal_id);
     }
 
     /// Guardian-only: cancels an open proposal before it can be executed.
@@ -260,6 +270,8 @@ impl GovernanceContract {
         env.storage()
             .instance()
             .set(&DataKey::Proposal(proposal_id), &proposal);
+        // Rejected is terminal: the proposal's snapshot is no longer needed.
+        Self::prune_power_snapshot(&env, proposal_id);
     }
 
     /// View function returning whether the proposal has been approved (Passed).
@@ -414,6 +426,15 @@ impl GovernanceContract {
             Some(map) => map.get(signer.clone()).unwrap_or(1),
             None => 1,
         }
+    }
+
+    /// Drops a proposal's frozen power snapshot. Called once the proposal
+    /// leaves `Open` for good, so snapshots are retained only for as long as
+    /// they are needed to resolve a proposal.
+    fn prune_power_snapshot(env: &Env, proposal_id: u32) {
+        env.storage()
+            .instance()
+            .remove(&DataKey::PowerSnapshot(proposal_id));
     }
 
     /// View function to fetch the current governance configuration.
@@ -1152,6 +1173,112 @@ mod test {
 
         // s2's delegate is gone, so s2 keeps their own vote.
         let id = submit(&env, &client, &s1);
+        assert_eq!(client.get_voting_power(&id, &s2), 1);
+    }
+
+    // ── Balance-weighted vote snapshots ──────────────────────────────────
+
+    /// A change to a signer's weight *after* a proposal opens must not move
+    /// that proposal's vote weight, nor its outcome.
+    #[test]
+    fn test_weight_change_after_proposal_opens_does_not_affect_that_proposal() {
+        let env = Env::default();
+        let (client, [s1, s2, ..]) = delegation_setup(&env);
+
+        // Open the proposal first, freezing each signer at one vote.
+        let id = submit(&env, &client, &s1);
+
+        // Shift weight around *after* the snapshot: s2 hands its vote to s1.
+        client.delegate(&s2, &s1);
+
+        // The open proposal still sees the weights frozen when it opened.
+        assert_eq!(client.get_voting_power(&id, &s1), 1);
+        assert_eq!(client.get_voting_power(&id, &s2), 1);
+
+        // And the outcome is decided on those frozen weights: s1 + s2 = 2,
+        // one short of the 3 votes the 60% quorum requires, so it stays Open.
+        client.vote(&s1, &id);
+        client.vote(&s2, &id);
+        let proposal = client.get_proposal(&id).unwrap();
+        assert_eq!(proposal.vote_count, 2);
+        assert_eq!(proposal.status, ProposalStatus::Open);
+    }
+
+    /// A proposal opened after a weight change captures a fresh snapshot,
+    /// while any earlier proposal keeps the one it opened with.
+    #[test]
+    fn test_new_proposal_takes_a_fresh_snapshot() {
+        let env = Env::default();
+        let (client, [s1, s2, ..]) = delegation_setup(&env);
+
+        // First proposal opens before any delegation: one vote each.
+        let first = submit(&env, &client, &s1);
+        assert_eq!(client.get_voting_power(&first, &s1), 1);
+        assert_eq!(client.get_voting_power(&first, &s2), 1);
+
+        // s2 delegates after the first proposal opened...
+        client.delegate(&s2, &s1);
+
+        // ...the open proposal keeps its original snapshot...
+        assert_eq!(client.get_voting_power(&first, &s1), 1);
+        assert_eq!(client.get_voting_power(&first, &s2), 1);
+
+        // ...but a *new* proposal snapshots the current weights.
+        let second = submit(&env, &client, &s1);
+        assert_eq!(client.get_voting_power(&second, &s1), 2);
+        assert_eq!(client.get_voting_power(&second, &s2), 0);
+    }
+
+    /// Once a proposal passes (and is executed), its snapshot is pruned: the
+    /// view falls back to one vote each rather than the frozen weights.
+    #[test]
+    fn test_snapshot_is_pruned_when_a_proposal_passes_and_executes() {
+        let env = Env::default();
+        let (client, [s1, s2, s3, ..]) = delegation_setup(&env);
+
+        // A non-trivial snapshot: s1 = 2, s2 = 0.
+        client.delegate(&s2, &s1);
+        let id = submit(&env, &client, &s1);
+        assert_eq!(client.get_voting_power(&id, &s1), 2);
+        assert_eq!(client.get_voting_power(&id, &s2), 0);
+
+        // Reach quorum: s1 (2) + s3 (1) = 3 of 3 -> Passed.
+        client.vote(&s1, &id);
+        client.vote(&s3, &id);
+        let proposal = client.get_proposal(&id).unwrap();
+        assert_eq!(proposal.vote_count, 3);
+        assert_eq!(proposal.status, ProposalStatus::Passed);
+
+        // The frozen weights are gone as soon as the outcome is decided.
+        assert_eq!(client.get_voting_power(&id, &s1), 1);
+        assert_eq!(client.get_voting_power(&id, &s2), 1);
+
+        // Executing is terminal and leaves the snapshot pruned.
+        client.execute_proposal(&s3, &id);
+        assert_eq!(
+            client.get_proposal(&id).unwrap().status,
+            ProposalStatus::Executed
+        );
+        assert_eq!(client.get_voting_power(&id, &s1), 1);
+    }
+
+    /// A vetoed (rejected) proposal also has its snapshot pruned.
+    #[test]
+    fn test_snapshot_is_pruned_when_a_proposal_is_vetoed() {
+        let env = Env::default();
+        let (client, [s1, s2, ..]) = delegation_setup(&env);
+        let guardian = client.get_config().guardian;
+
+        client.delegate(&s2, &s1);
+        let id = submit(&env, &client, &s1);
+        assert_eq!(client.get_voting_power(&id, &s1), 2);
+
+        client.veto(&guardian, &id);
+        assert_eq!(
+            client.get_proposal(&id).unwrap().status,
+            ProposalStatus::Rejected
+        );
+        assert_eq!(client.get_voting_power(&id, &s1), 1);
         assert_eq!(client.get_voting_power(&id, &s2), 1);
     }
 }
