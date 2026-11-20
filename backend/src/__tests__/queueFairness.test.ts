@@ -4,7 +4,12 @@
 import {
   FairQueueScheduler,
   JobPriorityClass,
+  JobLane,
+  JOB_LANE_CATALOG,
+  LANE_PRIORITY,
   DEFAULT_WORKER_WEIGHTS,
+  laneForNotificationType,
+  laneForPriority,
 } from "../services/queueFairness.js";
 
 describe("FairQueueScheduler", () => {
@@ -17,6 +22,45 @@ describe("FairQueueScheduler", () => {
 
     const first = scheduler.dequeue(101);
     expect(first?.id).toBe("security-1");
+  });
+
+  it("lets a starving low-lane job overtake newer high-lane work", () => {
+    const scheduler = new FairQueueScheduler({
+      perTenantCap: 1000,
+      starvationThresholdMs: 1000,
+    });
+    scheduler.submit({ id: "low-1", tenantId: "tenant-a", priority: JobPriorityClass.BULK }, 0);
+    scheduler.submit({ id: "high-1", tenantId: "tenant-b", priority: JobPriorityClass.SECURITY }, 1500);
+
+    // high-1 is younger than the fair-share threshold, low-1 has exceeded it.
+    expect(scheduler.dequeue(2000)?.id).toBe("low-1");
+    expect(scheduler.dequeue(2000)?.id).toBe("high-1");
+  });
+
+  it("assigns every existing job type to exactly one public lane", () => {
+    for (const type of Object.keys(JOB_LANE_CATALOG)) {
+      expect(Object.values(JobLane)).toContain(JOB_LANE_CATALOG[type as keyof typeof JOB_LANE_CATALOG]);
+    }
+
+    expect(JOB_LANE_CATALOG["notification.EMAIL"]).toBe(JobLane.HIGH);
+    expect(JOB_LANE_CATALOG["notification.WEBHOOK"]).toBe(JobLane.HIGH);
+    expect(JOB_LANE_CATALOG["notification.SMS"]).toBe(JobLane.HIGH);
+    expect(JOB_LANE_CATALOG["notification.PUSH"]).toBe(JobLane.NORMAL);
+    expect(JOB_LANE_CATALOG["webhook.delivery"]).toBe(JobLane.NORMAL);
+    expect(JOB_LANE_CATALOG["email.send"]).toBe(JobLane.NORMAL);
+    expect(JOB_LANE_CATALOG["analytics.persist"]).toBe(JobLane.LOW);
+    expect(JOB_LANE_CATALOG["report.generate"]).toBe(JobLane.LOW);
+  });
+
+  it("maps BullMQ priority numbers and notification types onto lanes", () => {
+    expect(laneForPriority(LANE_PRIORITY[JobLane.HIGH])).toBe(JobLane.HIGH);
+    expect(laneForPriority(LANE_PRIORITY[JobLane.NORMAL])).toBe(JobLane.NORMAL);
+    expect(laneForPriority(LANE_PRIORITY[JobLane.LOW])).toBe(JobLane.LOW);
+    expect(laneForPriority(undefined)).toBe(JobLane.NORMAL);
+
+    expect(laneForNotificationType("EMAIL")).toBe(JobLane.HIGH);
+    expect(laneForNotificationType("PUSH")).toBe(JobLane.NORMAL);
+    expect(laneForNotificationType("UNKNOWN")).toBe(JobLane.NORMAL);
   });
 
   it("prevents one tenant from occupying every worker", () => {

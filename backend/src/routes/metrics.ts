@@ -26,7 +26,9 @@
 
 import { Router, Request, Response } from "express";
 import { metricsRegistry } from "../services/metrics.js";
+import { queueService } from "../services/queueService.js";
 import { metricsAuthMiddleware } from "../middleware/metricsMiddleware.js";
+import logger from "../utils/logger.js";
 
 export const metricsRouter = Router();
 
@@ -55,6 +57,14 @@ metricsRouter.get(
   metricsAuthMiddleware,
   async (_req: Request, res: Response): Promise<void> => {
     try {
+      // Refresh the per-lane queue gauges so each scrape reflects current
+      // Redis state. A queue outage must not make metrics unavailable.
+      try {
+        await queueService.refreshLaneMetrics();
+      } catch (err) {
+        logger.warn("[metrics] Queue lane metrics refresh failed", { err });
+      }
+
       const payload = await metricsRegistry.metrics();
       res
         .status(200)
