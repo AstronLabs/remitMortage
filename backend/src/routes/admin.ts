@@ -8,6 +8,10 @@ import { runEscrowReconciliation } from "../jobs/escrowReconciliation.js";
 import logger from "../utils/logger.js";
 import { requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";
 import { bulkReviewApplications, getApplication, type BulkReviewDecision } from "../services/loanStore.js";
+import {
+  parseManualStatusChangeReason,
+  type ManualStatusChangeReason,
+} from "../services/manualStatusChangeReason.js";
 import { mergeApplicants, MergeValidationError } from "../services/applicantMerge.js";
 import { promoteWaitlistBatch } from "../services/inviteCode.js";
 import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
@@ -163,17 +167,37 @@ adminRouter.post("/loans/bulk-review", requireAdmin, async (req: AuthenticatedRe
   const rawItems = Array.isArray(body.reviews)
     ? body.reviews
     : Array.isArray(body.applicationIds) && typeof body.decision === "string"
-      ? body.applicationIds.map((applicationId: unknown) => ({ applicationId, decision: body.decision, reason: body.reason }))
+      ? body.applicationIds.map((applicationId: unknown) => ({
+          applicationId,
+          decision: body.decision,
+          reason: body.reason,
+          reasonCode: body.reasonCode,
+          reasonNote: body.reasonNote,
+        }))
       : null;
 
   if (!rawItems || rawItems.length === 0 || rawItems.length > 100) {
     return res.status(400).json({ error: "invalid_request", message: "reviews must contain between 1 and 100 applications" });
   }
 
-  const items = rawItems.map((item: any) => ({
+  // Issue #1102: every manual decision needs a reason code. A per-item code
+  // wins; otherwise the batch-level `reasonCode`/`reasonNote` applies.
+  const parsedReasons = rawItems.map((item: any) =>
+    parseManualStatusChangeReason(
+      item?.reasonCode ?? body.reasonCode,
+      item?.reasonNote ?? body.reasonNote ?? item?.reason
+    )
+  );
+  const invalidReason = parsedReasons.find((parsed: ReturnType<typeof parseManualStatusChangeReason>) => !parsed.ok);
+  if (invalidReason && !invalidReason.ok) {
+    return res.status(400).json({ error: invalidReason.error, message: invalidReason.message, field: "reasonCode" });
+  }
+
+  const items = rawItems.map((item: any, index: number) => ({
     applicationId: typeof item?.applicationId === "string" ? item.applicationId : item?.id,
     decision: item?.decision,
     reason: item?.reason,
+    statusChangeReason: (parsedReasons[index] as { ok: true; reason: ManualStatusChangeReason }).reason,
     // Optimistic lock (issue #846): optional per item so batched callers can
     // stay backward compatible, strictly validated when supplied.
     version: item?.version,
@@ -204,6 +228,7 @@ adminRouter.post("/loans/bulk-review", requireAdmin, async (req: AuthenticatedRe
         applicationId: string;
         decision: BulkReviewDecision;
         reason?: string;
+        statusChangeReason: ManualStatusChangeReason;
         version?: number;
       }>,
       reviewerAddress,

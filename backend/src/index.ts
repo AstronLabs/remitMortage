@@ -65,6 +65,7 @@ import { rateSheetAdminRouter } from "./routes/rateSheet.js";
 import { notificationTemplatesAdminRouter } from "./routes/notificationTemplates.js";
 import { adminSearchRouter } from "./routes/adminSearch.js";
 import { adminLatencyRouter } from "./routes/adminLatency.js";
+import { adminDeadLetterRouter } from "./routes/adminDeadLetter.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { errorCatalogRouter } from "./routes/errorCatalog.js";
 import { sessionsRouter } from "./routes/sessions.js";
@@ -344,6 +345,7 @@ app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevi
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), notificationTemplatesAdminRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminSearchRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminLatencyRouter);
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminDeadLetterRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), investorAdminRouter);
 app.use("/api/admin", adminAuthRouter);
 // Bare (no outer authMiddleware): impersonation/start and /end authenticate

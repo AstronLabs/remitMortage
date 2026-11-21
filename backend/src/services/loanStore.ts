@@ -5,10 +5,13 @@ import { StrKey } from "@stellar/stellar-sdk";
 import { prisma } from "./db.js";
 import {
   diffLoanSnapshot,
+  LOAN_MANUAL_STATUS_CHANGE_ACTION,
+  LOAN_UPDATED_ACTION,
   recordLoanChange,
   recordLoanCreation,
   type LoanSnapshot,
 } from "./loanHistory.js";
+import type { ManualStatusChangeReason } from "./manualStatusChangeReason.js";
 import { autoAssignApplicationReviewer } from "./assignmentQueue.js";
 import { priceNewOffer } from "./rateSheet.js";
 import { recordStageEnter, transitionReviewStage } from "./loanReviewStages.js";
@@ -96,6 +99,16 @@ export interface UpdateApplicationOptions {
    * write happens.
    */
   expectedVersion?: number;
+  /**
+   * Marks this update as a manual, operator-initiated status change (issue
+   * #1102). The reason and actor are written to the activity history next to
+   * the status transition. Automated workflow updates omit this.
+   */
+  manualStatusChange?: {
+    reason: ManualStatusChangeReason;
+    actorAddress?: string;
+    ipAddress?: string;
+  };
 }
 
 /** Options for attaching a guarantor at application creation time. */
@@ -258,7 +271,7 @@ export async function updateApplication(
   patch: Partial<LoanApplication>,
   options: UpdateApplicationOptions = {}
 ) {
-  const { expectedVersion } = options;
+  const { expectedVersion, manualStatusChange } = options;
   const existing = await prisma.loanApplication.findFirst({
     where: { id, deletedAt: null },
     include: { applicant: true },
@@ -347,7 +360,21 @@ export async function updateApplication(
   // Append the field-level diff to the audit trail so this state transition
   // can be replayed during point-in-time reconstruction. No-op when nothing
   // tracked actually changed.
-  await recordLoanChange(id, diffLoanSnapshot(before, snapshotOf(application)));
+  // A manual status change carries its operator-chosen reason (issue #1102)
+  // in the same audit row as the transition, so the history shows why.
+  const isManualStatusChange = manualStatusChange !== undefined && application.status !== before.status;
+  await recordLoanChange(
+    id,
+    diffLoanSnapshot(before, snapshotOf(application)),
+    isManualStatusChange
+      ? {
+          actorAddress: manualStatusChange.actorAddress,
+          ipAddress: manualStatusChange.ipAddress,
+          statusChangeReason: manualStatusChange.reason,
+        }
+      : {},
+    isManualStatusChange ? LOAN_MANUAL_STATUS_CHANGE_ACTION : LOAN_UPDATED_ACTION,
+  );
 
   // Time the review-stage transition (issue #1047): close the interval for the
   // status being left and open one for the status being entered. Guarded on a
@@ -397,6 +424,8 @@ export interface BulkReviewItem {
   applicationId: string;
   decision: BulkReviewDecision;
   reason?: string;
+  /** Operator-chosen reason code for this manual decision (issue #1102). */
+  statusChangeReason?: ManualStatusChangeReason;
   /**
    * Optimistic-lock guard (issue #846). When supplied, the decision is only
    * applied if the record still sits at this version; a mismatch records a
@@ -473,7 +502,7 @@ export async function bulkReviewApplications(
 
         await tx.auditLog.create({
           data: {
-            action: `loan_application.bulk_${item.decision}d`,
+            action: item.decision === "approve" ? "loan_application.bulk_approved" : "loan_application.bulk_rejected",
             actorAddress: reviewerAddress,
             ipAddress,
             metadata: {
@@ -482,6 +511,7 @@ export async function bulkReviewApplications(
               newStatus: status,
               decision: item.decision,
               reason: item.reason ?? null,
+              ...(item.statusChangeReason ? { statusChangeReason: item.statusChangeReason } : {}),
               reviewedAt: new Date().toISOString(),
               // Field-level change set, so point-in-time reconstruction can
               // replay this transition the same way it replays updates from

@@ -87,6 +87,7 @@ export class InvalidActivityCursorError extends Error {
 const STATUS_CHANGE_ACTIONS = [
   `${LOAN_AUDIT_ACTION_PREFIX}created`,
   `${LOAN_AUDIT_ACTION_PREFIX}updated`,
+  `${LOAN_AUDIT_ACTION_PREFIX}manual_status_change`,
   `${LOAN_AUDIT_ACTION_PREFIX}auto_rejected`,
   `${LOAN_AUDIT_ACTION_PREFIX}bulk_approved`,
   `${LOAN_AUDIT_ACTION_PREFIX}bulk_rejected`,
@@ -271,15 +272,28 @@ async function fetchStatusChangeEvents(
     if (!status) continue;
 
     const isCreation = row.action === `${LOAN_AUDIT_ACTION_PREFIX}created`;
+    // Manual status changes carry the operator's reason (issue #1102).
+    const reason = asObject(meta.statusChangeReason);
+    const reasonLabel = typeof reason.label === "string" ? reason.label : undefined;
+    const reasonNote = typeof reason.note === "string" ? reason.note : undefined;
+    const statusSummary = isCreation ? `Loan application created (${status})` : `Status changed to ${status}`;
     events.push({
       id: `status:${row.id}`,
       type: "status_change",
       occurredAt: iso(row.createdAt),
-      summary: isCreation ? `Loan application created (${status})` : `Status changed to ${status}`,
+      summary: reasonLabel
+        ? `${statusSummary} — ${reasonNote ? `${reasonLabel}: ${reasonNote}` : reasonLabel}`
+        : statusSummary,
       source: row.action,
       status,
       actorAddress: row.actorAddress ?? null,
-      metadata: { from, to: status },
+      metadata: {
+        from,
+        to: status,
+        ...(typeof reason.code === "string"
+          ? { reasonCode: reason.code, reasonLabel, ...(reasonNote ? { reasonNote } : {}) }
+          : {}),
+      },
     });
   }
   return events;
