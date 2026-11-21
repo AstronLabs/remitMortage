@@ -33,6 +33,7 @@ export const REVIEW_STAGES = [
   "Disbursing",
   "Repaying",
   "Completed",
+  "Withdrawn",
 ] as const;
 
 export type ReviewStage = (typeof REVIEW_STAGES)[number];

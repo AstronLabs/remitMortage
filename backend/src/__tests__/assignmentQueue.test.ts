@@ -233,6 +233,7 @@ describe("reassignApplicationReviewer", () => {
       now: () => BASE_NOW,
       actorAddress: "GADMIN",
       ipAddress: "127.0.0.1",
+      handoffNote: "Pending employer verification call.",
     });
 
     expect(result).toMatchObject({ applicationId: "app-1", reviewerId: "b" });
@@ -244,8 +245,36 @@ describe("reassignApplicationReviewer", () => {
     expect(client.auditLogs[0]).toMatchObject({
       action: "loan_application.reassigned",
       actorAddress: "GADMIN",
-      metadata: { applicationId: "app-1", reviewerId: "b", previousReviewerId: "a" },
+      metadata: {
+        applicationId: "app-1",
+        reviewerId: "b",
+        previousReviewerId: "a",
+        handoffNote: "Pending employer verification call.",
+      },
     });
+  });
+
+  it("rejects a handoff to a different reviewer without a note", async () => {
+    const client = createFakeClient([reviewer({ id: "a" }), reviewer({ id: "b" })]);
+    withApplication(client, "app-1");
+
+    await expect(
+      reassignApplicationReviewer("app-1", "b", { client })
+    ).rejects.toMatchObject({ code: "handoff_note_required", status: 400 });
+    await expect(
+      reassignApplicationReviewer("app-1", "b", { client, handoffNote: "  " })
+    ).rejects.toMatchObject({ code: "handoff_note_required", status: 400 });
+    expect(client.applications.get("app-1").assignedReviewerId).toBe("a");
+    expect(client.auditLogs).toHaveLength(0);
+  });
+
+  it("does not require a note for a first assignment with no previous reviewer", async () => {
+    const client = createFakeClient([reviewer({ id: "a" })]);
+    client.applications.set("app-1", { id: "app-1", deletedAt: null, assignedReviewerId: null });
+
+    const result = await reassignApplicationReviewer("app-1", "a", { client });
+
+    expect(result).toMatchObject({ reviewerId: "a", previousReviewerId: null, handoffNote: null });
   });
 
   it("rejects an inactive reviewer", async () => {
@@ -256,7 +285,7 @@ describe("reassignApplicationReviewer", () => {
     withApplication(client, "app-1");
 
     await expect(
-      reassignApplicationReviewer("app-1", "away", { client })
+      reassignApplicationReviewer("app-1", "away", { client, handoffNote: "note" })
     ).rejects.toMatchObject({ code: "reviewer_inactive", status: 409 });
     expect(client.applications.get("app-1").assignedReviewerId).toBe("a");
   });

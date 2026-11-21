@@ -139,7 +139,7 @@ describe("GET /api/loan/:id/activity — access control", () => {
     expect(res.body).toEqual(EMPTY_TIMELINE);
     expect(getTimelineMock).toHaveBeenCalledWith(
       { id: "loan-1", borrowerAddress: OWNER_WALLET },
-      { limit: undefined, cursor: undefined }
+      { limit: undefined, cursor: undefined, includeInternalNotes: false }
     );
   });
 
@@ -148,6 +148,20 @@ describe("GET /api/loan/:id/activity — access control", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual(EMPTY_TIMELINE);
+  });
+
+  it("includes internal reviewer handoff notes only for admins", async () => {
+    await request(adminApp).get("/api/loan/loan-1/activity");
+    expect(getTimelineMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ includeInternalNotes: true })
+    );
+
+    await request(ownerApp).get("/api/loan/loan-1/activity");
+    expect(getTimelineMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ includeInternalNotes: false })
+    );
   });
 });
 
@@ -165,7 +179,7 @@ describe("GET /api/loan/:id/activity — query handling", () => {
     expect(res.status).toBe(200);
     expect(getTimelineMock).toHaveBeenCalledWith(
       { id: "loan-1", borrowerAddress: OWNER_WALLET },
-      { limit: 5, cursor: "abc" }
+      { limit: 5, cursor: "abc", includeInternalNotes: false }
     );
   });
 

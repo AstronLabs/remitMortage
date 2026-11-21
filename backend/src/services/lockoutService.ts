@@ -3,6 +3,7 @@
 
 import { getRedisClient } from "./redis.js";
 import { sendLockoutNotificationEmail } from "./email.js";
+import { DEFAULT_COALESCE_WINDOW_MS, NotificationCoalescer } from "./notificationCoalescer.js";
 import logger from "../utils/logger.js";
 
 const LOCKOUT_THRESHOLD = parseInt(process.env.LOCKOUT_THRESHOLD || "5", 10);
@@ -17,6 +18,51 @@ interface InMemLockoutRecord {
 }
 
 const inMemoryStore = new Map<string, InMemLockoutRecord>();
+
+interface LockoutNotification {
+  recipient: string;
+  minutes: number;
+  ipAddress?: string;
+}
+
+/**
+ * Repeated lockouts for the same account are indistinguishable to the user, so
+ * they are coalesced: the first lockout emails immediately, and any further
+ * lockout events within the window are folded into one combined email reporting
+ * the count (see services/notificationCoalescer.ts).
+ */
+const lockoutNotificationCoalescer = new NotificationCoalescer<LockoutNotification>({
+  windowMs: DEFAULT_COALESCE_WINDOW_MS,
+  flush: (_key, count, sample) => {
+    void sendLockoutNotificationEmail(
+      sample.recipient,
+      sample.minutes,
+      sample.ipAddress,
+      count
+    ).catch((err) =>
+      logger.error("Failed to send coalesced lockout notification email", {
+        recipient: sample.recipient,
+        err,
+      })
+    );
+  },
+});
+
+/**
+ * Dispatches a lockout notification through the coalescer: immediate on the
+ * first trigger, folded into a single combined email for rapid repeats.
+ */
+function notifyLockout(accountEmail: string, minutes: number, ipAddress?: string): void {
+  const decision = lockoutNotificationCoalescer.record(
+    { type: "LOCKOUT_NOTIFICATION", recipient: accountEmail },
+    { recipient: accountEmail, minutes, ipAddress }
+  );
+  if (!decision.deliver) return;
+
+  void sendLockoutNotificationEmail(accountEmail, minutes, ipAddress).catch((err) =>
+    logger.error("Failed to send lockout notification email", { accountEmail, err })
+  );
+}
 
 /**
  * Calculates exponential backoff duration in seconds based on consecutive failures beyond threshold.
@@ -107,13 +153,7 @@ export async function recordFailedAttempt(
       }
 
       if (failedAttempts >= LOCKOUT_THRESHOLD && accountEmail) {
-        sendLockoutNotificationEmail(
-          accountEmail,
-          Math.max(1, Math.ceil(lockoutDuration / 60)),
-          ipAddress
-        ).catch((err) =>
-          logger.error("Failed to send lockout notification email", { accountEmail, err })
-        );
+        notifyLockout(accountEmail, Math.max(1, Math.ceil(lockoutDuration / 60)), ipAddress);
       }
 
       return {
@@ -148,13 +188,7 @@ export async function recordFailedAttempt(
   inMemoryStore.set(normalized, record);
 
   if (failedAttempts >= LOCKOUT_THRESHOLD && accountEmail) {
-    sendLockoutNotificationEmail(
-      accountEmail,
-      Math.max(1, Math.ceil(lockoutDuration / 60)),
-      ipAddress
-    ).catch((err) =>
-      logger.error("Failed to send lockout notification email", { accountEmail, err })
-    );
+    notifyLockout(accountEmail, Math.max(1, Math.ceil(lockoutDuration / 60)), ipAddress);
   }
 
   return {
@@ -186,4 +220,9 @@ export async function resetLockoutState(identifier: string): Promise<void> {
 /** Helper for tests / cleanup */
 export function _clearInMemoryLockouts(): void {
   inMemoryStore.clear();
+}
+
+/** Helper for tests: clears any pending lockout-notification coalescing windows. */
+export function _resetLockoutNotificationCoalescer(): void {
+  lockoutNotificationCoalescer.clear();
 }

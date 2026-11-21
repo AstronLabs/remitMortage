@@ -31,6 +31,7 @@
     { "route": "/settings", "url": "/settings" },
     { "route": "/share/[id]", "url": "/share/sample-share-id" },
     { "route": "/statements/annual-interest", "url": "/statements/annual-interest" },
+    { "route": "/statements/investor-monthly", "url": "/statements/investor-monthly" },
     { "route": "/stats", "url": "/stats" },
     {
       "route": "/tx/[hash]",

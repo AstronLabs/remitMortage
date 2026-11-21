@@ -55,11 +55,58 @@ type WalletWindow = Window & {
 
 type WalletType = "stellar" | "evm" | "solana" | "ledger" | null;
 
+/** A wallet provider that can be connected alongside the others (issue #1117). */
+export type WalletProviderId = Exclude<WalletType, null>;
+
+export interface ConnectedWallet {
+  provider: WalletProviderId;
+  address: string;
+  /** Display name of the provider, e.g. "Freighter". */
+  label: string;
+  /** USDC balance for Stellar wallets; null when unknown or not applicable. */
+  usdcBalance: string | null;
+  /** True for the wallet the next signing action will use. */
+  isActive: boolean;
+}
+
+export const WALLET_PROVIDER_LABELS: Record<WalletProviderId, string> = {
+  stellar: "Freighter",
+  ledger: "Ledger",
+  evm: "MetaMask",
+  solana: "Phantom",
+};
+
+/** Display order in the account menu, and fallback order when the active wallet disconnects. */
+const WALLET_PROVIDER_ORDER: WalletProviderId[] = ["stellar", "ledger", "evm", "solana"];
+
+type WalletAddresses = Record<WalletProviderId, string | null>;
+
+/** First connected provider other than `excluding`, in display order. */
+function nextActiveProvider(
+  addresses: WalletAddresses,
+  excluding: WalletProviderId
+): WalletProviderId | null {
+  return WALLET_PROVIDER_ORDER.find((provider) => provider !== excluding && !!addresses[provider]) ?? null;
+}
+
 type WalletContextType = {
+  /**
+   * The Stellar account in use: the active wallet's key when a Stellar wallet
+   * (Freighter or Ledger) is active, otherwise whichever Stellar wallet is connected.
+   */
   publicKey: string | null;
   evmAddress: string | null;
   solanaAddress: string | null;
+  /** The active wallet — the one the next signing action uses. */
   walletType: WalletType;
+  /** Every wallet connected right now, side by side (issue #1117). */
+  connectedWallets: ConnectedWallet[];
+  /** Address of the active wallet. */
+  activeAddress: string | null;
+  /** Choose which connected wallet the next signing action uses. */
+  setActiveWallet: (provider: WalletProviderId) => void;
+  /** Disconnect one wallet, leaving the others connected. */
+  disconnectWallet: (provider: WalletProviderId) => void;
   isConnected: boolean;
   isConnecting: boolean;
   usdcBalance: string | null;
@@ -75,6 +122,7 @@ type WalletContextType = {
   connectSolana: () => Promise<string | null>;
   ledgerPath: string;
   setLedgerPath: React.Dispatch<React.SetStateAction<string>>;
+  /** Disconnect the active wallet; any other connected wallet becomes active. */
   disconnect: () => void;
   disconnectAll: () => void;
   signMessage: (message: string) => Promise<string | null>;
@@ -112,19 +160,40 @@ async function readFreighterPublicKey(
 }
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {
-  const [publicKey, setPublicKey] = useState<string | null>(null);
+  // Each provider keeps its own slot so connecting one never displaces
+  // another (issue #1117). Freighter and Ledger are both Stellar accounts.
+  const [freighterKey, setFreighterKey] = useState<string | null>(null);
+  const [ledgerKey, setLedgerKey] = useState<string | null>(null);
   const [evmAddress, setEvmAddress] = useState<string | null>(null);
   const [solanaAddress, setSolanaAddress] = useState<string | null>(null);
   const [walletType, setWalletType] = useState<WalletType>(null);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [usdcBalance, setUsdcBalance] = useState<string | null>(null);
+  const [freighterBalance, setFreighterBalance] = useState<string | null>(null);
+  const [ledgerBalance, setLedgerBalance] = useState<string | null>(null);
   const [ledgerPath, setLedgerPath] = useState<string>(DEFAULT_LEDGER_PATH);
   const [network, setNetwork] = useState<string | null>(null);
   const [wrongNetwork, setWrongNetwork] = useState<boolean>(false);
   const [walletError, setWalletError] = useState<WalletError | null>(null);
-  // Mirrors `publicKey` for the polling loop, which must not re-subscribe on
+  // Mirrors `freighterKey` for the polling loop, which must not re-subscribe on
   // every render just to know the currently connected account.
   const publicKeyRef = useRef<string | null>(null);
+
+  const addresses: WalletAddresses = {
+    stellar: freighterKey,
+    ledger: ledgerKey,
+    evm: evmAddress,
+    solana: solanaAddress,
+  };
+  // Latest addresses for callbacks that outlive a render (the Freighter watcher).
+  const addressesRef = useRef<WalletAddresses>(addresses);
+  useEffect(() => {
+    addressesRef.current = addresses;
+  });
+
+  const publicKey =
+    walletType === "ledger" ? (ledgerKey ?? freighterKey) : (freighterKey ?? ledgerKey);
+  const usdcBalance =
+    publicKey === null ? null : publicKey === freighterKey ? freighterBalance : ledgerBalance;
 
   const server = new Horizon.Server(HORIZON_TESTNET);
 
@@ -138,25 +207,70 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setWalletError(null);
   }
 
-  async function fetchBalances(pk: string) {
+  async function fetchBalances(
+    pk: string,
+    setBalance: React.Dispatch<React.SetStateAction<string | null>> = setFreighterBalance
+  ) {
     try {
       const account = await server.accounts().accountId(pk).call();
       const balances = account.balances as BalanceLine[];
       const usdc = balances.find((balance) => balance.asset_code === "USDC");
-      if (usdc) setUsdcBalance(usdc.balance);
-      else setUsdcBalance("0");
+      if (usdc) setBalance(usdc.balance);
+      else setBalance("0");
     } catch {
-      setUsdcBalance(null);
+      setBalance(null);
     }
   }
 
+  /** Clears one provider's slot without touching the other wallets. */
+  function clearProvider(provider: WalletProviderId) {
+    if (provider === "stellar") {
+      setFreighterKey(null);
+      publicKeyRef.current = null;
+      setFreighterBalance(null);
+      // Network state is read from Freighter, so it goes with it.
+      setNetwork(null);
+      setWrongNetwork(false);
+    } else if (provider === "ledger") {
+      setLedgerKey(null);
+      setLedgerBalance(null);
+    } else if (provider === "evm") {
+      setEvmAddress(null);
+    } else {
+      setSolanaAddress(null);
+    }
+  }
+
+  /**
+   * When `provider` stops being connected and it was the active wallet, hand
+   * the active role to the next wallet that is still connected.
+   */
+  function releaseActive(provider: WalletProviderId) {
+    const fallback = nextActiveProvider(addressesRef.current, provider);
+    setWalletType((current) => (current === provider ? fallback : current));
+  }
+
+  function disconnectWallet(provider: WalletProviderId) {
+    clearProvider(provider);
+    releaseActive(provider);
+    setWalletError(null);
+  }
+
+  function setActiveWallet(provider: WalletProviderId) {
+    // Only a connected wallet can be made active.
+    if (!addressesRef.current[provider]) return;
+    setWalletType(provider);
+  }
+
   function clearWalletState() {
-    setPublicKey(null);
+    setFreighterKey(null);
+    setLedgerKey(null);
     publicKeyRef.current = null;
     setEvmAddress(null);
     setSolanaAddress(null);
     setWalletType(null);
-    setUsdcBalance(null);
+    setFreighterBalance(null);
+    setLedgerBalance(null);
     setNetwork(null);
     setWrongNetwork(false);
     setWalletError(null);
@@ -168,12 +282,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
    * Used by the disconnect watcher when Freighter goes away on its own.
    */
   function handleStellarDisconnect(reason: WalletError) {
-    setPublicKey(null);
-    publicKeyRef.current = null;
-    setUsdcBalance(null);
-    setNetwork(null);
-    setWrongNetwork(false);
-    setWalletType((current) => (current === "stellar" ? null : current));
+    clearProvider("stellar");
+    releaseActive("stellar");
     setWalletError(reason);
   }
 
@@ -192,8 +302,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       const pk = await readFreighterPublicKey(freighter);
       if (!pk) throw new Error("Could not get public key from Freighter");
 
-      setPublicKey(pk);
+      setFreighterKey(pk);
       publicKeyRef.current = pk;
+      // A newly connected wallet becomes active; the others stay connected.
       setWalletType("stellar");
 
       let net: string | null = null;
@@ -207,13 +318,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
       setNetwork(net);
       setWrongNetwork(isNetworkMismatch(net));
-      await fetchBalances(pk);
+      await fetchBalances(pk, setFreighterBalance);
       return pk;
     } catch (err) {
       reportError(err);
-      setPublicKey(null);
+      setFreighterKey(null);
       publicKeyRef.current = null;
-      setWalletType((current) => (current === "stellar" ? null : current));
+      releaseActive("stellar");
       return null;
     } finally {
       setIsConnecting(false);
@@ -227,12 +338,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     try {
       const result = await getLedgerPublicKey(ledgerPath);
       const publicKeyFromLedger = result.publicKey;
-      setPublicKey(publicKeyFromLedger);
-      publicKeyRef.current = publicKeyFromLedger;
+      setLedgerKey(publicKeyFromLedger);
       setWalletType("ledger");
-      setNetwork(null);
-      setWrongNetwork(false);
-      await fetchBalances(publicKeyFromLedger);
+      await fetchBalances(publicKeyFromLedger, setLedgerBalance);
       return publicKeyFromLedger;
     } catch (err) {
       reportError(err);
@@ -292,7 +400,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   }
 
   function disconnect() {
-    clearWalletState();
+    if (walletType) disconnectWallet(walletType);
+    else clearWalletState();
   }
 
   function disconnectAll() {
@@ -340,7 +449,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   // disconnect event, so revoked access, a removed extension, or an account
   // switch is detected by polling and tears the session down here.
   useEffect(() => {
-    if (!publicKey) return;
+    if (!freighterKey) return;
 
     let cancelled = false;
 
@@ -399,9 +508,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         if (currentKey !== publicKeyRef.current) {
           // Account switched inside Freighter — adopt it and refresh balances.
           publicKeyRef.current = currentKey;
-          setPublicKey(currentKey);
+          setFreighterKey(currentKey);
           setWalletError(null);
-          await fetchBalances(currentKey);
+          await fetchBalances(currentKey, setFreighterBalance);
           if (cancelled) return;
         }
 
@@ -432,16 +541,40 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       clearInterval(timer);
       window.removeEventListener("focus", checkConnection);
     };
-    // `publicKey` gates the watcher; the live account lives in publicKeyRef.
+    // `freighterKey` gates the watcher; the live account lives in publicKeyRef.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publicKey]);
+  }, [freighterKey]);
+
+  const balances: Record<WalletProviderId, string | null> = {
+    stellar: freighterBalance,
+    ledger: ledgerBalance,
+    evm: null,
+    solana: null,
+  };
+  const connectedWallets: ConnectedWallet[] = WALLET_PROVIDER_ORDER.flatMap((provider) => {
+    const address = addresses[provider];
+    if (!address) return [];
+    return [
+      {
+        provider,
+        address,
+        label: WALLET_PROVIDER_LABELS[provider],
+        usdcBalance: balances[provider],
+        isActive: provider === walletType,
+      },
+    ];
+  });
 
   const value: WalletContextType = {
     publicKey,
     evmAddress,
     solanaAddress,
     walletType,
-    isConnected: !!publicKey || !!evmAddress || !!solanaAddress,
+    connectedWallets,
+    activeAddress: walletType ? addresses[walletType] : null,
+    setActiveWallet,
+    disconnectWallet,
+    isConnected: connectedWallets.length > 0,
     isConnecting,
     usdcBalance,
     network,

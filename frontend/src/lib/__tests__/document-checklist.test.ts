@@ -2,12 +2,17 @@
 // SPDX-License-Identifier: MIT
 
 import {
+  buildDocumentChecklist,
   canSubmitApplication,
+  getChecklistItemAction,
   getChecklistStatus,
   getSubmissionBlockMessage,
   getUnacceptedRequiredDocuments,
   normalizeDocumentStatus,
+  toChecklistItemState,
   type ApplicantDocument,
+  type DocumentChecklistStatus,
+  type RequiredDocumentType,
 } from "../document-checklist";
 
 const allAccepted: ApplicantDocument[] = [
@@ -69,5 +74,67 @@ describe("loan document checklist status and submission rules", () => {
       { ...documentWithStatus("rejected"), documentId: "newer", uploadedAt: "2026-03-01T00:00:00.000Z" },
     ];
     expect(getChecklistStatus("identity", documents)).toBe("rejected");
+  });
+});
+
+describe("buildDocumentChecklist (issue #1112)", () => {
+  const doc = (
+    documentType: RequiredDocumentType,
+    status: DocumentChecklistStatus,
+    uploadedAt: string,
+    reviewMessage?: string
+  ): ApplicantDocument => ({
+    documentId: `${documentType}-${uploadedAt}`,
+    documentType,
+    status,
+    originalName: `${documentType}.pdf`,
+    uploadedAt,
+    ...(reviewMessage ? { reviewMessage } : {}),
+  });
+
+  it("maps every API status to one of the four checklist states", () => {
+    expect(toChecklistItemState("missing")).toBe("not_submitted");
+    expect(toChecklistItemState("uploaded")).toBe("pending_review");
+    expect(toChecklistItemState("under_review")).toBe("pending_review");
+    expect(toChecklistItemState("accepted")).toBe("approved");
+    expect(toChecklistItemState("rejected")).toBe("rejected");
+  });
+
+  it("offers resubmission only for rejected items", () => {
+    expect(getChecklistItemAction("rejected")).toBe("resubmit");
+    expect(getChecklistItemAction("not_submitted")).toBe("upload");
+    expect(getChecklistItemAction("pending_review")).toBeNull();
+    expect(getChecklistItemAction("approved")).toBeNull();
+  });
+
+  it("lists every required document for the loan type with its latest state", () => {
+    const items = buildDocumentChecklist("construction", [
+      doc("identity", "rejected", "2026-01-01T00:00:00.000Z", "Blurry scan"),
+      doc("identity", "under_review", "2026-01-02T00:00:00.000Z"),
+      doc("income", "rejected", "2026-01-03T00:00:00.000Z", "Expired payslip"),
+      doc("construction_plan", "accepted", "2026-01-04T00:00:00.000Z"),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual([
+      "identity",
+      "income",
+      "bank_statement",
+      "construction_plan",
+    ]);
+    expect(items.map((item) => [item.state, item.action])).toEqual([
+      ["pending_review", null],
+      ["rejected", "resubmit"],
+      ["not_submitted", "upload"],
+      ["approved", null],
+    ]);
+    expect(items[1].rejectionReason).toBe("Expired payslip");
+    expect(items[0].rejectionReason).toBeUndefined();
+  });
+
+  it("falls back to a generic reason when a rejection has none", () => {
+    const [identity] = buildDocumentChecklist("purchase", [
+      doc("identity", "rejected", "2026-01-01T00:00:00.000Z"),
+    ]);
+    expect(identity.rejectionReason).toBe("No reason was provided by the reviewer.");
   });
 });

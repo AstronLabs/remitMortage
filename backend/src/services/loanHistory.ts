@@ -3,6 +3,7 @@
 
 import { prisma } from "./db.js";
 import type { LoanApplication } from "./loanStore.js";
+import type { ManualStatusChangeReason } from "./manualStatusChangeReason.js";
 
 /**
  * Point-in-time reconstruction of a loan application's state.
@@ -44,10 +45,14 @@ export type LoanChangeSet = Partial<{
 export const LOAN_AUDIT_ACTION_PREFIX = "loan_application.";
 export const LOAN_CREATED_ACTION = `${LOAN_AUDIT_ACTION_PREFIX}created`;
 export const LOAN_UPDATED_ACTION = `${LOAN_AUDIT_ACTION_PREFIX}updated`;
+/** A status change an operator made by hand, carrying its reason (issue #1102). */
+export const LOAN_MANUAL_STATUS_CHANGE_ACTION = `${LOAN_AUDIT_ACTION_PREFIX}manual_status_change`;
 
 interface AuditContext {
   actorAddress?: string;
   ipAddress?: string;
+  /** Required reason for a manual status change; stored with the change set. */
+  statusChangeReason?: ManualStatusChangeReason;
 }
 
 /**
@@ -104,7 +109,11 @@ export async function recordLoanChange(
       action,
       actorAddress: ctx.actorAddress,
       ipAddress: ctx.ipAddress,
-      metadata: { applicationId, changes },
+      metadata: {
+        applicationId,
+        changes,
+        ...(ctx.statusChangeReason ? { statusChangeReason: ctx.statusChangeReason } : {}),
+      },
     },
   });
 }

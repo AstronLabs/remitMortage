@@ -96,6 +96,15 @@ export const IDOR_ENDPOINT_REGISTRY: IdorEndpointEntry[] = [
   },
   {
     method: "POST",
+    route: "POST /api/loan/:id/withdraw",
+    param: "id",
+    paramSource: "path",
+    resource: "loan",
+    ownershipCheck: "requireLoanOwnership + applicant-only (admins cannot withdraw on a borrower's behalf)",
+    coveredBy: "src/__tests__/idorAudit.test.ts",
+  },
+  {
+    method: "POST",
     route: "POST /api/loan/:id/trigger-payment-due",
     param: "id",
     paramSource: "path",

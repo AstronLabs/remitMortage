@@ -13,6 +13,8 @@ interface ConfirmationDialogProps {
   destructive?: boolean;
   children?: React.ReactNode;
   closeOnConfirm?: boolean;
+  /** Blocks confirming independently of the typed confirmation, e.g. nothing left to act on. */
+  confirmDisabled?: boolean;
   onConfirm: () => void | Promise<void>;
   onCancel: () => void;
 }
@@ -27,6 +29,7 @@ export function ConfirmationDialog({
   destructive = true,
   children,
   closeOnConfirm = true,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: ConfirmationDialogProps) {
@@ -67,7 +70,7 @@ export function ConfirmationDialog({
     confirmationText === undefined || confirmationValue === confirmationText;
 
   async function handleConfirm() {
-    if (submittingRef.current || !confirmationMatches) return;
+    if (submittingRef.current || !confirmationMatches || confirmDisabled) return;
 
     submittingRef.current = true;
     setSubmitting(true);
@@ -153,7 +156,7 @@ export function ConfirmationDialog({
           <button
             type="button"
             onClick={() => void handleConfirm()}
-            disabled={!confirmationMatches || submitting}
+            disabled={!confirmationMatches || confirmDisabled || submitting}
             aria-busy={submitting}
             className={`rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
               destructive

@@ -41,7 +41,7 @@ import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, us
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { useWidgetStore, WidgetId } from '../stores/useWidgetStore';
 import { SortableWidget } from '../../components/dashboard/SortableWidget';
-import { WidgetSettingsModal } from '../../components/dashboard/WidgetSettingsModal';
+import { WIDGET_LABELS, WidgetSettingsModal } from '../../components/dashboard/WidgetSettingsModal';
 import { useAutoRefresh } from '../../hooks/useAutoRefresh';
 import { track } from "../../lib/analytics";
 import { useToast } from "@/context/ToastContext";
@@ -180,7 +180,13 @@ export default function DashboardPage() {
     if (isConnected && publicKey) track("borrower_dashboard_viewed");
   }, [isConnected, publicKey]);
 
-  const { order, visibility, setOrder, refreshInterval } = useWidgetStore();
+  const { order, visibility, setOrder, toggleVisibility, setActiveUser, refreshInterval } = useWidgetStore();
+  const visibleOrder = order.filter((id) => visibility[id]);
+
+  // Each wallet keeps its own widget layout (issue #1111).
+  useEffect(() => {
+    if (publicKey) setActiveUser(publicKey);
+  }, [publicKey, setActiveUser]);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -200,7 +206,7 @@ export default function DashboardPage() {
     switch (id) {
       case 'quick-metrics':
         return (
-          <SortableWidget key={id} id={id}>
+          <SortableWidget key={id} id={id} label={WIDGET_LABELS[id]} onHide={() => toggleVisibility(id)}>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="p-5 bg-slate-900/70 border border-slate-800 rounded-2xl">
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
@@ -239,7 +245,7 @@ export default function DashboardPage() {
         );
       case 'yield-estimator':
         return (
-          <SortableWidget key={id} id={id}>
+          <SortableWidget key={id} id={id} label={WIDGET_LABELS[id]} onHide={() => toggleVisibility(id)}>
             <YieldEstimatorCalculator
               initialAmount={Number(status?.escrow.deposited) || undefined}
             />
@@ -248,7 +254,7 @@ export default function DashboardPage() {
       case 'credit-recovery':
         if (!recoveryPlan) return null;
         return (
-          <SortableWidget key={id} id={id}>
+          <SortableWidget key={id} id={id} label={WIDGET_LABELS[id]} onHide={() => toggleVisibility(id)}>
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-xl backdrop-blur-xl">
               <button
                 type="button"
@@ -285,7 +291,7 @@ export default function DashboardPage() {
       case 'savings-loan':
         if (!status) return null;
         return (
-          <SortableWidget key={id} id={id}>
+          <SortableWidget key={id} id={id} label={WIDGET_LABELS[id]} onHide={() => toggleVisibility(id)}>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div id="tour-savings" className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl backdrop-blur-xl">
                 <SavingsProgressCard
@@ -319,7 +325,7 @@ export default function DashboardPage() {
       case 'milestones':
         if (milestones.length === 0) return null;
         return (
-          <SortableWidget key={id} id={id}>
+          <SortableWidget key={id} id={id} label={WIDGET_LABELS[id]} onHide={() => toggleVisibility(id)}>
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 md:p-8 shadow-xl backdrop-blur-xl">
               <div className="flex items-center justify-between mb-6">
                 <div>
@@ -648,11 +654,23 @@ export default function DashboardPage() {
               }}
             />
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-              <SortableContext items={order} strategy={verticalListSortingStrategy}>
+              <SortableContext items={visibleOrder} strategy={verticalListSortingStrategy}>
                 <div className="space-y-8">
-                  {order.map((id) => renderWidget(id))}
+                  {visibleOrder.map((id) => renderWidget(id))}
                 </div>
               </SortableContext>
+              {visibleOrder.length === 0 && (
+                <div className="p-6 text-center bg-slate-900/70 border border-dashed border-slate-700 rounded-2xl text-sm text-slate-400">
+                  All dashboard widgets are hidden.{' '}
+                  <button
+                    type="button"
+                    onClick={() => setShowWidgetSettings(true)}
+                    className="font-semibold text-cyan-400 hover:text-cyan-300"
+                  >
+                    Customize layout
+                  </button>
+                </div>
+              )}
             </DndContext>
           </div>
         )}
