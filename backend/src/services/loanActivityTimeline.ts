@@ -69,6 +69,12 @@ export interface GetLoanActivityTimelineOptions {
   limit?: number;
   /** Cursor from a previous page's `nextCursor`. Omit for the first page. */
   cursor?: string | null;
+  /**
+   * Include operator-only notes (reviewer handoff notes, issue #1101). Off by
+   * default so a borrower reading their own timeline never sees internal
+   * review commentary; reviewer/admin callers opt in.
+   */
+  includeInternalNotes?: boolean;
 }
 
 export const DEFAULT_LOAN_ACTIVITY_LIMIT = 20;
@@ -333,11 +339,29 @@ async function fetchDocumentEvents(
   }));
 }
 
+/** Metadata keys that only operators may see on the timeline. */
+const INTERNAL_NOTE_KEYS = ["handoffNote"];
+
+function withoutInternalNotes(meta: Record<string, unknown>): Record<string, unknown> {
+  const copy = { ...meta };
+  for (const key of INTERNAL_NOTE_KEYS) delete copy[key];
+  return copy;
+}
+
+/** One-line description of a reviewer reassignment / handoff. */
+function reassignmentSummary(meta: Record<string, unknown>): string {
+  const from = typeof meta.previousReviewerEmail === "string" ? meta.previousReviewerEmail : null;
+  const to = typeof meta.reviewerEmail === "string" ? meta.reviewerEmail : null;
+  const note = typeof meta.handoffNote === "string" && meta.handoffNote ? meta.handoffNote : null;
+  if (!note) return "Reviewer reassigned";
+  return `Reviewer handoff${from ? ` from ${from}` : ""}${to ? ` to ${to}` : ""}: ${note}`;
+}
+
 /** One-line description of an operator action, best-effort from its metadata. */
 function adminActionSummary(action: string, meta: Record<string, unknown>): string {
   switch (action) {
     case `${LOAN_AUDIT_ACTION_PREFIX}reassigned`:
-      return "Reviewer reassigned";
+      return reassignmentSummary(meta);
     case "loan_comment":
       return "Comment added";
     case "LOAN_SERVICING_TRANSFER_SCHEDULED":
@@ -363,6 +387,7 @@ async function fetchAdminActionEvents(
   loan: LoanActivityLoanRef,
   cursor: TimelineCursor | null,
   take: number,
+  includeInternalNotes: boolean,
 ): Promise<LoanActivityEvent[]> {
   const timeFilter = cursor ? { createdAt: { lte: cursor.occurredAt } } : {};
   const rows = await prisma.auditLog.findMany({
@@ -380,7 +405,8 @@ async function fetchAdminActionEvents(
   });
 
   return (rows as AuditRow[]).map((row) => {
-    const meta = asObject(row.metadata);
+    const raw = asObject(row.metadata);
+    const meta = includeInternalNotes ? raw : withoutInternalNotes(raw);
     return {
       id: `admin:${row.id}`,
       type: "admin_action" as const,
@@ -424,7 +450,7 @@ export async function getLoanActivityTimeline(
     fetchPaymentEvents(prisma, loan, cursor, take),
     fetchStatusChangeEvents(prisma, loan, cursor, take),
     fetchDocumentEvents(prisma, loan, cursor, take),
-    fetchAdminActionEvents(prisma, loan, cursor, take),
+    fetchAdminActionEvents(prisma, loan, cursor, take, options.includeInternalNotes ?? false),
   ]);
 
   let merged = [...payments, ...statusChanges, ...documents, ...adminActions].sort(

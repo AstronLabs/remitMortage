@@ -621,7 +621,8 @@ loanRouter.get("/:id/activity", async (req, res) => {
   try {
     const timeline = await getLoanActivityTimeline(
       { id: owned.id, borrowerAddress: owned.borrowerAddress },
-      { limit, cursor }
+      // Reviewer handoff notes (issue #1101) are internal: admins only.
+      { limit, cursor, includeInternalNotes: isAdminRequest(req as AuthenticatedRequest) }
     );
     return res.json(timeline);
   } catch (error) {

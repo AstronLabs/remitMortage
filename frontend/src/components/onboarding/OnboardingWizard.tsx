@@ -52,6 +52,7 @@ export default function OnboardingWizard() {
 
   // State from Zustand store (persisted across reloads).
   const step = useOnboardingState((s) => s.step);
+  const furthestStep = useOnboardingState((s) => s.furthestStep ?? s.step);
   const isVerified = useOnboardingState((s) => s.isVerified);
 
   // Local component state
