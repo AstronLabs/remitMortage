@@ -29,6 +29,7 @@ import { rpc } from "@stellar/stellar-sdk";
 import { loadConfig } from "../config.js";
 import logger from "../utils/logger.js";
 import { sendWebhook } from "./webhook.js";
+import { setRpcDegradedState } from "./rpcDegradedState.js";
 
 /** Health classification for a single RPC node. */
 export type RpcNodeStatus =
@@ -242,6 +243,10 @@ export class RpcHealthMonitor {
 
     this.statuses = new Map(next.map((h) => [h.url, h]));
     this.updateActiveNode(next);
+
+    // Expose the sweep result as the process-wide degraded flag used by the
+    // read/write HTTP middleware (issue #984).
+    setRpcDegradedState(!next.some((h) => h.healthy), checkedAt);
 
     return next;
   }

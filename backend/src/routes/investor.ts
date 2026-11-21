@@ -15,6 +15,7 @@
 
 import { NextFunction, Router, Response } from "express";
 import { requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";
+import { requireRpcAvailable } from "../middleware/rpcDegradedMode.js";
 import {
   InvestmentRestrictedError,
   assertInvestmentAllowed,
@@ -66,6 +67,7 @@ investorRouter.get("/accreditation", async (req: AuthenticatedRequest, res: Resp
 
 investorRouter.post(
   "/investments/authorize",
+  requireRpcAvailable(),
   requireCurrentAccreditation,
   (_req: AuthenticatedRequest, res: Response) => res.json({ allowed: true })
 );
