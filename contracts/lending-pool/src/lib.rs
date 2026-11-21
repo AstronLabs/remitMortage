@@ -75,6 +75,9 @@ mod test_pause_guardian;
 
 #[cfg(test)]
 mod test_closing_statement;
+
+#[cfg(test)]
+mod test_loan_summaries;
 mod test_principal_payment;
 
 pub use crate::errors::{LoanAssumptionError, PoolError, RateAdjustmentError};
@@ -82,10 +85,11 @@ pub use crate::types::{
     BatchDisburseItem, BorrowRateCurve, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot,
     FeatureKey, HalvingInfo, InvestorLockupPosition, InvestorRecord, LoanAssumptionRequest,
     LoanClosingStatement, LoanCollateralRecord, LoanIntroConfig, LoanOriginTerms, LoanPhase,
-    LoanPortabilitySnapshot, LoanRecord, LoanStatus, LockupTier, PauseGroup, PayoffQuote,
-    PendingCapChange, PendingHaircutChange, PendingRateCurveChange, PendingUpgradeRecord,
-    PendingWindDown, PoolConfig, PoolExtKey, PoolHealth, ProofOfReserves, RepaymentSchedule,
-    RestructureProposal, ScheduleView, Tranche, TrancheInfo, WindDownStatus, YieldMode,
+    LoanPortabilitySnapshot, LoanRecord, LoanStatus, LoanSummary, LoanSummaryPage, LockupTier,
+    PauseGroup, PayoffQuote, PendingCapChange, PendingHaircutChange, PendingRateCurveChange,
+    PendingUpgradeRecord, PendingWindDown, PoolConfig, PoolExtKey, PoolHealth, ProofOfReserves,
+    RepaymentSchedule, RestructureProposal, ScheduleView, Tranche, TrancheInfo, WindDownStatus,
+    YieldMode,
 };
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
@@ -112,6 +116,10 @@ fn premium_for(amount: i128) -> i128 {
     }
     amount.saturating_mul(INSURANCE_PREMIUM_FEE_BPS) / INSURANCE_BPS_SCALE
 }
+
+/// Hard ceiling on the number of summaries `get_loan_summaries` returns in a
+/// single call, so one read stays well inside the per-call resource budget.
+pub const MAX_LOAN_SUMMARY_PAGE: u32 = 50;
 
 const INSTANCE_BUMP_AMOUNT: u32 = 518_400; // ~30 days
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 129_600; // ~7.5 days
@@ -846,6 +854,23 @@ impl LendingPoolContract {
         env.storage()
             .persistent()
             .set(&DataKey::Loan(loan_id.clone()), record);
+    }
+
+    /// Appends a newly created loan to the sequential loan index that
+    /// `get_loan_summaries` pages over. Called exactly once per loan, at
+    /// creation (or import); the index only grows.
+    fn append_loan_index(env: &Env, loan_id: &BytesN<32>) {
+        let len: u32 = env
+            .storage()
+            .persistent()
+            .get(&PoolExtKey::LoanIndexLen)
+            .unwrap_or(0u32);
+        env.storage()
+            .persistent()
+            .set(&PoolExtKey::LoanIndexEntry(len), loan_id);
+        env.storage()
+            .persistent()
+            .set(&PoolExtKey::LoanIndexLen, &(len + 1));
     }
 
     /// Returns whether `contractor` is on the disbursement whitelist.
@@ -3150,6 +3175,7 @@ impl LendingPoolContract {
         };
 
         Self::set_loan(env, &loan_id, &loan);
+        Self::append_loan_index(env, &loan_id);
         env.storage().persistent().set(
             &FeatureKey::LoanOriginTerms(loan_id.clone()),
             &LoanOriginTerms {
@@ -6519,6 +6545,61 @@ impl LendingPoolContract {
         Self::read_loan(&env, &loan_id)
     }
 
+    /// Returns a page of loan summaries for indexers, in creation order.
+    ///
+    /// `start_id` is a position in the sequential loan index (the first loan
+    /// is `0`), not a loan hash. At most `min(limit, MAX_LOAN_SUMMARY_PAGE)`
+    /// summaries are returned. `next_start_id` is the cursor for the following
+    /// page and equals `total` once the end is reached; a `start_id` at or
+    /// past the end yields an empty page. Read-only: nothing is written and
+    /// no storage TTL is extended.
+    ///
+    /// Loans created before the index existed are not listed; use
+    /// `get_loan_info` for those.
+    pub fn get_loan_summaries(env: Env, start_id: u32, limit: u32) -> LoanSummaryPage {
+        let total: u32 = env
+            .storage()
+            .persistent()
+            .get(&PoolExtKey::LoanIndexLen)
+            .unwrap_or(0u32);
+        let page = limit.min(MAX_LOAN_SUMMARY_PAGE);
+        let end = start_id.saturating_add(page).min(total);
+
+        let mut summaries: Vec<LoanSummary> = Vec::new(&env);
+        let mut index = start_id;
+        while index < end {
+            let loan_id: Option<BytesN<32>> = env
+                .storage()
+                .persistent()
+                .get(&PoolExtKey::LoanIndexEntry(index));
+            if let Some(loan_id) = loan_id {
+                if let Ok(loan) = Self::read_loan(&env, &loan_id) {
+                    let next_due_ledger = env
+                        .storage()
+                        .persistent()
+                        .get::<_, RepaymentSchedule>(&DataKey::LoanSchedule(loan_id.clone()))
+                        .map(|sched| sched.next_due_ledger)
+                        .unwrap_or(0);
+                    summaries.push_back(LoanSummary {
+                        index,
+                        loan_id,
+                        borrower: loan.borrower,
+                        status: loan.status,
+                        outstanding_principal: (loan.principal - loan.repaid).max(0),
+                        next_due_ledger,
+                    });
+                }
+            }
+            index += 1;
+        }
+
+        LoanSummaryPage {
+            summaries,
+            next_start_id: end,
+            total,
+        }
+    }
+
     fn portability_proof(env: &Env, snapshot: &LoanPortabilitySnapshot) -> BytesN<32> {
         env.crypto().sha256(&snapshot.clone().to_xdr(env)).into()
     }
@@ -6581,6 +6662,7 @@ impl LendingPoolContract {
             return Err(PoolError::LoanAlreadyExists);
         }
         Self::set_loan(&env, &snapshot.loan_id, &snapshot.loan);
+        Self::append_loan_index(&env, &snapshot.loan_id);
         if snapshot.schedule_present {
             env.storage().persistent().set(
                 &DataKey::LoanSchedule(snapshot.loan_id.clone()),

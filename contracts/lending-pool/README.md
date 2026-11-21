@@ -82,3 +82,20 @@ instance storage is compared through its views rather than raw, because
 A native self-check of the harness (`harness_scenario_runs_against_the_current_code`
 and friends) runs in plain `cargo test`, so the scenario cannot rot between
 upgrades; only the wasm-to-wasm run needs the command above.
+
+## Batched loan summaries for indexers
+
+`get_loan_summaries(start_id, limit)` returns a page of loan summaries in one
+read-only call, so an indexer does not need one call per loan.
+
+* `start_id` is a position in the pool's sequential loan index (first loan is
+  `0`), not a loan hash. Loans are indexed at creation or import and keep their
+  slot when cancelled or rejected. Loans created before the index existed are
+  not listed.
+* `limit` is capped at `MAX_LOAN_SUMMARY_PAGE` (50).
+* Each summary has `index`, `loan_id`, `borrower`, `status`,
+  `outstanding_principal` and `next_due_ledger` (`0` when the loan has no
+  schedule yet).
+* The page carries `next_start_id` (pass it back as `start_id`; it equals
+  `total` once the end is reached) and `total`. A `start_id` past the end
+  returns an empty page.

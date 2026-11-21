@@ -759,6 +759,44 @@ pub enum PoolExtKey {
     LoanRebates(BytesN<32>),
     /// Authoritative final accounting closing statement stored when a loan is paid off.
     LoanClosingStatement(BytesN<32>),
+    /// Number of loans in the sequential loan index (see `get_loan_summaries`).
+    /// Absent means zero. Only grows: cancelled and rejected loans keep their slot.
+    LoanIndexLen,
+    /// Loan ID stored at a position in the sequential loan index.
+    LoanIndexEntry(u32),
+}
+
+/// Compact per-loan view returned in bulk by `get_loan_summaries`, so an
+/// indexer can rebuild state without one contract call per loan.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoanSummary {
+    /// Position of this loan in the sequential loan index.
+    pub index: u32,
+    /// The loan's ID.
+    pub loan_id: BytesN<32>,
+    /// The borrower's address.
+    pub borrower: Address,
+    /// Current loan status.
+    pub status: LoanStatus,
+    /// Principal not yet repaid: `max(principal - repaid, 0)`.
+    pub outstanding_principal: i128,
+    /// Ledger sequence of the next installment due. `0` when the loan has no
+    /// repayment schedule (not yet approved, or never scheduled).
+    pub next_due_ledger: u32,
+}
+
+/// One page of loan summaries plus the cursor for the following page.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoanSummaryPage {
+    /// Summaries for the requested range, in index order.
+    pub summaries: Vec<LoanSummary>,
+    /// Pass this as `start_id` to fetch the next page. Equals `total` once
+    /// the end of the index has been reached.
+    pub next_start_id: u32,
+    /// Total number of loans in the index at the time of the call.
+    pub total: u32,
 }
 
 /// Single-ledger solvency snapshot of the lending pool, returned by
