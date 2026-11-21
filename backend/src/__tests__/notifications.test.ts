@@ -5,7 +5,8 @@ import express from "express";
 import request from "supertest";
 import { notificationsRouter } from "../routes/notifications.js";
 import {
-  getUserInAppNotifications,
+  getInAppNotificationsPage,
+  countUnreadInAppNotifications,
   markInAppNotificationRead,
   markAllInAppNotificationsRead,
   createInAppNotification,
@@ -15,7 +16,8 @@ import {
 jest.mock("../services/db.js", () => ({
   getNotificationPreference: jest.fn(),
   upsertNotificationPreference: jest.fn(),
-  getUserInAppNotifications: jest.fn(),
+  getInAppNotificationsPage: jest.fn(),
+  countUnreadInAppNotifications: jest.fn(),
   markInAppNotificationRead: jest.fn(),
   markAllInAppNotificationsRead: jest.fn(),
   createInAppNotification: jest.fn(),
@@ -61,14 +63,53 @@ describe("In-App Notification API Routes", () => {
         },
       ];
 
-      (getUserInAppNotifications as jest.Mock).mockResolvedValue(mockNotifs);
+      (getInAppNotificationsPage as jest.Mock).mockResolvedValue({
+        data: mockNotifs,
+        pagination: { limit: 20, cursor: null, nextCursor: null, hasMore: false },
+      });
+      (countUnreadInAppNotifications as jest.Mock).mockResolvedValue(1);
 
       const res = await request(app).get(`/api/notifications?address=${TEST_WALLET}`);
 
       expect(res.status).toBe(200);
       expect(res.body.notifications).toHaveLength(2);
       expect(res.body.unreadCount).toBe(1);
-      expect(getUserInAppNotifications).toHaveBeenCalledWith(TEST_WALLET);
+      expect(getInAppNotificationsPage).toHaveBeenCalledWith(TEST_WALLET, {
+        limit: 20,
+        cursor: null,
+      });
+    });
+
+    it("returns nextCursor/hasMore and rejects a tampered cursor", async () => {
+      (getInAppNotificationsPage as jest.Mock).mockResolvedValue({
+        data: [],
+        pagination: { limit: 5, cursor: null, nextCursor: "next-token", hasMore: true },
+      });
+      (countUnreadInAppNotifications as jest.Mock).mockResolvedValue(0);
+
+      const first = await request(app).get(`/api/notifications?address=${TEST_WALLET}&limit=5`);
+      expect(first.status).toBe(200);
+      expect(first.body.pagination.nextCursor).toBe("next-token");
+      expect(first.body.pagination.hasMore).toBe(true);
+
+      const bad = await request(app).get(`/api/notifications?address=${TEST_WALLET}&cursor=not-a-cursor`);
+      expect(bad.status).toBe(400);
+      expect(bad.body.error).toBe("invalid_cursor");
+    });
+
+    it("caps the page size at 100", async () => {
+      (getInAppNotificationsPage as jest.Mock).mockResolvedValue({
+        data: [],
+        pagination: { limit: 100, cursor: null, nextCursor: null, hasMore: false },
+      });
+      (countUnreadInAppNotifications as jest.Mock).mockResolvedValue(0);
+
+      await request(app).get(`/api/notifications?address=${TEST_WALLET}&limit=5000`);
+
+      expect(getInAppNotificationsPage).toHaveBeenCalledWith(TEST_WALLET, {
+        limit: 100,
+        cursor: null,
+      });
     });
   });
 

@@ -6,13 +6,19 @@ import logger from "../utils/logger.js";
 import {
   getNotificationPreference,
   upsertNotificationPreference,
-  getUserInAppNotifications,
+  getInAppNotificationsPage,
+  countUnreadInAppNotifications,
   markInAppNotificationRead,
   markAllInAppNotificationsRead,
   createInAppNotification,
 } from "../services/db.js";
 import { dispatchMaturityAlerts } from "../services/notification.js";
 import type { NotificationFrequency } from "../services/db.js";
+import {
+  decodeCursor,
+  parsePageQuery,
+  InvalidPaginationError,
+} from "../utils/pagination.js";
 
 export const notificationsRouter = Router();
 
@@ -24,7 +30,10 @@ function isValidFrequency(value: unknown): value is NotificationFrequency {
 
 /**
  * GET /api/notifications
- * Fetch historical in-app notifications for a given wallet address.
+ * Fetch cursor-paginated in-app notifications for a given wallet address.
+ *
+ * `?limit` defaults to 20 and is capped at 100; `?cursor` is the opaque
+ * `nextCursor` from the previous page (issue #993).
  */
 notificationsRouter.get("/", async (req: Request, res: Response) => {
   const address = (req.query.address || req.query.walletAddress || req.query.userId) as string;
@@ -34,15 +43,20 @@ notificationsRouter.get("/", async (req: Request, res: Response) => {
   }
 
   try {
-    const notifications = await getUserInAppNotifications(address);
-    // Support both the older `status` field and a boolean `read` flag used by tests.
-    const unreadCount = notifications.filter((n: any) => (typeof n.read === 'boolean' ? !n.read : n.status !== "Sent")).length;
+    const query = parsePageQuery(req.query as Record<string, unknown>);
+    const cursor = decodeCursor(query.cursor);
+    const page = await getInAppNotificationsPage(address, { limit: query.limit, cursor });
+    const unreadCount = await countUnreadInAppNotifications(address);
 
     return res.json({
-      notifications,
+      notifications: page.data,
       unreadCount,
+      pagination: { ...page.pagination, cursor: query.cursor },
     });
   } catch (error: any) {
+    if (error instanceof InvalidPaginationError) {
+      return res.status(400).json({ error: error.code, field: error.field, message: error.message });
+    }
     logger.error("[NotificationsRouter] Error fetching in-app notifications:", { error });
     return res.status(500).json({ error: "Failed to fetch in-app notifications." });
   }

@@ -10,6 +10,12 @@ export interface UserSession {
   lastUsedAt: string;
   coarseLocation: string;
   deviceSummary: string;
+  /**
+   * SHA-256 of the device fingerprint presented at login (issue #992). Only
+   * the hash is stored, so a leaked session record cannot be replayed as a
+   * device identifier.
+   */
+  deviceFingerprint?: string;
   revokedAt?: string;
 }
 
@@ -18,6 +24,7 @@ export interface CreateSessionInput {
   walletAddress: string;
   userAgent?: string;
   coarseLocation?: string;
+  deviceFingerprint?: string;
   now?: Date;
 }
 
@@ -60,9 +67,26 @@ export function createUserSession(input: CreateSessionInput): UserSession {
     lastUsedAt: nowIso,
     coarseLocation: input.coarseLocation?.trim() || "Unknown",
     deviceSummary: summarizeDevice(input.userAgent),
+    deviceFingerprint: input.deviceFingerprint,
   };
   sessions.set(session.sessionId, session);
   return { ...session };
+}
+
+/**
+ * True when this wallet has previously signed in from the given hashed
+ * fingerprint (issue #992). Revoked sessions still count — revoking a session
+ * is not the same as distrusting a device.
+ */
+export function isKnownDevice(walletAddress: string, deviceFingerprint: string | undefined): boolean {
+  if (!deviceFingerprint) return false;
+  const owner = walletAddress.toLowerCase();
+  for (const s of sessions.values()) {
+    if (s.walletAddress.toLowerCase() === owner && s.deviceFingerprint === deviceFingerprint) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function isSessionRevoked(sessionId: string): boolean {

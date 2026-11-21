@@ -15,6 +15,13 @@ import type { ManualStatusChangeReason } from "./manualStatusChangeReason.js";
 import { autoAssignApplicationReviewer } from "./assignmentQueue.js";
 import { priceNewOffer } from "./rateSheet.js";
 import { recordStageEnter, transitionReviewStage } from "./loanReviewStages.js";
+import {
+  buildPage,
+  cursorWhere,
+  encodeCursor,
+  type CursorPosition,
+  type Page,
+} from "../utils/pagination.js";
 
 // lightweight id generator to avoid adding dependencies
 function makeId() {
@@ -250,25 +257,78 @@ export async function getApplication(id: string) {
   return record ? mapLoanApplication(record) : null;
 }
 
-export async function getApplicationsByBorrower(address: string) {
+/** Options for the cursor-paginated loan list variants (issue #993). */
+export interface ApplicationPageOptions {
+  limit: number;
+  cursor: CursorPosition | null;
+}
+
+function applicationCursor(row: LoanApplication): string {
+  return encodeCursor(row.createdAt, row.id);
+}
+
+async function fetchApplicationPage(
+  where: Record<string, unknown>,
+  options: ApplicationPageOptions
+): Promise<Page<LoanApplication>> {
+  const cursorFilter = cursorWhere(options.cursor, "createdAt");
   const records = await prisma.loanApplication.findMany({
-    where: { deletedAt: null, applicant: { stellarAddress: address, deletedAt: null } },
+    where: { ...where, ...(cursorFilter ?? {}) },
+    // Total order: newest first, id as the tie-breaker so two rows created in
+    // the same millisecond still page exactly once.
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: options.limit + 1,
+    include: { applicant: true },
+  });
+
+  return buildPage(records.map(mapLoanApplication), options.limit, applicationCursor);
+}
+
+export function getApplicationsByBorrower(address: string): Promise<LoanApplication[]>;
+export function getApplicationsByBorrower(
+  address: string,
+  options: ApplicationPageOptions
+): Promise<Page<LoanApplication>>;
+export async function getApplicationsByBorrower(
+  address: string,
+  options?: ApplicationPageOptions
+): Promise<LoanApplication[] | Page<LoanApplication>> {
+  const where = { deletedAt: null, applicant: { stellarAddress: address, deletedAt: null } };
+  if (options) return fetchApplicationPage(where, options);
+
+  const records = await prisma.loanApplication.findMany({
+    where,
     include: { applicant: true },
   });
 
   return records.map(mapLoanApplication);
 }
 
-export async function getPendingApplications() {
+export function getPendingApplications(): Promise<LoanApplication[]>;
+export function getPendingApplications(
+  options: ApplicationPageOptions
+): Promise<Page<LoanApplication>>;
+export async function getPendingApplications(
+  options?: ApplicationPageOptions
+): Promise<LoanApplication[] | Page<LoanApplication>> {
+  const where = { status: "Pending", deletedAt: null };
+  if (options) return fetchApplicationPage(where, options);
+
   const records = await prisma.loanApplication.findMany({
-    where: { status: "Pending", deletedAt: null },
+    where,
     include: { applicant: true },
   });
 
   return records.map(mapLoanApplication);
 }
 
-export async function listApplications() {
+export function listApplications(): Promise<LoanApplication[]>;
+export function listApplications(options: ApplicationPageOptions): Promise<Page<LoanApplication>>;
+export async function listApplications(
+  options?: ApplicationPageOptions
+): Promise<LoanApplication[] | Page<LoanApplication>> {
+  if (options) return fetchApplicationPage({ deletedAt: null }, options);
+
   const records = await prisma.loanApplication.findMany({
     where: { deletedAt: null },
     include: { applicant: true },

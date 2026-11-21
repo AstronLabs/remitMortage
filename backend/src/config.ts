@@ -53,6 +53,12 @@ export interface Config {
   webhookSecret: string;
   /** Recipient notified when a webhook signing key auto-rotates. Rotation still runs if unset. */
   webhookRotationNotifyEmail: string;
+  /**
+   * Maximum accepted difference (ms) between a webhook's signed timestamp and
+   * the receiver's clock. Requests outside this window are rejected even with
+   * a valid signature (issue #991). Defaults to 5 minutes.
+   */
+  webhookSignatureToleranceMs: number;
   allowedOrigins: string[];
   adminApiKey: string;
   /**
@@ -316,6 +322,10 @@ export function loadConfig(): Config {
     alertDefaultRecipient: process.env.ALERT_DEFAULT_RECIPIENT || "",
     webhookSecret: process.env.WEBHOOK_SECRET || "default_signing_secret_key",
     webhookRotationNotifyEmail: process.env.WEBHOOK_ROTATION_NOTIFY_EMAIL || "",
+    webhookSignatureToleranceMs: parseInt(
+      process.env.WEBHOOK_SIGNATURE_TOLERANCE_MS || String(5 * 60 * 1_000),
+      10
+    ),
     allowedOrigins: process.env.ALLOWED_ORIGINS
       ? process.env.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim())
       : loadDocumentedAllowedOrigins(process.env.NODE_ENV || "development"),
