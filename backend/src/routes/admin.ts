@@ -1,7 +1,7 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import { Router, Response } from "express";
+import { Router, Request, Response } from "express";
 import { prisma } from "../services/db.js";
 import { sendWebhook } from "../services/webhook.js";
 import { runEscrowReconciliation } from "../jobs/escrowReconciliation.js";
@@ -66,13 +66,33 @@ import {
   listHolidays,
   removeHoliday,
 } from "../services/businessCalendar.js";
+import {
   AssignmentError,
   MAX_HANDOFF_NOTE_LENGTH,
   reassignApplicationReviewer,
 } from "../services/assignmentQueue.js";
 import { getReviewerHandoffContext } from "../services/reviewerHandoff.js";
+import { listApplicantsPage } from "../services/applicants.js";
+import {
+  decodeCursor,
+  parsePageQuery,
+  InvalidPaginationError,
+} from "../utils/pagination.js";
 
 export const adminRouter = Router();
+
+function parseAdminPageQuery(req: Request, res: Response) {
+  try {
+    const query = parsePageQuery(req.query as Record<string, unknown>);
+    return { limit: query.limit, cursor: decodeCursor(query.cursor), rawCursor: query.cursor };
+  } catch (err) {
+    if (err instanceof InvalidPaginationError) {
+      res.status(400).json({ error: err.code, field: err.field, message: err.message });
+      return null;
+    }
+    throw err;
+  }
+}
 
 adminRouter.get("/compliance/suspicious-activity", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   const status = typeof req.query.status === "string" ? req.query.status : "OPEN";
@@ -399,6 +419,43 @@ adminRouter.get("/loans/:id/tax-id-matches", requireAdmin, async (req: Authentic
  * support staff can answer "did they actually receive our reminder?" without
  * checking three separate logs. `:id` may be an applicant id or stellar address.
  */
+/**
+ * @openapi
+ * /api/admin/applicants:
+ *   get:
+ *     summary: Cursor-paginated applicant summaries
+ *     tags: [Admin]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+ *       - in: query
+ *         name: cursor
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Applicant page with nextCursor/hasMore
+ *       400:
+ *         description: Invalid limit or cursor
+ *       403:
+ *         description: Admin access required
+ */
+adminRouter.get("/applicants", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const options = parseAdminPageQuery(req, res);
+  if (!options) return;
+
+  try {
+    const page = await listApplicantsPage({ limit: options.limit, cursor: options.cursor });
+    return res.json({
+      data: page.data,
+      pagination: { ...page.pagination, cursor: options.rawCursor },
+    });
+  } catch (error) {
+    logger.error("List applicants error", { error });
+    return res.status(500).json({ error: "failed_to_list_applicants" });
+  }
+});
+
 adminRouter.get("/applicants/:id/communications", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const timeline = await getApplicantCommunicationTimeline(String(req.params.id));

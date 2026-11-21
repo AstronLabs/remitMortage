@@ -7,6 +7,13 @@ import { createHash } from "crypto";
 import { encrypt, decrypt } from "../utils/crypto.js";
 import { hashTaxId } from "../utils/taxIdHash.js";
 import {
+  buildPage,
+  cursorWhere,
+  encodeCursor,
+  type CursorPosition,
+  type Page,
+} from "../utils/pagination.js";
+import {
   buildDatabaseUrl,
   resolveReadReplicaSettings,
 } from "./dbPoolConfig.js";
@@ -297,6 +304,30 @@ export async function getBorrower(stellarAddress: string) {
 // ── In-app notification helpers ─────────────────────────────────────
 export async function getUserInAppNotifications(address: string) {
   return prisma.inAppNotification.findMany({ where: { walletAddress: address }, orderBy: { createdAt: "desc" } });
+}
+
+export interface InAppNotificationPageOptions {
+  limit: number;
+  cursor: CursorPosition | null;
+}
+
+/** Cursor-paginated in-app notifications for one wallet (issue #993). */
+export async function getInAppNotificationsPage(
+  address: string,
+  options: InAppNotificationPageOptions
+): Promise<Page<any>> {
+  const cursorFilter = cursorWhere(options.cursor, "createdAt");
+  const rows = await prisma.inAppNotification.findMany({
+    where: { walletAddress: address, ...(cursorFilter ?? {}) },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: options.limit + 1,
+  });
+
+  return buildPage(rows, options.limit, (row) => encodeCursor(row.createdAt, row.id));
+}
+
+export async function countUnreadInAppNotifications(address: string): Promise<number> {
+  return prisma.inAppNotification.count({ where: { walletAddress: address, read: false } });
 }
 
 export async function markInAppNotificationRead(id: string, address: string) {

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import { Router } from "express";
+import { Router, type Request } from "express";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { Keypair } from "@stellar/stellar-sdk";
@@ -28,8 +28,13 @@ import {
   recordLoginLocation,
   generateStepUpCode,
   verifyStepUpCode,
+  getIpGeoLocation,
   LocationCheckResult,
 } from "../services/locationAnomalyService.js";
+import {
+  deviceFingerprintFromHeaders,
+  registerLoginDevice,
+} from "../services/loginDeviceNotification.js";
 import { logAudit } from "../services/audit.js";
 import {
   TRUSTED_DEVICE_COOKIE,
@@ -92,6 +97,29 @@ async function notifyLoginAnomaly(
   } catch (err) {
     logger.error("[login-anomaly] failed to send notification email", { error: err, walletAddress });
   }
+}
+
+/**
+ * Record the successful login as a session and, when its hashed device
+ * fingerprint has not been seen for this wallet, send the new-device alert
+ * (issue #992). The notification service is best-effort and never throws.
+ */
+async function recordLoginSession(
+  req: Request,
+  walletAddress: string
+): Promise<{ sessionId: string; newDevice: boolean }> {
+  const clientIp = (req.headers["x-forwarded-for"] as string) || req.ip || "127.0.0.1";
+  const location = getIpGeoLocation(clientIp);
+
+  const result = await registerLoginDevice({
+    walletAddress,
+    fingerprint: deviceFingerprintFromHeaders(req.headers as Record<string, unknown>),
+    userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : undefined,
+    coarseLocation: `${location.city}, ${location.country}`,
+    ipAddress: clientIp,
+  });
+
+  return { sessionId: result.sessionId, newDevice: result.newDevice };
 }
 
 export const verificationRouter = Router();
@@ -442,9 +470,10 @@ verificationRouter.post("/verify-ownership", verificationOwnershipRateLimiter, v
   }
 
   await recordLoginLocation(walletAddress, clientIp);
+  const loginSession = await recordLoginSession(req, walletAddress);
 
   const token = jwt.sign(
-    { walletAddress, network },
+    { walletAddress, network, sid: loginSession.sessionId },
     process.env.JWT_SECRET || "default_jwt_secret",
     { expiresIn: "24h" }
   );
@@ -457,7 +486,14 @@ verificationRouter.post("/verify-ownership", verificationOwnershipRateLimiter, v
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
   });
 
-  res.json({ verified: true, walletAddress, network, stepUpRequired: false, trustedDevice });
+  res.json({
+    verified: true,
+    walletAddress,
+    network,
+    stepUpRequired: false,
+    trustedDevice,
+    newDevice: loginSession.newDevice,
+  });
 });
 
 /**
@@ -512,9 +548,10 @@ verificationRouter.post("/step-up", async (req, res) => {
     actorAddress: walletAddress,
     ipAddress: clientIp,
   });
+  const loginSession = await recordLoginSession(req, walletAddress);
 
   const token = jwt.sign(
-    { walletAddress, network: network || "stellar" },
+    { walletAddress, network: network || "stellar", sid: loginSession.sessionId },
     process.env.JWT_SECRET || "default_jwt_secret",
     { expiresIn: "24h" }
   );
@@ -550,6 +587,7 @@ verificationRouter.post("/step-up", async (req, res) => {
     walletAddress,
     network: network || "stellar",
     stepUpCompleted: true,
+    newDevice: loginSession.newDevice,
     ...(trustedDeviceId ? { trustedDeviceId } : {}),
   });
 });
