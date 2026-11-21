@@ -42,3 +42,5 @@ async function proxyLoanRequest(request: NextRequest): Promise<NextResponse> {
 
 export const GET = proxyLoanRequest;
 export const POST = proxyLoanRequest;
+export const PUT = proxyLoanRequest;
+export const DELETE = proxyLoanRequest;

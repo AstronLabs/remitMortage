@@ -25,9 +25,12 @@ jest.mock("../config.js", () => ({
 }));
 
 const verifyEmploymentMock = jest.fn();
+const verifyEmploymentSourcesMock = jest.fn();
 const getEmploymentVerificationStatusMock = jest.fn();
 jest.mock("../services/employmentVerification.js", () => ({
+  MAX_INCOME_SOURCES: 10,
   verifyEmployment: (...args: unknown[]) => verifyEmploymentMock(...args),
+  verifyEmploymentSources: (...args: unknown[]) => verifyEmploymentSourcesMock(...args),
   getEmploymentVerificationStatus: (...args: unknown[]) => getEmploymentVerificationStatusMock(...args),
 }));
 
@@ -215,5 +218,42 @@ describe("GET /api/kyc/:address/employment-verification", () => {
     expect(res.status).toBe(200);
     expect(res.body.verification).toEqual({ id: "ev-1", status: "VERIFIED", method: "AUTOMATED_PAYROLL" });
     expect(getEmploymentVerificationStatusMock).toHaveBeenCalledWith(BORROWER_ADDRESS);
+  });
+});
+
+describe("POST /api/kyc/:address/employment-verification with multiple sources", () => {
+  it("verifies every listed source in one request and returns the combined income", async () => {
+    verifyEmploymentSourcesMock.mockResolvedValue({
+      sources: [],
+      combinedVerifiedMonthlyIncome: 5000,
+      verifiedSourceCount: 2,
+      manualReviewSourceCount: 0,
+    });
+
+    const res = await request(app)
+      .post(`/api/kyc/${BORROWER_ADDRESS}/employment-verification`)
+      .set("Authorization", `Bearer ${borrowerToken()}`)
+      .send({ sources: [{ employerName: "Acme Corp" }, { employerName: "Freelance Studio" }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.combinedVerifiedMonthlyIncome).toBe(5000);
+    expect(verifyEmploymentSourcesMock).toHaveBeenCalledWith(BORROWER_ADDRESS, ["Acme Corp", "Freelance Studio"]);
+    expect(verifyEmploymentMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an empty list", []],
+    ["a non-array", "Acme Corp"],
+    ["an entry without employerName", [{ employerName: "Acme Corp" }, {}]],
+    ["more than the maximum", Array.from({ length: 11 }, (_, i) => ({ employerName: `Employer ${i}` }))],
+  ])("rejects %s", async (_label, sources) => {
+    const res = await request(app)
+      .post(`/api/kyc/${BORROWER_ADDRESS}/employment-verification`)
+      .set("Authorization", `Bearer ${borrowerToken()}`)
+      .send({ sources });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_sources");
+    expect(verifyEmploymentSourcesMock).not.toHaveBeenCalled();
   });
 });

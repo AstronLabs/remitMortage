@@ -31,6 +31,10 @@ export type StatementPayload = {
   metadata: StatementMetadata;
   summary: StatementSummaryItem[];
   rows: StatementRow[];
+  /** Heading above the account-holder block. Defaults to "Borrower metadata". */
+  metadataHeading?: string;
+  /** Shown in place of the transaction list when `rows` is empty. */
+  emptyRowsMessage?: string;
 };
 
 function escapeCsvCell(value: string) {
@@ -83,7 +87,8 @@ function drawWrappedLines(doc: jsPDF, text: string, x: number, y: number, maxWid
   return y + lines.length * 12;
 }
 
-export function downloadStatementPdf(payload: StatementPayload, filename: string) {
+/** Renders a statement payload to a jsPDF document without saving it. */
+export function buildStatementPdf(payload: StatementPayload): jsPDF {
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -103,7 +108,13 @@ export function downloadStatementPdf(payload: StatementPayload, filename: string
   cursorY += 10;
   doc.setFontSize(12);
   doc.setFont("helvetica", "bold");
-  cursorY = drawWrappedLines(doc, "Borrower metadata", margin, cursorY, contentWidth);
+  cursorY = drawWrappedLines(
+    doc,
+    payload.metadataHeading ?? "Borrower metadata",
+    margin,
+    cursorY,
+    contentWidth
+  );
 
   doc.setFont("helvetica", "normal");
   const metadataLines = [
@@ -142,7 +153,7 @@ export function downloadStatementPdf(payload: StatementPayload, filename: string
   if (payload.rows.length === 0) {
     cursorY = drawWrappedLines(
       doc,
-      "No verified transactions matched the current filters.",
+      payload.emptyRowsMessage ?? "No verified transactions matched the current filters.",
       margin,
       cursorY + 4,
       contentWidth
@@ -172,7 +183,11 @@ export function downloadStatementPdf(payload: StatementPayload, filename: string
     cursorY += blockHeight + 10;
   }
 
-  doc.save(filename);
+  return doc;
+}
+
+export function downloadStatementPdf(payload: StatementPayload, filename: string) {
+  buildStatementPdf(payload).save(filename);
 }
 
 export function createStatementMetadata(params: {

@@ -11,7 +11,7 @@ CONTRACTS := contracts
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup install db-migrate db-seed backend frontend dev test test-backend test-frontend test-contracts build up down logs
+.PHONY: help setup install db-migrate db-seed backend frontend dev test test-backend test-frontend test-contracts upgrade-dry-run build up down logs
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -52,6 +52,9 @@ test-frontend: ## Run frontend tests
 
 test-contracts: ## Run smart-contract tests
 	cd $(CONTRACTS) && cargo test
+
+upgrade-dry-run: ## Rehearse a lending-pool upgrade against stored state (BASE_REF=origin/main)
+	bash scripts/upgrade-dry-run.sh $(BASE_REF)
 
 build: ## Build backend, frontend and contracts
 	cd $(BACKEND) && npm run build

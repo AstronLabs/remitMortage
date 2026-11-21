@@ -270,7 +270,7 @@ describe("POST /api/loan/:id/reject and /:id/review", () => {
 
     const res = await request(app)
       .post("/api/loan/loan-1/review")
-      .send({ reviewerId: "rev-1", decision: "APPROVED", expectedVersion: 2 });
+      .send({ reviewerId: "rev-1", decision: "APPROVED", expectedVersion: 2, reasonCode: "DOCUMENTATION_VERIFIED" });
 
     expect(res.status).toBe(200);
     expect(res.body.application.version).toBe(3);

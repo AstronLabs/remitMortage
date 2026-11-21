@@ -78,7 +78,11 @@ export const MultiWalletModal: React.FC<MultiWalletModalProps> = ({
   };
 
   const handleDisconnect = () => {
-    wallet.disconnectAll();
+    // Only drop the remittance wallet; a connected Stellar wallet stays
+    // connected alongside it (issue #1117).
+    if (wallet.walletType === "evm" || wallet.walletType === "solana") {
+      wallet.disconnectWallet(wallet.walletType);
+    }
     setIsSigning(false);
     setSignStatus(null);
   };
@@ -125,7 +129,7 @@ export const MultiWalletModal: React.FC<MultiWalletModalProps> = ({
             </div>
           )}
 
-          {!wallet.isConnected ? (
+          {!connectedAddress ? (
             <div className="space-y-3">
               <button
                 onClick={() => handleConnectAndSign("evm")}

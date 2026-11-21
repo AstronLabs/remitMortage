@@ -29,6 +29,9 @@ enum LoanStatus {
   Disbursing
   Repaying
   Completed
+  // Applicant withdrew a Pending application (issue #1107). Kept for history;
+  // excluded from the active review queue like any other non-Pending status.
+  Withdrawn
 }
 
 /// Authorization state of an attached co-signer/guarantor.
@@ -418,6 +421,11 @@ model LoanApplication {
 
   // Human-readable rejection reason (manual or auto-rejection).
   reason                 String?
+
+  // Applicant withdrawal (issue #1107): when it happened and the optional
+  // free-text reason the applicant gave.
+  withdrawnAt            DateTime?
+  withdrawalReason       String?
   autoRejectedAt         DateTime?
   autoRejectionLogs      LoanAutoRejectionLog[]
 
@@ -873,6 +881,34 @@ model WebhookDLQ {
   createdAt       DateTime @default(now())
 }
 
+/// A background job that exhausted its configured retries (issue #1103).
+/// Captured instead of being discarded so it can be inspected and, once the
+/// underlying issue is fixed, requeued by an admin with its original payload.
+model DeadLetterJob {
+  id            String    @id @default(uuid())
+  /// BullMQ queue the job ran on, e.g. "remitmortgage-notifications".
+  queueName     String
+  /// BullMQ job name, reused when the job is requeued.
+  jobName       String
+  /// BullMQ id of the failed job, for cross-referencing logs.
+  originalJobId String?
+  /// The job's data exactly as it was enqueued.
+  payload       Json
+  /// The error message from the final failed attempt.
+  failureReason String
+  attemptsMade  Int
+  /// "dead" until an admin requeues it, then "requeued".
+  status        String    @default("dead")
+  failedAt      DateTime  @default(now())
+  requeuedAt    DateTime?
+  requeuedBy    String?
+  /// BullMQ id of the job created by the requeue.
+  requeuedJobId String?
+
+  @@index([status, failedAt])
+  @@index([queueName, status])
+}
+
 // ---------------------------------------------------------------------------
 // Webhook subscription model
 // ---------------------------------------------------------------------------
@@ -982,6 +1018,9 @@ model ApiKey {
   /// Billing plan identifier. Resolves this key's request quota per billing
   /// period via the API_KEY_QUOTA_BY_PLAN env var (see apiKeyQuota.ts).
   /// Unrecognized/unset plans fall back to API_KEY_QUOTA_DEFAULT.
+  /// Also selects the key's per-window request rate limit tier via
+  /// API_KEY_RATE_LIMIT_BY_PLAN (see apiKeyRateLimit.ts); unrecognized plans
+  /// get the lowest tier.
   plan      String   @default("default")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1144,4 +1183,31 @@ model ApiKeyEndpointUsage {
 
   @@unique([apiKeyId, periodStart, endpoint])
   @@index([apiKeyId, periodStart])
+}
+
+/// Per-country bank holidays (issue #980). Weekends are always non-business
+/// days; each row adds one holiday for one country, stored at UTC midnight.
+/// Admins edit it through /api/admin/calendar/holidays and the repayment
+/// cutoff moves due dates that land on a non-business day.
+model BankHoliday {
+  id        String   @id @default(uuid())
+  /// ISO 3166-1 alpha-2 country code, upper case.
+  country   String
+  date      DateTime
+  name      String?
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([country, date])
+/// Server-side save point for an applicant's in-progress multi-step
+/// application (issue #1110), so it can be resumed on any device. One row per
+/// wallet; `data` holds the wizard's form values and is replaced on each save.
+model ApplicationProgress {
+  id             String   @id @default(uuid())
+  stellarAddress String   @unique
+  step           Int
+  totalSteps     Int
+  data           Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }

@@ -5,10 +5,13 @@ import { StrKey } from "@stellar/stellar-sdk";
 import { prisma } from "./db.js";
 import {
   diffLoanSnapshot,
+  LOAN_MANUAL_STATUS_CHANGE_ACTION,
+  LOAN_UPDATED_ACTION,
   recordLoanChange,
   recordLoanCreation,
   type LoanSnapshot,
 } from "./loanHistory.js";
+import type { ManualStatusChangeReason } from "./manualStatusChangeReason.js";
 import { autoAssignApplicationReviewer } from "./assignmentQueue.js";
 import { priceNewOffer } from "./rateSheet.js";
 import { recordStageEnter, transitionReviewStage } from "./loanReviewStages.js";
@@ -26,6 +29,7 @@ export type LoanStatus =
   | "Disbursing"
   | "Repaying"
   | "Completed"
+  | "Withdrawn"
   | "MANUAL_REVIEW";
 
 /** Authorization state of an attached guarantor — mirrors the Prisma enum. */
@@ -61,6 +65,10 @@ export interface LoanApplication {
   interestRateBps?: number;
   /** Rate sheet version that priced this offer; absent for pre-versioning loans. */
   rateSheetVersionId?: string;
+  /** ISO timestamp the applicant withdrew the application (issue #1107). */
+  withdrawnAt?: string;
+  /** Optional reason the applicant gave when withdrawing. */
+  withdrawalReason?: string;
 }
 
 /**
@@ -96,6 +104,16 @@ export interface UpdateApplicationOptions {
    * write happens.
    */
   expectedVersion?: number;
+  /**
+   * Marks this update as a manual, operator-initiated status change (issue
+   * #1102). The reason and actor are written to the activity history next to
+   * the status transition. Automated workflow updates omit this.
+   */
+  manualStatusChange?: {
+    reason: ManualStatusChangeReason;
+    actorAddress?: string;
+    ipAddress?: string;
+  };
 }
 
 /** Options for attaching a guarantor at application creation time. */
@@ -130,6 +148,11 @@ function mapLoanApplication(record: any): LoanApplication {
     // updatedAt is not on the schema model; fall back to createdAt
     updatedAt: (record.updatedAt ?? record.createdAt).toISOString(),
   };
+
+  if (record.withdrawnAt) {
+    app.withdrawnAt = record.withdrawnAt.toISOString();
+    app.withdrawalReason = record.withdrawalReason ?? undefined;
+  }
 
   if (record.guarantorAddress) {
     app.guarantorAddress = record.guarantorAddress;
@@ -258,7 +281,7 @@ export async function updateApplication(
   patch: Partial<LoanApplication>,
   options: UpdateApplicationOptions = {}
 ) {
-  const { expectedVersion } = options;
+  const { expectedVersion, manualStatusChange } = options;
   const existing = await prisma.loanApplication.findFirst({
     where: { id, deletedAt: null },
     include: { applicant: true },
@@ -347,7 +370,21 @@ export async function updateApplication(
   // Append the field-level diff to the audit trail so this state transition
   // can be replayed during point-in-time reconstruction. No-op when nothing
   // tracked actually changed.
-  await recordLoanChange(id, diffLoanSnapshot(before, snapshotOf(application)));
+  // A manual status change carries its operator-chosen reason (issue #1102)
+  // in the same audit row as the transition, so the history shows why.
+  const isManualStatusChange = manualStatusChange !== undefined && application.status !== before.status;
+  await recordLoanChange(
+    id,
+    diffLoanSnapshot(before, snapshotOf(application)),
+    isManualStatusChange
+      ? {
+          actorAddress: manualStatusChange.actorAddress,
+          ipAddress: manualStatusChange.ipAddress,
+          statusChangeReason: manualStatusChange.reason,
+        }
+      : {},
+    isManualStatusChange ? LOAN_MANUAL_STATUS_CHANGE_ACTION : LOAN_UPDATED_ACTION,
+  );
 
   // Time the review-stage transition (issue #1047): close the interval for the
   // status being left and open one for the status being entered. Guarded on a
@@ -391,12 +428,108 @@ export async function discardDraftApplication(id: string) {
   return mapLoanApplication(record);
 }
 
+// ── Applicant withdrawal (issue #1107) ──────────────────────────────────────
+
+/** Statuses an applicant may still withdraw from: awaiting a reviewer decision. */
+export const WITHDRAWABLE_STATUSES: readonly LoanStatus[] = ["Pending"];
+
+/** Statuses that represent a final reviewer decision. */
+const FINAL_DECISION_STATUSES: readonly LoanStatus[] = [
+  "Approved",
+  "Rejected",
+  "Disbursing",
+  "Repaying",
+  "Completed",
+];
+
+/** Longest withdrawal reason we keep; longer input is rejected by the route. */
+export const MAX_WITHDRAWAL_REASON_LENGTH = 500;
+
+export type WithdrawalFailure = "not_found" | "already_withdrawn" | "final_decision" | "not_withdrawable";
+
+export type WithdrawalResult =
+  | { ok: true; application: LoanApplication }
+  | { ok: false; error: WithdrawalFailure; current?: LoanApplication };
+
+function classifyUnwithdrawable(app: LoanApplication): WithdrawalFailure {
+  if (app.status === "Withdrawn") return "already_withdrawn";
+  if (FINAL_DECISION_STATUSES.includes(app.status)) return "final_decision";
+  return "not_withdrawable";
+}
+
+/**
+ * Withdraws a Pending application on the applicant's behalf. The record is
+ * kept (status `Withdrawn`, with timestamp and optional reason) so history and
+ * audit replay stay intact, but it drops out of the active review queue since
+ * every queue query filters on `status = 'Pending'`.
+ *
+ * The status guard is re-checked in the UPDATE's WHERE clause, so a reviewer
+ * decision racing the withdrawal is reported rather than overwritten.
+ */
+export async function withdrawApplication(id: string, reason?: string): Promise<WithdrawalResult> {
+  const existing = await prisma.loanApplication.findFirst({
+    where: { id, deletedAt: null },
+    include: { applicant: true },
+  });
+  if (!existing) return { ok: false, error: "not_found" };
+
+  const current = mapLoanApplication(existing);
+  if (!WITHDRAWABLE_STATUSES.includes(current.status)) {
+    return { ok: false, error: classifyUnwithdrawable(current), current };
+  }
+
+  const now = new Date();
+  const { count } = await prisma.loanApplication.updateMany({
+    where: { id, deletedAt: null, status: existing.status, version: existing.version },
+    data: {
+      status: "Withdrawn",
+      withdrawnAt: now,
+      withdrawalReason: reason ?? null,
+      statusUpdatedAt: now,
+      version: { increment: 1 },
+    },
+  });
+
+  const after = await prisma.loanApplication.findFirst({
+    where: { id, deletedAt: null },
+    include: { applicant: true },
+  });
+  if (!after) return { ok: false, error: "not_found" };
+  const application = mapLoanApplication(after);
+
+  // Another writer got there first: report what the record is now.
+  if (count === 0) return { ok: false, error: classifyUnwithdrawable(application), current: application };
+
+  await recordLoanChange(id, diffLoanSnapshot(snapshotOf(current), snapshotOf(application)));
+  await transitionReviewStage(undefined, id, "Withdrawn", now);
+
+  return { ok: true, application };
+}
+
+/** Counts backing the reviewer pipeline dashboard. */
+export interface ReviewQueueMetrics {
+  /** Applications awaiting a reviewer decision — the active queue. */
+  activeQueue: number;
+  /** Applications the applicant withdrew; kept for history, not in the queue. */
+  withdrawn: number;
+}
+
+export async function getReviewQueueMetrics(): Promise<ReviewQueueMetrics> {
+  const [activeQueue, withdrawn] = await Promise.all([
+    prisma.loanApplication.count({ where: { status: "Pending", deletedAt: null } }),
+    prisma.loanApplication.count({ where: { status: "Withdrawn", deletedAt: null } }),
+  ]);
+  return { activeQueue, withdrawn };
+}
+
 export type BulkReviewDecision = "approve" | "reject";
 
 export interface BulkReviewItem {
   applicationId: string;
   decision: BulkReviewDecision;
   reason?: string;
+  /** Operator-chosen reason code for this manual decision (issue #1102). */
+  statusChangeReason?: ManualStatusChangeReason;
   /**
    * Optimistic-lock guard (issue #846). When supplied, the decision is only
    * applied if the record still sits at this version; a mismatch records a
@@ -473,7 +606,7 @@ export async function bulkReviewApplications(
 
         await tx.auditLog.create({
           data: {
-            action: `loan_application.bulk_${item.decision}d`,
+            action: item.decision === "approve" ? "loan_application.bulk_approved" : "loan_application.bulk_rejected",
             actorAddress: reviewerAddress,
             ipAddress,
             metadata: {
@@ -482,6 +615,7 @@ export async function bulkReviewApplications(
               newStatus: status,
               decision: item.decision,
               reason: item.reason ?? null,
+              ...(item.statusChangeReason ? { statusChangeReason: item.statusChangeReason } : {}),
               reviewedAt: new Date().toISOString(),
               // Field-level change set, so point-in-time reconstruction can
               // replay this transition the same way it replays updates from
