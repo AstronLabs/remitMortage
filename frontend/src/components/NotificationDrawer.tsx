@@ -2,7 +2,7 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { BellRing, Check, CheckCheck, X, Trash2, CheckCircle2, AlertCircle, Info, AlertTriangle } from "lucide-react";
 import {
   useNotifications,
@@ -10,6 +10,7 @@ import {
   type NotificationRecord,
 } from "@/context/NotificationContext";
 import { useUndoableAction } from "@/hooks/useUndoableAction";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 import { EmptyState } from "@/components/EmptyState";
 import ConfirmationDialog from "./ConfirmationDialog";
 
@@ -57,6 +58,8 @@ export function NotificationDrawer() {
 
   const [activeTab, setActiveTab] = useState<"all" | "unread">("all");
   const [confirmClear, setConfirmClear] = useState(false);
+  const drawerRef = useRef<HTMLElement>(null);
+  useFocusTrap(drawerRef, isPanelOpen, { onEscape: closePanel });
 
   // Display items in reverse-chronological order (newest first)
   const itemsInOrder = [...notificationHistory].reverse();
@@ -103,8 +106,12 @@ export function NotificationDrawer() {
       )}
 
       <aside
+        ref={drawerRef}
+        role="dialog"
+        aria-modal="true"
         aria-label="Notifications panel"
         aria-hidden={!isPanelOpen}
+        tabIndex={-1}
         data-testid="notification-center-drawer"
         className={`fixed end-0 top-0 z-[960] h-full w-full max-w-[24rem] border-s border-slate-800 bg-[#0b1020]/95 shadow-2xl shadow-black/70 backdrop-blur-xl transition-transform duration-300 ease-out ${
           isPanelOpen ? "translate-x-0" : "translate-x-full"

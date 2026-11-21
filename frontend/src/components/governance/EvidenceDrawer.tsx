@@ -2,9 +2,10 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { X, FileText } from "lucide-react";
 import { IPFSMediaPlayer } from "../IPFSMediaPlayer";
+import { useFocusTrap } from "../../hooks/useFocusTrap";
 
 interface EvidenceDrawerProps {
   isOpen: boolean;
@@ -13,21 +14,19 @@ interface EvidenceDrawerProps {
 }
 
 export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({ isOpen, onClose, ipfsCid }) => {
+  const drawerRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(drawerRef, isOpen, { onEscape: onClose });
+
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
     if (isOpen) {
-      window.addEventListener("keydown", handleKeyDown);
       document.body.style.overflow = "hidden";
     } else {
       document.body.style.overflow = "";
     }
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = "";
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   return (
     <>
@@ -42,11 +41,14 @@ export const EvidenceDrawer: React.FC<EvidenceDrawerProps> = ({ isOpen, onClose,
 
       {/* Drawer */}
       <div
+        ref={drawerRef}
+        tabIndex={-1}
         className={`fixed top-0 right-0 z-50 h-full w-full max-w-md bg-zinc-950 border-l border-zinc-800 shadow-2xl transform transition-transform duration-300 ease-in-out flex flex-col ${
           isOpen ? "translate-x-0" : "translate-x-full"
         }`}
         role="dialog"
         aria-modal="true"
+        aria-hidden={!isOpen}
         aria-labelledby="drawer-title"
       >
         {/* Header */}

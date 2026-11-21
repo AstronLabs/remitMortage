@@ -1,9 +1,10 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { X, Send, AlertCircle } from "lucide-react";
 import { GovernanceProposal } from "../../hooks/useGovernanceProposals";
+import { useFocusTrap } from "../../hooks/useFocusTrap";
 
 interface SubmitProposalModalProps {
   isOpen: boolean;
@@ -18,6 +19,12 @@ export function SubmitProposalModal({ isOpen, onClose, onSubmit }: SubmitProposa
   const [ipfsCid, setIpfsCid] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, isOpen, {
+    onEscape: () => {
+      if (!isSubmitting) onClose();
+    },
+  });
 
   if (!isOpen) return null;
 
@@ -51,22 +58,32 @@ export function SubmitProposalModal({ isOpen, onClose, onSubmit }: SubmitProposa
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="submit-proposal-modal-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         onClick={isSubmitting ? undefined : onClose}
       />
       
-      <div className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col"
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-slate-800">
           <div>
-            <h2 className="text-xl font-bold text-white mb-1">Create Proposal</h2>
+            <h2 id="submit-proposal-modal-title" className="text-xl font-bold text-white mb-1">Create Proposal</h2>
             <p className="text-slate-400 text-xs">Submit a new protocol parameter or spending proposal.</p>
           </div>
           <button
             onClick={onClose}
             disabled={isSubmitting}
+            aria-label="Close create proposal dialog"
             className="text-slate-400 hover:text-white transition-colors disabled:opacity-50"
           >
             <X className="w-6 h-6" />
