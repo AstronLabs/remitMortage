@@ -26,6 +26,7 @@ export type LoanStatus =
   | "Disbursing"
   | "Repaying"
   | "Completed"
+  | "Withdrawn"
   | "MANUAL_REVIEW";
 
 /** Authorization state of an attached guarantor — mirrors the Prisma enum. */
@@ -61,6 +62,10 @@ export interface LoanApplication {
   interestRateBps?: number;
   /** Rate sheet version that priced this offer; absent for pre-versioning loans. */
   rateSheetVersionId?: string;
+  /** ISO timestamp the applicant withdrew the application (issue #1107). */
+  withdrawnAt?: string;
+  /** Optional reason the applicant gave when withdrawing. */
+  withdrawalReason?: string;
 }
 
 /**
@@ -130,6 +135,11 @@ function mapLoanApplication(record: any): LoanApplication {
     // updatedAt is not on the schema model; fall back to createdAt
     updatedAt: (record.updatedAt ?? record.createdAt).toISOString(),
   };
+
+  if (record.withdrawnAt) {
+    app.withdrawnAt = record.withdrawnAt.toISOString();
+    app.withdrawalReason = record.withdrawalReason ?? undefined;
+  }
 
   if (record.guarantorAddress) {
     app.guarantorAddress = record.guarantorAddress;
@@ -389,6 +399,100 @@ export async function discardDraftApplication(id: string) {
   });
 
   return mapLoanApplication(record);
+}
+
+// ── Applicant withdrawal (issue #1107) ──────────────────────────────────────
+
+/** Statuses an applicant may still withdraw from: awaiting a reviewer decision. */
+export const WITHDRAWABLE_STATUSES: readonly LoanStatus[] = ["Pending"];
+
+/** Statuses that represent a final reviewer decision. */
+const FINAL_DECISION_STATUSES: readonly LoanStatus[] = [
+  "Approved",
+  "Rejected",
+  "Disbursing",
+  "Repaying",
+  "Completed",
+];
+
+/** Longest withdrawal reason we keep; longer input is rejected by the route. */
+export const MAX_WITHDRAWAL_REASON_LENGTH = 500;
+
+export type WithdrawalFailure = "not_found" | "already_withdrawn" | "final_decision" | "not_withdrawable";
+
+export type WithdrawalResult =
+  | { ok: true; application: LoanApplication }
+  | { ok: false; error: WithdrawalFailure; current?: LoanApplication };
+
+function classifyUnwithdrawable(app: LoanApplication): WithdrawalFailure {
+  if (app.status === "Withdrawn") return "already_withdrawn";
+  if (FINAL_DECISION_STATUSES.includes(app.status)) return "final_decision";
+  return "not_withdrawable";
+}
+
+/**
+ * Withdraws a Pending application on the applicant's behalf. The record is
+ * kept (status `Withdrawn`, with timestamp and optional reason) so history and
+ * audit replay stay intact, but it drops out of the active review queue since
+ * every queue query filters on `status = 'Pending'`.
+ *
+ * The status guard is re-checked in the UPDATE's WHERE clause, so a reviewer
+ * decision racing the withdrawal is reported rather than overwritten.
+ */
+export async function withdrawApplication(id: string, reason?: string): Promise<WithdrawalResult> {
+  const existing = await prisma.loanApplication.findFirst({
+    where: { id, deletedAt: null },
+    include: { applicant: true },
+  });
+  if (!existing) return { ok: false, error: "not_found" };
+
+  const current = mapLoanApplication(existing);
+  if (!WITHDRAWABLE_STATUSES.includes(current.status)) {
+    return { ok: false, error: classifyUnwithdrawable(current), current };
+  }
+
+  const now = new Date();
+  const { count } = await prisma.loanApplication.updateMany({
+    where: { id, deletedAt: null, status: existing.status, version: existing.version },
+    data: {
+      status: "Withdrawn",
+      withdrawnAt: now,
+      withdrawalReason: reason ?? null,
+      statusUpdatedAt: now,
+      version: { increment: 1 },
+    },
+  });
+
+  const after = await prisma.loanApplication.findFirst({
+    where: { id, deletedAt: null },
+    include: { applicant: true },
+  });
+  if (!after) return { ok: false, error: "not_found" };
+  const application = mapLoanApplication(after);
+
+  // Another writer got there first: report what the record is now.
+  if (count === 0) return { ok: false, error: classifyUnwithdrawable(application), current: application };
+
+  await recordLoanChange(id, diffLoanSnapshot(snapshotOf(current), snapshotOf(application)));
+  await transitionReviewStage(undefined, id, "Withdrawn", now);
+
+  return { ok: true, application };
+}
+
+/** Counts backing the reviewer pipeline dashboard. */
+export interface ReviewQueueMetrics {
+  /** Applications awaiting a reviewer decision — the active queue. */
+  activeQueue: number;
+  /** Applications the applicant withdrew; kept for history, not in the queue. */
+  withdrawn: number;
+}
+
+export async function getReviewQueueMetrics(): Promise<ReviewQueueMetrics> {
+  const [activeQueue, withdrawn] = await Promise.all([
+    prisma.loanApplication.count({ where: { status: "Pending", deletedAt: null } }),
+    prisma.loanApplication.count({ where: { status: "Withdrawn", deletedAt: null } }),
+  ]);
+  return { activeQueue, withdrawn };
 }
 
 export type BulkReviewDecision = "approve" | "reject";

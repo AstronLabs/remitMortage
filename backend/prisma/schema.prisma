@@ -29,6 +29,9 @@ enum LoanStatus {
   Disbursing
   Repaying
   Completed
+  // Applicant withdrew a Pending application (issue #1107). Kept for history;
+  // excluded from the active review queue like any other non-Pending status.
+  Withdrawn
 }
 
 /// Authorization state of an attached co-signer/guarantor.
@@ -418,6 +421,11 @@ model LoanApplication {
 
   // Human-readable rejection reason (manual or auto-rejection).
   reason                 String?
+
+  // Applicant withdrawal (issue #1107): when it happened and the optional
+  // free-text reason the applicant gave.
+  withdrawnAt            DateTime?
+  withdrawalReason       String?
   autoRejectedAt         DateTime?
   autoRejectionLogs      LoanAutoRejectionLog[]
 
@@ -1144,4 +1152,17 @@ model ApiKeyEndpointUsage {
 
   @@unique([apiKeyId, periodStart, endpoint])
   @@index([apiKeyId, periodStart])
+}
+
+/// Server-side save point for an applicant's in-progress multi-step
+/// application (issue #1110), so it can be resumed on any device. One row per
+/// wallet; `data` holds the wizard's form values and is replaced on each save.
+model ApplicationProgress {
+  id             String   @id @default(uuid())
+  stellarAddress String   @unique
+  step           Int
+  totalSteps     Int
+  data           Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }

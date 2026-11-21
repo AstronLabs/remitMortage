@@ -14,9 +14,19 @@ import {
   updateApplication,
   resumeDraftApplication,
   discardDraftApplication,
+  withdrawApplication,
+  getReviewQueueMetrics,
+  MAX_WITHDRAWAL_REASON_LENGTH,
   escrowTargetMetForAmount,
   StaleVersionError,
 } from "../services/loanStore.js";
+import {
+  clearApplicationProgress,
+  getApplicationProgress,
+  InvalidProgressError,
+  parseProgressInput,
+  saveApplicationProgress,
+} from "../services/applicationProgress.js";
 import { applyAutoRejectionIfNeeded } from "../services/autoRejectionRuleStore.js";
 import {
   verifyStellarGuarantorSignature,
@@ -42,6 +52,7 @@ import {
   ApplicantFields,
 } from "../utils/fuzzyMatch.js";
 import {
+  isAdminRequest,
   requireBorrowerAddressOwnership,
   requireLoanAdmin,
   requireLoanOwnership,
@@ -236,6 +247,81 @@ loanRouter.get("/borrower/:address", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET/PUT/DELETE /api/loan/progress  (issue #1110)
+//
+// Save point for the caller's in-progress multi-step application. Always
+// scoped to the authenticated wallet — there is no address or id parameter —
+// so progress saved on one device is available on any other the applicant
+// signs in from.
+// ---------------------------------------------------------------------------
+function callerWallet(req: AuthenticatedRequest, res: Response): string | null {
+  const wallet = req.user?.walletAddress;
+  if (!wallet) {
+    res.status(401).json({ error: "unauthorized", message: "Authentication required" });
+    return null;
+  }
+  return wallet;
+}
+
+loanRouter.get("/progress", async (req, res) => {
+  const wallet = callerWallet(req as AuthenticatedRequest, res);
+  if (!wallet) return;
+  try {
+    const progress = await getApplicationProgress(wallet);
+    if (!progress) return res.status(404).json({ error: "no_saved_progress" });
+    return res.json(progress);
+  } catch (err) {
+    logger.error("Load application progress error", { err });
+    return res.status(500).json({ error: "progress_load_failed" });
+  }
+});
+
+loanRouter.put("/progress", async (req, res) => {
+  const wallet = callerWallet(req as AuthenticatedRequest, res);
+  if (!wallet) return;
+  try {
+    const input = parseProgressInput(req.body);
+    const saved = await saveApplicationProgress(wallet, input);
+    return res.json(saved);
+  } catch (err) {
+    if (err instanceof InvalidProgressError) {
+      return res.status(400).json({ error: err.code, field: err.field, message: err.message });
+    }
+    logger.error("Save application progress error", { err });
+    return res.status(500).json({ error: "progress_save_failed" });
+  }
+});
+
+loanRouter.delete("/progress", async (req, res) => {
+  const wallet = callerWallet(req as AuthenticatedRequest, res);
+  if (!wallet) return;
+  try {
+    await clearApplicationProgress(wallet);
+    return res.status(204).end();
+  } catch (err) {
+    logger.error("Clear application progress error", { err });
+    return res.status(500).json({ error: "progress_clear_failed" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/loan/queue-metrics  (issue #1107)
+// Admin-only counts for the review pipeline. Withdrawn applications are
+// reported separately and never counted in the active queue.
+// ---------------------------------------------------------------------------
+loanRouter.get("/queue-metrics", async (req, res) => {
+  if (!isAdminRequest(req as AuthenticatedRequest)) {
+    return res.status(403).json({ error: "forbidden", message: "Admin access required" });
+  }
+  try {
+    return res.json(await getReviewQueueMetrics());
+  } catch (err) {
+    logger.error("Queue metrics error", { err });
+    return res.status(500).json({ error: "queue_metrics_failed" });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/loan/pending
 // ---------------------------------------------------------------------------
 loanRouter.get("/pending", async (req, res) => {
@@ -394,6 +480,54 @@ loanRouter.post("/:id/discard", async (req, res) => {
   const discarded = await discardDraftApplication(id);
   if (!discarded) return res.status(404).json({ error: "not_found_or_not_draft" });
   return res.json(discarded);
+});
+
+// POST /api/loan/:id/withdraw  (issue #1107)
+// Lets the applicant formally withdraw their own Pending application, with an
+// optional reason. The record is kept for history but leaves the review queue.
+// Withdrawing twice, or after a final decision, is a 409.
+const WITHDRAWAL_FAILURE_MESSAGES = {
+  already_withdrawn: "Application has already been withdrawn",
+  final_decision: "Application already has a final decision and can no longer be withdrawn",
+  not_withdrawable: "Only Pending applications can be withdrawn",
+} as const;
+
+loanRouter.post("/:id/withdraw", async (req, res) => {
+  const id = String(req.params?.id ?? "");
+  const owned = await requireLoanOwnership(req as AuthenticatedRequest, res, id);
+  if (!owned) return;
+  // Withdrawal is the applicant's own decision: the admin bypass in the
+  // ownership gate does not extend to withdrawing on someone's behalf.
+  if (owned.borrowerAddress.toLowerCase() !== (req as AuthenticatedRequest).user?.walletAddress.toLowerCase()) {
+    return res.status(403).json({ error: "forbidden", message: "Only the applicant can withdraw this application." });
+  }
+
+  const rawReason = req.body?.reason;
+  if (rawReason !== undefined && rawReason !== null && typeof rawReason !== "string") {
+    return res.status(400).json({ error: "invalid_reason", field: "reason", message: "reason must be a string" });
+  }
+  const reason = typeof rawReason === "string" && rawReason.trim() ? rawReason.trim() : undefined;
+  if (reason && reason.length > MAX_WITHDRAWAL_REASON_LENGTH) {
+    return res.status(400).json({
+      error: "invalid_reason",
+      field: "reason",
+      message: `reason must be at most ${MAX_WITHDRAWAL_REASON_LENGTH} characters`,
+    });
+  }
+
+  try {
+    const result = await withdrawApplication(id, reason);
+    if (result.ok) return res.json(result.application);
+    if (result.error === "not_found") return res.status(404).json({ error: "not_found" });
+    return res.status(409).json({
+      error: result.error,
+      message: WITHDRAWAL_FAILURE_MESSAGES[result.error],
+      current: result.current,
+    });
+  } catch (err) {
+    logger.error("Withdraw error", { err });
+    return res.status(500).json({ error: "withdraw_failed" });
+  }
 });
 
 // GET /api/loan/:id
