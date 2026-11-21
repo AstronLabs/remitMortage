@@ -15,6 +15,7 @@ import {
   type SupportChatStreamEvent,
 } from "@/lib/supportChatApi";
 import { safeParseJson } from "@/lib/safe-object";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 
 function formatTime(iso: string): string {
   try {
@@ -43,6 +44,7 @@ export function SupportChatWidget() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const listEndRef = useRef<HTMLDivElement | null>(null);
   const seenMessageIds = useRef<Set<string>>(new Set());
+  const reducedMotion = useReducedMotion();
 
   const { notifyTyping, isOtherPartyTyping, receiveRemoteTypingEvent } = useTypingIndicator({
     onLocalTypingChange: (isTyping) => {
@@ -115,8 +117,8 @@ export function SupportChatWidget() {
   }, [appendMessage, receiveRemoteTypingEvent]);
 
   useEffect(() => {
-    listEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, isOtherPartyTyping]);
+    listEndRef.current?.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "end" });
+  }, [messages, isOtherPartyTyping, reducedMotion]);
 
   async function handleSend() {
     const content = draft.trim();

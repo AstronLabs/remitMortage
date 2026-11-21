@@ -853,9 +853,12 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .skeleton {
-    animation: none;
+    animation: none !important;
     background-image: none;
   }
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
+  html { scroll-behavior: auto !important; }
+  [style*="animation"], [style*="transition"] { animation: none !important; transition: none !important; }
 }
 
 @keyframes fadeInUp {

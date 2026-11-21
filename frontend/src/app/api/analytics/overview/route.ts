@@ -10,6 +10,7 @@ export async function GET(request: Request) {
     activeBorrowers: 42,
     activeInvestors: 18,
     loansDisbursed: 15,
+    lastUpdated: new Date().toISOString(),
     recentActivity: compact ? [] : [
       {
         id: "1",
