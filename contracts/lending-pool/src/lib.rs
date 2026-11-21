@@ -95,7 +95,7 @@ pub use crate::types::{
     LoanPortabilitySnapshot, LoanRecord, LoanStatus, LoanSummary, LoanSummaryPage, LockupTier,
     PauseGroup, PayoffQuote, PendingCapChange, PendingHaircutChange, PendingRateCurveChange,
     PendingUpgradeRecord, PendingWindDown, PoolConfig, PoolExtKey, PoolHealth, ProofOfReserves,
-    RepaymentSchedule, RestructureProposal, ScheduleView, Tranche, TrancheInfo, WindDownStatus,
+    RepaymentAssetRecord, RepaymentSchedule, RestructureProposal, ScheduleView, Tranche, TrancheInfo, WindDownStatus,
     YieldMode,
 };
 use crate::events::emit_event;
@@ -1360,9 +1360,13 @@ impl LendingPoolContract {
         loan: &mut LoanRecord,
         borrower: &Address,
         amount: i128,
+        funded: bool,
     ) -> Result<(), PoolError> {
-        let token = Self::token_client(env, &config.token);
-        token.transfer(borrower, &env.current_contract_address(), &amount);
+        // `funded`: the repayment arrived in a listed asset, already pulled.
+        if !funded {
+            let token = Self::token_client(env, &config.token);
+            token.transfer(borrower, &env.current_contract_address(), &amount);
+        }
 
         let old_repaid = loan.repaid;
         loan.repaid += amount;
@@ -4454,6 +4458,124 @@ impl LendingPoolContract {
         loan_id: BytesN<32>,
         amount: i128,
     ) -> Result<(), PoolError> {
+        Self::do_repay(env, borrower, loan_id, amount, false)
+    }
+
+    /// Admin lists (or updates) an asset accepted for repayment. Only an asset
+    /// marked `pegged` is converted — one-to-one in value, rescaled for token
+    /// decimals — into the pool's accounting unit; a listed asset that is not
+    /// pegged is rejected at repayment because there is no rate to convert it.
+    pub fn add_repayment_asset(env: Env, asset: Address, pegged: bool) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        let decimals = Self::token_client(&env, &asset).decimals();
+        env.storage().persistent().set(
+            &PoolExtKey::RepaymentAsset(asset),
+            &RepaymentAssetRecord { pegged, decimals },
+        );
+        Ok(())
+    }
+
+    /// Admin removes an asset from the accepted repayment list.
+    pub fn remove_repayment_asset(env: Env, asset: Address) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        env.storage()
+            .persistent()
+            .remove(&PoolExtKey::RepaymentAsset(asset));
+        Ok(())
+    }
+
+    /// Returns the listing for a repayment asset, or `None` if not listed.
+    pub fn get_repayment_asset(env: Env, asset: Address) -> Option<RepaymentAssetRecord> {
+        env.storage()
+            .persistent()
+            .get(&PoolExtKey::RepaymentAsset(asset))
+    }
+
+    /// Repay a loan in a listed asset. `asset_amount` is in the asset's own
+    /// units; it is converted to the pool's accounting unit (rounding down)
+    /// and that amount is credited to the loan. Only the credited equivalent
+    /// is pulled from the borrower, so rounding dust is never taken.
+    ///
+    /// An unlisted, removed or non-pegged asset, and an amount that converts
+    /// to zero, are rejected before any token moves. A prepayment penalty, if
+    /// one applies, is still paid in the pool token.
+    pub fn repay_with_asset(
+        env: Env,
+        borrower: Address,
+        loan_id: BytesN<32>,
+        asset: Address,
+        asset_amount: i128,
+    ) -> Result<(), PoolError> {
+        if asset_amount <= 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+        let record: RepaymentAssetRecord = env
+            .storage()
+            .persistent()
+            .get(&PoolExtKey::RepaymentAsset(asset.clone()))
+            .filter(|r: &RepaymentAssetRecord| r.pegged)
+            .ok_or(PoolError::Unauthorized)?;
+
+        let config = Self::read_config(&env)?;
+        let pool_decimals = Self::token_client(&env, &config.token).decimals();
+        let credited = Self::convert_to_pool_units(asset_amount, record.decimals, pool_decimals)?;
+        if credited <= 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+        // Exactly what the credited amount is worth in the asset: no dust.
+        let to_pull = Self::convert_from_pool_units(credited, record.decimals, pool_decimals)?;
+
+        // `do_repay` checks the pause flag and the borrower's auth; both
+        // revert this pull with it if they fail.
+        Self::token_client(&env, &asset).transfer(
+            &borrower,
+            &env.current_contract_address(),
+            &to_pull,
+        );
+        Self::do_repay(env, borrower, loan_id, credited, true)
+    }
+
+    /// 10^exp, or `InvalidAmount` when it would overflow.
+    fn pow10(exp: u32) -> Result<i128, PoolError> {
+        if exp > 30 {
+            return Err(PoolError::InvalidAmount);
+        }
+        Ok(10i128.pow(exp))
+    }
+
+    /// Converts an amount of an asset with `asset_dec` decimals into the pool
+    /// token's `pool_dec` decimals at one-to-one value, rounding down.
+    fn convert_to_pool_units(amount: i128, asset_dec: u32, pool_dec: u32) -> Result<i128, PoolError> {
+        if asset_dec >= pool_dec {
+            Ok(amount / Self::pow10(asset_dec - pool_dec)?)
+        } else {
+            amount
+                .checked_mul(Self::pow10(pool_dec - asset_dec)?)
+                .ok_or(PoolError::InvalidAmount)
+        }
+    }
+
+    /// Inverse of [`Self::convert_to_pool_units`] for an amount that is an
+    /// exact multiple of the asset's precision.
+    fn convert_from_pool_units(amount: i128, asset_dec: u32, pool_dec: u32) -> Result<i128, PoolError> {
+        if asset_dec >= pool_dec {
+            amount
+                .checked_mul(Self::pow10(asset_dec - pool_dec)?)
+                .ok_or(PoolError::InvalidAmount)
+        } else {
+            Ok(amount / Self::pow10(pool_dec - asset_dec)?)
+        }
+    }
+
+    fn do_repay(
+        env: Env,
+        borrower: Address,
+        loan_id: BytesN<32>,
+        amount: i128,
+        funded: bool,
+    ) -> Result<(), PoolError> {
         Self::check_function_not_paused(&env, PauseGroup::Repayments)?;
         borrower.require_auth();
 
@@ -4504,7 +4626,9 @@ impl LendingPoolContract {
         // interest that accrued after the quote instead of rejecting the
         // payment or leaving a residual balance.
         if quoted_payoff {
-            Self::settle_quoted_payoff(&env, &config, &loan_id, &mut loan, &borrower, amount)?;
+            Self::settle_quoted_payoff(
+                &env, &config, &loan_id, &mut loan, &borrower, amount, funded,
+            )?;
             return Ok(());
         }
 
@@ -4615,12 +4739,17 @@ impl LendingPoolContract {
 
         // Transfer USDC from borrower to pool, plus any early-prepayment
         // penalty owed on top of it.
+        // A repayment made in a listed asset was already pulled in full;
+        // only the penalty, which is always owed in the pool token, remains.
         let token = Self::token_client(&env, &config.token);
-        token.transfer(
-            &borrower,
-            &env.current_contract_address(),
-            &(amount + prepayment_penalty),
-        );
+        let pool_token_due = if funded {
+            prepayment_penalty
+        } else {
+            amount + prepayment_penalty
+        };
+        if pool_token_due > 0 {
+            token.transfer(&borrower, &env.current_contract_address(), &pool_token_due);
+        }
 
         // Forward the penalty to the treasury immediately. It leaves the pool
         // in the same transaction it arrives, so it nets out of the liquidity
@@ -5088,7 +5217,7 @@ impl LendingPoolContract {
         }
         Self::consume_daily_repayment_allowance(&env, &borrower, amount)?;
         Self::accrue_interest(&env, &mut loan);
-        Self::settle_quoted_payoff(&env, &config, &loan_id, &mut loan, &borrower, amount)?;
+        Self::settle_quoted_payoff(&env, &config, &loan_id, &mut loan, &borrower, amount, false)?;
         Ok(())
     }
 

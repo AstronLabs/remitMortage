@@ -767,6 +767,20 @@ pub enum PoolExtKey {
     /// Number of state-changing events emitted for a loan so far. Increases
     /// by exactly one per event; absent means no event yet.
     LoanEventSeq(BytesN<32>),
+    /// Admin-listed repayment asset (see `add_repayment_asset`).
+    RepaymentAsset(Address),
+}
+
+/// A listed repayment asset. Only a `pegged` asset is converted, one-to-one
+/// in value, into the pool's accounting unit; `decimals` rescales between the
+/// two tokens' precisions.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RepaymentAssetRecord {
+    /// Admin has marked the asset as pegged one-to-one to the pool's unit.
+    pub pegged: bool,
+    /// The asset token's decimals, read when it was listed.
+    pub decimals: u32,
 }
 
 /// Compact per-loan view returned in bulk by `get_loan_summaries`, so an
