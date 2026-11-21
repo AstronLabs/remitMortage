@@ -583,6 +583,56 @@ export const OPERATION_EXAMPLES: Readonly<Record<string, OperationExamples>> = {
     },
   },
 
+  // ── Admin dead-letter queue (issue #1103) ─────────────────────────────
+  "GET /api/admin/dead-letter-jobs": {
+    responses: {
+      200: {
+        count: 1,
+        jobs: [
+          {
+            id: UUID,
+            queueName: "remitmortgage-notifications",
+            jobName: "send-notification",
+            originalJobId: "1042",
+            payload: { notificationId: UUID, recipient: "ops@example.com", type: "EMAIL", content: "hello" },
+            failureReason: "SMTP connection timed out",
+            attemptsMade: 5,
+            status: "dead",
+            failedAt: TS,
+            requeuedAt: null,
+            requeuedBy: null,
+            requeuedJobId: null,
+          },
+        ],
+      },
+      400: err(400, "invalid_status", "status must be dead or requeued"),
+    },
+  },
+  "POST /api/admin/dead-letter-jobs/{id}/requeue": {
+    responses: {
+      200: {
+        requeued: true,
+        job: {
+          id: UUID,
+          queueName: "remitmortgage-notifications",
+          jobName: "send-notification",
+          originalJobId: "1042",
+          payload: { notificationId: UUID, recipient: "ops@example.com", type: "EMAIL", content: "hello" },
+          failureReason: "SMTP connection timed out",
+          attemptsMade: 5,
+          status: "requeued",
+          failedAt: TS,
+          requeuedAt: TS,
+          requeuedBy: ADDRESS,
+          requeuedJobId: "2187",
+        },
+      },
+      404: err(404, "not_found", "Dead-lettered job not found"),
+      409: err(409, "already_requeued", "Dead-lettered job has already been requeued"),
+      503: err(503, "queue_unavailable", "Queue is not available to requeue onto"),
+    },
+  },
+
   // ── Admin devices ─────────────────────────────────────────────────────
   "POST /api/admin/devices/enroll": {
     request: { publicKey: "c3ludGhldGljLXB1YmxpYy1rZXk=", label: "Laptop" },
