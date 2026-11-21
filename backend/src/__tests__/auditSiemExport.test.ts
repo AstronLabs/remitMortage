@@ -4,7 +4,8 @@
 jest.mock("../services/db.js");
 jest.mock("../services/audit.js");
 jest.mock("../utils/logger.js", () => ({
-  default: { warn: jest.fn(), error: jest.fn(), info: jest.fn() },
+  __esModule: true,
+  default: { warn: jest.fn(), error: jest.fn(), info: jest.fn(), debug: jest.fn() },
 }));
 
 import { prisma } from "../services/db.js";
@@ -18,6 +19,13 @@ import {
   SIEM_MAX_WINDOW_DAYS,
   AuditExportEvent,
 } from "../services/auditSiemExport.js";
+import {
+  DEFAULT_EXPORT_REDACTION_LEVEL,
+  maskIdentifier,
+  redactMetadata,
+  resolveExportRedactionLevel,
+  truncateIp,
+} from "../services/exportRedaction.js";
 
 const mockLogAudit = logAudit as jest.Mock;
 
@@ -88,7 +96,7 @@ describe("exportAuditLogToSiem – pagination", () => {
     (prisma.auditLog as any) = { findMany };
 
     const pages: string[][] = [];
-    await exportAuditLogToSiem({ from, to }, SECRET, async (lines) => {
+    await exportAuditLogToSiem({ from, to, redactionLevel: "full" }, SECRET, async (lines) => {
       pages.push(lines);
     });
 
@@ -253,5 +261,175 @@ describe("exportAuditLogToSiem – audit trail", () => {
         }),
       })
     );
+  });
+});
+
+// ── PII redaction levels (issue #1104) ────────────────────────────────────────
+
+describe("exportAuditLogToSiem – redaction levels", () => {
+  const ACTOR = "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVW";
+
+  function piiRow(id: string, action: string, createdAt: string) {
+    return {
+      id,
+      action,
+      actorAddress: ACTOR,
+      ipAddress: "203.0.113.45",
+      metadata: {
+        loanId: "L1",
+        email: "borrower@example.com",
+        employerName: "Acme Corp",
+        description: "kept",
+        nested: { ipAddress: "198.51.100.7", status: "approved" },
+      },
+      createdAt: new Date(createdAt),
+    };
+  }
+
+  const rows = [
+    piiRow("r-1", "loan.approved", "2026-08-01T06:00:00Z"),
+    piiRow("r-2", "kyc.reviewed", "2026-08-01T07:00:00Z"),
+    piiRow("r-3", "loan.approved", "2026-08-01T08:00:00Z"),
+  ];
+
+  async function runExport(redactionLevel?: "full" | "partial" | "aggregate", format?: "ndjson" | "cef") {
+    (prisma.auditLog as any) = { findMany: jest.fn().mockResolvedValueOnce(rows).mockResolvedValue([]) };
+    const lines: string[] = [];
+    const result = await exportAuditLogToSiem({ from, to, redactionLevel, format }, SECRET, async (page) => {
+      lines.push(...page);
+    });
+    return { result, lines };
+  }
+
+  it("full: exports every field unchanged", async () => {
+    const { result, lines } = await runExport("full");
+    expect(result.redactionLevel).toBe("full");
+    expect(lines).toHaveLength(3);
+    const first = JSON.parse(lines[0]);
+    expect(first.actorAddress).toBe(ACTOR);
+    expect(first.ipAddress).toBe("203.0.113.45");
+    expect(first.metadata.email).toBe("borrower@example.com");
+    expect(first.metadata.nested.ipAddress).toBe("198.51.100.7");
+  });
+
+  it("partial: keeps one row per event but masks the actor, truncates the IP, and redacts PII metadata", async () => {
+    const { result, lines } = await runExport("partial");
+    expect(result.redactionLevel).toBe("partial");
+    expect(lines).toHaveLength(3);
+    const first = JSON.parse(lines[0]);
+    expect(first.id).toBe("r-1");
+    expect(first.action).toBe("loan.approved");
+    expect(first.actorAddress).toBe(`${ACTOR.slice(0, 4)}…${ACTOR.slice(-4)}`);
+    expect(first.ipAddress).toBe("203.0.113.0");
+    expect(first.metadata).toEqual({
+      loanId: "L1",
+      email: "[REDACTED]",
+      employerName: "[REDACTED]",
+      description: "kept",
+      nested: { ipAddress: "[REDACTED]", status: "approved" },
+    });
+    expect(lines.join("\n")).not.toContain("borrower@example.com");
+    expect(lines.join("\n")).not.toContain(ACTOR);
+  });
+
+  it("partial CEF output carries no full actor address or IP", async () => {
+    const { lines } = await runExport("partial", "cef");
+    expect(lines[0]).toContain("src=203.0.113.0");
+    expect(lines.join("\n")).not.toContain(ACTOR);
+    expect(lines.join("\n")).not.toContain("203.0.113.45");
+  });
+
+  it("aggregate: emits only per-action counts, with no per-event or personal data", async () => {
+    const { result, lines } = await runExport("aggregate");
+    expect(result.redactionLevel).toBe("aggregate");
+    expect(result.totalEvents).toBe(3);
+    expect(lines.map((l) => JSON.parse(l))).toEqual([
+      { action: "kyc.reviewed", count: 1, firstSeen: "2026-08-01T07:00:00.000Z", lastSeen: "2026-08-01T07:00:00.000Z" },
+      { action: "loan.approved", count: 2, firstSeen: "2026-08-01T06:00:00.000Z", lastSeen: "2026-08-01T08:00:00.000Z" },
+    ]);
+    const joined = lines.join("\n");
+    expect(joined).not.toContain(ACTOR);
+    expect(joined).not.toContain("203.0.113");
+    expect(joined).not.toContain("borrower@example.com");
+    expect(joined).not.toContain("r-1");
+  });
+
+  it("aggregate CEF output is counts only", async () => {
+    const { lines } = await runExport("aggregate", "cef");
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toMatch(/^CEF:0\|RemitMortgage\|AuditLog\|1\.0\|aggregate\|loan\.approved\|1\|cnt=2 /);
+    expect(lines.join("\n")).not.toContain(ACTOR);
+  });
+
+  it("defaults to the most redacted level (aggregate) when none is chosen", async () => {
+    const { result, lines } = await runExport(undefined);
+    expect(result.redactionLevel).toBe(DEFAULT_EXPORT_REDACTION_LEVEL);
+    expect(DEFAULT_EXPORT_REDACTION_LEVEL).toBe("aggregate");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0])).not.toHaveProperty("actorAddress");
+  });
+
+  it.each(["full", "partial", "aggregate"] as const)(
+    "records the %s level in the export audit entry",
+    async (level) => {
+      await runExport(level);
+      expect(mockLogAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "audit.siem_export_completed",
+          metadata: expect.objectContaining({ redactionLevel: level, totalEvents: 3 }),
+        })
+      );
+    }
+  );
+
+  it("records the default level in the audit entry when none is chosen", async () => {
+    await runExport(undefined);
+    expect(mockLogAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ redactionLevel: "aggregate" }) })
+    );
+  });
+});
+
+describe("exportRedaction helpers", () => {
+  it("resolves the requested level, defaulting to the most redacted and rejecting unknown values", () => {
+    expect(resolveExportRedactionLevel(undefined)).toBe("aggregate");
+    expect(resolveExportRedactionLevel(null)).toBe("aggregate");
+    expect(resolveExportRedactionLevel("full")).toBe("full");
+    expect(resolveExportRedactionLevel("partial")).toBe("partial");
+    expect(resolveExportRedactionLevel("everything")).toBeNull();
+    expect(resolveExportRedactionLevel(1)).toBeNull();
+  });
+
+  it("truncates IPv4 and IPv6 addresses to their network", () => {
+    expect(truncateIp("10.0.0.1")).toBe("10.0.0.0");
+    expect(truncateIp("::ffff:192.168.4.20")).toBe("192.168.4.0");
+    expect(truncateIp("2001:db8:85a3:0:0:8a2e:370:7334")).toBe("2001:db8:85a3::");
+    expect(truncateIp(null)).toBeNull();
+  });
+
+  it("masks identifiers, fully redacting short ones", () => {
+    expect(maskIdentifier("GABCDEFGHIJKLMNOP")).toBe("GABC…MNOP");
+    expect(maskIdentifier("short")).toBe("[REDACTED]");
+    expect(maskIdentifier(null)).toBeNull();
+  });
+
+  it("redacts PII keys by word, without catching unrelated keys", () => {
+    expect(
+      redactMetadata({
+        client_ip: "1.2.3.4",
+        userAgent: "Mozilla",
+        taxId: "123",
+        description: "fine",
+        shipping: "fine",
+        items: [{ phoneNumber: "555" }],
+      })
+    ).toEqual({
+      client_ip: "[REDACTED]",
+      userAgent: "[REDACTED]",
+      taxId: "[REDACTED]",
+      description: "fine",
+      shipping: "fine",
+      items: [{ phoneNumber: "[REDACTED]" }],
+    });
   });
 });

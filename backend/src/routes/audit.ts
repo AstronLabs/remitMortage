@@ -7,6 +7,7 @@ import { prisma } from "../services/db.js";
 import logger from "../utils/logger.js";
 import { exportAuditLogToSiem, SIEM_MAX_WINDOW_DAYS } from "../services/auditSiemExport.js";
 import { verifyAuditRange } from "../services/auditChain.js";
+import { EXPORT_REDACTION_LEVELS, resolveExportRedactionLevel } from "../services/exportRedaction.js";
 
 export const auditRouter = Router();
 
@@ -156,19 +157,32 @@ auditRouter.get("/verify", requireAdmin, async (req, res) => {
  * integrity fingerprint so the consumer can verify the payload end-to-end.
  *
  * Admin-only.  Maximum window: 90 days.
+ *
+ * `redactionLevel` (issue #1104) picks how much PII the export carries for its
+ * audience: `full`, `partial` (masked actor, truncated IP, PII metadata keys
+ * redacted) or `aggregate` (per-action counts only). Defaults to the most
+ * redacted, `aggregate`; the level used is recorded in the export audit entry.
  */
 auditRouter.post(
   "/siem-export",
   authMiddleware,
   requireAdmin,
   async (req: AuthenticatedRequest, res) => {
-    const { from, to, actions, actorAddress, format } = req.body as {
+    const { from, to, actions, actorAddress, format, redactionLevel } = req.body as {
       from?: string;
       to?: string;
       actions?: string[];
       actorAddress?: string;
       format?: "ndjson" | "cef";
+      redactionLevel?: unknown;
     };
+
+    const resolvedRedactionLevel = resolveExportRedactionLevel(redactionLevel);
+    if (!resolvedRedactionLevel) {
+      return res.status(400).json({
+        error: `'redactionLevel' must be one of: ${EXPORT_REDACTION_LEVELS.join(", ")}`,
+      });
+    }
 
     if (!from || !to) {
       return res.status(400).json({ error: "'from' and 'to' are required" });
@@ -201,6 +215,7 @@ auditRouter.post(
     res.setHeader("Content-Type", contentType);
     res.setHeader("Transfer-Encoding", "chunked");
     res.setHeader("X-Export-Format", resolvedFormat);
+    res.setHeader("X-Export-Redaction-Level", resolvedRedactionLevel);
 
     const hmacSecret =
       process.env.SIEM_EXPORT_HMAC_SECRET ?? "default_siem_secret";
@@ -214,6 +229,7 @@ auditRouter.post(
           actorAddress: actorAddress ?? undefined,
           format: resolvedFormat,
           requestorAddress: req.user?.walletAddress,
+          redactionLevel: resolvedRedactionLevel,
         },
         hmacSecret,
         async (lines) => {
