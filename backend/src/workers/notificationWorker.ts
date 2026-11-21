@@ -10,6 +10,7 @@ import { getTemplateDefinition, renderPublishedTemplate } from "../services/noti
 import { sendWebhook } from "../services/webhook.js";
 import { prisma } from "../services/db.js";
 import logger from "../utils/logger.js";
+import { attachDeadLetterQueue } from "../services/deadLetterQueue.js";
 import { runWithTenant } from "../services/tenant.js";
 import {
   ActiveJobTracker,
@@ -178,6 +179,10 @@ export async function startNotificationWorker(): Promise<void> {
   worker.on("error", (err) => {
     logger.error("[notification-worker] worker error", { error: err.message });
   });
+
+  // A job that fails its final attempt is captured for inspection and
+  // replay instead of being dropped (issue #1103).
+  attachDeadLetterQueue("remitmortgage-notifications", worker);
 
   await worker.waitUntilReady();
   logger.info("[notification-worker] started");

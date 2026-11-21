@@ -272,17 +272,29 @@ export async function sendLoanStatusUpdate(
 
 /**
  * Sends a branded Lockout Security Alert HTML email.
+ *
+ * `occurrences` is the number of lockout events this message represents: rapid
+ * repeats are coalesced into a single email (see services/lockoutService.ts), so
+ * a value greater than 1 is surfaced in the body rather than sending one email
+ * per event. The default of 1 keeps the single-event email byte-for-byte
+ * identical to before.
  */
 export async function sendLockoutNotificationEmail(
   to: string,
   lockoutMinutes: number,
-  ipAddress?: string
+  ipAddress?: string,
+  occurrences: number = 1
 ): Promise<boolean> {
   const brand = getCurrentTenant().name;
   const subject = `Security Alert: Account Locked - ${brand}`;
   const body = `
     <h2 style="color: #ef4444;">Security Alert: Account Temporarily Locked</h2>
     <p>Multiple consecutive failed login attempts were detected on your ${brand} account.</p>
+    ${
+      occurrences > 1
+        ? `<p>This alert combines <strong>${occurrences}</strong> lockout events detected in a short window.</p>`
+        : ""
+    }
     <p>To protect your financial records and assets from unauthorized access, your account has been temporarily locked for <strong>${lockoutMinutes} minute(s)</strong>.</p>
     <table class="details-table">
       <tr>

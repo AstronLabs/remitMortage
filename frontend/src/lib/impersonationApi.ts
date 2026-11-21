@@ -5,6 +5,20 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const CSRF_COOKIE = "csrfToken";
 const CSRF_HEADER = "x-csrf-token";
 
+/**
+ * Fired on `window` whenever this tab starts or ends an impersonation
+ * session, so every `useImpersonation` instance (the site-wide banner, the
+ * admin page, read-only gates) refreshes at once instead of waiting for the
+ * next status poll.
+ */
+export const IMPERSONATION_CHANGED_EVENT = "remitmortgage:impersonation-changed";
+
+function notifyImpersonationChanged(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(IMPERSONATION_CHANGED_EVENT));
+  }
+}
+
 export interface ImpersonationStatus {
   active: boolean;
   sessionId: string | null;
@@ -50,7 +64,9 @@ export async function startImpersonation(
     throw new Error(body.message || "Failed to start impersonation session");
   }
 
-  return res.json();
+  const session = await res.json();
+  notifyImpersonationChanged();
+  return session;
 }
 
 export async function endImpersonation(sessionId?: string): Promise<void> {
@@ -68,4 +84,5 @@ export async function endImpersonation(sessionId?: string): Promise<void> {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.message || "Failed to end impersonation session");
   }
+  notifyImpersonationChanged();
 }

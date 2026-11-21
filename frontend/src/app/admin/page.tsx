@@ -9,6 +9,7 @@ import { useWallet, OptionalWalletProvider } from "../../context/WalletContext";
 import { EmptyState } from "../../components/EmptyState";
 import HelpLink from "../../components/help/HelpLink";
 import ConfirmationDialog from "../../components/ConfirmationDialog";
+import BulkActionReviewDialog, { type BulkReviewRow } from "../../components/admin/BulkActionReviewDialog";
 import { useImpersonation } from "../../hooks/useImpersonation";
 import { startImpersonation } from "../../lib/impersonationApi";
 import { ClipboardList, Hammer, History, MessagesSquare } from "lucide-react";
@@ -555,6 +556,8 @@ function PendingLoansTab({
   const [summaryItems, setSummaryItems] = useState<BulkResultItem[] | null>(null);
   const [reassignModalOpen, setReassignModalOpen] = useState(false);
   const [assigneeAddress, setAssigneeAddress] = useState("");
+  // Reviewer address awaiting the review step before reassignment is applied.
+  const [pendingReassignTo, setPendingReassignTo] = useState<string | null>(null);
 
   if (loading) {
     return (
@@ -596,8 +599,20 @@ function PendingLoansTab({
     setSelectedIds(next);
   };
 
-  const handleBulkAction = async (decision: "APPROVED" | "REJECTED") => {
-    const ids = Array.from(selectedIds);
+  // Rows shown on the bulk review step (issue #1109), in table order.
+  const selectedRows: BulkReviewRow[] = loans
+    .filter((loan) => selectedIds.has(loan.id))
+    .map((loan) => ({
+      id: loan.id,
+      label: loan.borrower,
+      detail: `${loan.id} · ${loan.principal.toLocaleString()} USDC · ${loan.status}`,
+    }));
+  const selectedStatuses = new Set(
+    loans.filter((loan) => selectedIds.has(loan.id)).map((loan) => loan.status)
+  );
+  const sharedStatus = selectedStatuses.size === 1 ? [...selectedStatuses][0] : undefined;
+
+  const handleBulkAction = async (decision: "APPROVED" | "REJECTED", ids: string[]) => {
     if (ids.length === 0) return;
     setBulkProcessing(true);
 
@@ -643,9 +658,8 @@ function PendingLoansTab({
     }
   };
 
-  const handleBulkReassignSubmit = async () => {
-    const ids = Array.from(selectedIds);
-    if (ids.length === 0 || !assigneeAddress.trim()) return;
+  const handleBulkReassignSubmit = async (ids: string[], assignee: string) => {
+    if (ids.length === 0 || !assignee) return;
     setBulkProcessing(true);
 
     try {
@@ -654,7 +668,7 @@ function PendingLoansTab({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           applicationIds: ids,
-          assigneeAddress: assigneeAddress.trim(),
+          assigneeAddress: assignee,
         }),
       });
 
@@ -666,7 +680,7 @@ function PendingLoansTab({
           resultsMap.push({
             applicationId: item.applicationId,
             status: "SUCCESS",
-            message: `Reassigned to ${assigneeAddress.slice(0, 8)}...`,
+            message: `Reassigned to ${assignee.slice(0, 8)}...`,
           });
         }
       }
@@ -682,11 +696,11 @@ function PendingLoansTab({
 
       setSummaryItems(resultsMap);
       setSelectedIds(new Set());
-      setReassignModalOpen(false);
       setAssigneeAddress("");
       onRefresh();
     } catch (err: any) {
       toast.error(err.message || "Bulk reassign failed");
+      throw err;
     } finally {
       setBulkProcessing(false);
     }
@@ -888,11 +902,14 @@ function PendingLoansTab({
                 Cancel
               </button>
               <button
-                onClick={handleBulkReassignSubmit}
+                onClick={() => {
+                  setPendingReassignTo(assigneeAddress.trim());
+                  setReassignModalOpen(false);
+                }}
                 disabled={!assigneeAddress.trim() || bulkProcessing}
                 className="px-4 py-2 rounded-lg text-xs font-semibold bg-sky-500 text-white hover:bg-sky-600 disabled:opacity-50"
               >
-                Confirm Reassignment
+                Review reassignment
               </button>
             </div>
           </div>
@@ -943,26 +960,34 @@ function PendingLoansTab({
       )}
 
       {pendingBulkDecision && (
-        <ConfirmationDialog
-          isOpen
-          title={`Confirm bulk ${pendingBulkDecision === "APPROVED" ? "approval" : "rejection"}`}
-          description={
-            pendingBulkDecision === "APPROVED"
-              ? `Approve ${selectedIds.size} loan applications and commit pool liquidity. This decision affects borrower funding and cannot be reversed here.`
-              : `Reject ${selectedIds.size} loan applications. This decision declines the selected requests and cannot be reversed here.`
-          }
+        <BulkActionReviewDialog
+          title={`Review bulk ${pendingBulkDecision === "APPROVED" ? "approval" : "rejection"}`}
+          change={{
+            field: "Status",
+            from: sharedStatus,
+            to: pendingBulkDecision === "APPROVED" ? "Approved" : "Rejected",
+          }}
+          rows={selectedRows}
           confirmationText={pendingBulkDecision === "APPROVED" ? "APPROVE" : "REJECT"}
           confirmLabel={pendingBulkDecision === "APPROVED" ? "Bulk approve" : "Bulk reject"}
-          onConfirm={async () => {
+          onConfirm={async (ids) => {
             const decision = pendingBulkDecision;
-            if (decision) await handleBulkAction(decision);
+            if (decision) await handleBulkAction(decision, ids);
           }}
           onCancel={() => setPendingBulkDecision(null)}
-        >
-          <p className="mt-4 text-sm font-semibold text-[var(--text-primary)]">
-            {selectedIds.size} loan{selectedIds.size === 1 ? "" : "s"} selected
-          </p>
-        </ConfirmationDialog>
+        />
+      )}
+
+      {pendingReassignTo && (
+        <BulkActionReviewDialog
+          title="Review bulk reassignment"
+          change={{ field: "Assigned reviewer", to: pendingReassignTo }}
+          rows={selectedRows}
+          destructive={false}
+          confirmLabel="Reassign"
+          onConfirm={(ids) => handleBulkReassignSubmit(ids, pendingReassignTo)}
+          onCancel={() => setPendingReassignTo(null)}
+        />
       )}
     </div>
   );

@@ -6,6 +6,7 @@ import { prisma } from "../services/db.js";
 import { requireScopedApiKey } from "../middleware/apiKeyAuth.js";
 import { exportRateLimiter, recordExportedRows } from "../middleware/exportRateLimit.js";
 import { apiKeyQuotaMiddleware } from "../middleware/apiKeyQuota.js";
+import { apiKeyRateLimiter } from "../middleware/apiKeyRateLimit.js";
 import {
   getLongRunningStatementTimeoutMs,
   isStatementTimeoutError,
@@ -31,6 +32,9 @@ type TransactionType = keyof typeof TRANSACTION_SOURCES;
 exportsRouter.get(
   "/transactions",
   requireScopedApiKey(TRANSACTIONS_SCOPE),
+  // Plan-tiered request rate (issue #1106), checked before the request is
+  // metered against the billing-period quota.
+  apiKeyRateLimiter(),
   apiKeyQuotaMiddleware(),
   exportRateLimiter(TRANSACTIONS_SCOPE),
   async (req, res) => {

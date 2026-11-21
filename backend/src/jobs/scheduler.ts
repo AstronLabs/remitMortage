@@ -29,6 +29,7 @@ import { runDataQualityAuditJob } from "./dataQualityAudit.js";
 import { runAuditChainVerificationJob } from "./auditChainVerification.js";
 import { runOutboxCleanupOnce, runOutboxRelayOnce } from "./outboxRelay.js";
 import { runInvestorPositionReconciliation } from "./investorPositionReconciliation.js";
+import { runQueueFairnessRebalanceJob } from "./queueFairnessRebalance.js";
 import { scheduledJob } from "../services/jobLeaderElection.js";
 
 let schedulerTask: ReturnType<typeof cron.schedule> | null = null;
@@ -56,6 +57,7 @@ let auditChainVerificationTask: ReturnType<typeof cron.schedule> | null = null;
 let outboxRelayTask: ReturnType<typeof cron.schedule> | null = null;
 let outboxCleanupTask: ReturnType<typeof cron.schedule> | null = null;
 let investorPositionReconciliationTask: ReturnType<typeof cron.schedule> | null = null;
+let queueFairnessRebalanceTask: ReturnType<typeof cron.schedule> | null = null;
 
 export function startScheduler() {
   if (schedulerTask) {
@@ -256,6 +258,19 @@ export function startScheduler() {
     }
   }), { timezone: "UTC" });
 
+  // Every minute: promote low-lane jobs that have waited past the fair-share
+  // threshold so bulk work can never be starved by continuous high-priority
+  // traffic (issue #985).
+  const queueFairnessSchedule =
+    process.env.QUEUE_FAIRNESS_REBALANCE_CRON_SCHEDULE || "* * * * *";
+  queueFairnessRebalanceTask = cron.schedule(queueFairnessSchedule, scheduledJob("queue-fairness-rebalance", async () => {
+    try {
+      await runQueueFairnessRebalanceJob();
+    } catch (error) {
+      logger.error("[Scheduler] Queue fairness rebalance failed", { error });
+    }
+  }), { timezone: "UTC" });
+
   // Start the materialized view refresh scheduler (every 5 minutes by default)
   startAnalyticsRefreshScheduler();
 
@@ -314,6 +329,10 @@ export function stopScheduler() {
   if (investorPositionReconciliationTask) {
     investorPositionReconciliationTask.stop();
     investorPositionReconciliationTask = null;
+  }
+  if (queueFairnessRebalanceTask) {
+    queueFairnessRebalanceTask.stop();
+    queueFairnessRebalanceTask = null;
   }
   console.log("[Scheduler] Stopped.");
 }

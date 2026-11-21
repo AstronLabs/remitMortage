@@ -359,3 +359,52 @@ describe("getLoanActivityTimeline — cursor and limit handling", () => {
     expect(timeline.pagination.hasNextPage).toBe(false);
   });
 });
+
+describe("getLoanActivityTimeline — reviewer handoff (issue #1101)", () => {
+  const NOTE = "Appraisal ordered; still need the co-borrower's ID.";
+  const handoffDataset = () =>
+    createFakePrisma({
+      borrower: null,
+      applicant: null,
+      auditLogs: [
+        {
+          id: "h1",
+          action: "loan_application.reassigned",
+          actorAddress: "GADMIN",
+          metadata: {
+            applicationId: LOAN_ID,
+            reviewerId: "R2",
+            reviewerEmail: "r2@example.com",
+            previousReviewerId: "R1",
+            previousReviewerEmail: "r1@example.com",
+            handoffNote: NOTE,
+          },
+          createdAt: at("2026-02-01T00:00:00.000Z"),
+        },
+      ],
+    });
+
+  it("records the handoff, including the note, as a timeline entry for reviewers", async () => {
+    const timeline = await getLoanActivityTimeline(loanRef, {
+      prisma: handoffDataset(),
+      includeInternalNotes: true,
+    });
+
+    expect(timeline.events).toHaveLength(1);
+    expect(timeline.events[0]).toMatchObject({
+      id: "admin:h1",
+      type: "admin_action",
+      source: "loan_application.reassigned",
+      summary: `Reviewer handoff from r1@example.com to r2@example.com: ${NOTE}`,
+      metadata: expect.objectContaining({ handoffNote: NOTE, previousReviewerId: "R1" }),
+    });
+  });
+
+  it("withholds the internal handoff note unless explicitly requested", async () => {
+    const timeline = await getLoanActivityTimeline(loanRef, { prisma: handoffDataset() });
+
+    expect(timeline.events[0].summary).toBe("Reviewer reassigned");
+    expect(timeline.events[0].metadata).not.toHaveProperty("handoffNote");
+    expect(JSON.stringify(timeline.events[0])).not.toContain(NOTE);
+  });
+});

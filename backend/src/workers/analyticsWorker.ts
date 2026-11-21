@@ -5,6 +5,7 @@ import { Worker, type WorkerOptions } from "bullmq";
 import { getClusterClient } from "../services/redisCluster.js";
 import { processAnalyticsJob, type AnalyticsJobData } from "../services/analyticsEvents.js";
 import logger from "../utils/logger.js";
+import { attachDeadLetterQueue } from "../services/deadLetterQueue.js";
 import {
   ActiveJobTracker,
   drainWorker,
@@ -26,6 +27,8 @@ export async function startAnalyticsWorker(): Promise<void> {
     connection: connection(), concurrency: 10, lockDuration: 30000, maxStalledCount: 3,
   });
   worker.on("error", (error) => logger.error("[analytics-worker] worker error", { error }));
+  // Capture jobs that exhaust their retries instead of dropping them (issue #1103).
+  attachDeadLetterQueue("remitmortgage-analytics", worker);
   await worker.waitUntilReady();
   logger.info("[analytics-worker] started");
 }

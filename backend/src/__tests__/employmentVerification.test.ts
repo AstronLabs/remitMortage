@@ -25,7 +25,11 @@ jest.mock("../utils/logger.js", () => ({
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 
-import { verifyEmployment, getEmploymentVerificationStatus } from "../services/employmentVerification";
+import {
+  verifyEmployment,
+  verifyEmploymentSources,
+  getEmploymentVerificationStatus,
+} from "../services/employmentVerification";
 
 const ADDRESS = "GAPPLICANT1111111111111111111111111111111111111111111";
 const APPLICANT = { id: "applicant-1", stellarAddress: ADDRESS };
@@ -200,5 +204,130 @@ describe("getEmploymentVerificationStatus", () => {
 
     expect(getLatestEmploymentVerificationMock).toHaveBeenCalledWith("applicant-1");
     expect(result).toEqual({ id: "ev-1", status: "VERIFIED" });
+  });
+});
+
+describe("verifyEmploymentSources (multiple income sources)", () => {
+  function verifiedResult(employerName: string, verifiedMonthlyIncome: number) {
+    return {
+      covered: true,
+      verified: true,
+      employerName,
+      verifiedMonthlyIncome,
+      providerReference: `report-${employerName}`,
+      providerName: "test_provider",
+      error: null,
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    upsertApplicantMock.mockResolvedValue(APPLICANT);
+    createEmploymentVerificationMock.mockResolvedValue({});
+  });
+
+  it("verifies every source automatically and combines their income", async () => {
+    requestPayrollVerificationMock.mockImplementation(async ({ employerName }: { employerName: string }) =>
+      employerName === "Acme Corp" ? verifiedResult("Acme Corp", 3200) : verifiedResult("Night Shift Co", 1800)
+    );
+
+    const outcome = await verifyEmploymentSources(ADDRESS, ["Acme Corp", "Night Shift Co"]);
+
+    expect(outcome.sources.map((s) => s.status)).toEqual(["VERIFIED", "VERIFIED"]);
+    expect(outcome.sources.map((s) => s.employerName)).toEqual(["Acme Corp", "Night Shift Co"]);
+    expect(outcome.verifiedSourceCount).toBe(2);
+    expect(outcome.manualReviewSourceCount).toBe(0);
+    expect(outcome.combinedVerifiedMonthlyIncome).toBe(5000);
+
+    // The applicant is resolved once, and each source gets its own record.
+    expect(upsertApplicantMock).toHaveBeenCalledTimes(1);
+    expect(requestPayrollVerificationMock).toHaveBeenCalledTimes(2);
+    expect(createEmploymentVerificationMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets automatic sources complete when another falls back to manual review", async () => {
+    requestPayrollVerificationMock.mockImplementation(async ({ employerName }: { employerName: string }) => {
+      if (employerName === "Acme Corp") return verifiedResult("Acme Corp", 4000);
+      if (employerName === "Freelance") {
+        return {
+          covered: false,
+          verified: false,
+          employerName: null,
+          verifiedMonthlyIncome: null,
+          providerReference: null,
+          providerName: "test_provider",
+          error: null,
+        };
+      }
+      return {
+        covered: false,
+        verified: false,
+        employerName: null,
+        verifiedMonthlyIncome: null,
+        providerReference: null,
+        providerName: null,
+        error: "provider timed out",
+      };
+    });
+
+    const outcome = await verifyEmploymentSources(ADDRESS, ["Freelance", "Acme Corp", "Flaky Employer"]);
+
+    expect(outcome.sources.map((s) => s.status)).toEqual(["NOT_COVERED", "VERIFIED", "FAILED"]);
+    expect(outcome.sources[0].method).toBe("MANUAL_DOCUMENT");
+    expect(outcome.sources[2].method).toBe("MANUAL_DOCUMENT");
+    expect(outcome.verifiedSourceCount).toBe(1);
+    expect(outcome.manualReviewSourceCount).toBe(2);
+    expect(outcome.combinedVerifiedMonthlyIncome).toBe(4000);
+
+    expect(createEmploymentVerificationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "AUTOMATED_PAYROLL", status: "VERIFIED", employerName: "Acme Corp" })
+    );
+    expect(createEmploymentVerificationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "MANUAL_DOCUMENT", status: "NOT_COVERED", employerName: "Freelance" })
+    );
+  });
+
+  it("does not let an unexpected error on one source block the others", async () => {
+    requestPayrollVerificationMock.mockImplementation(async ({ employerName }: { employerName: string }) => {
+      if (employerName === "Broken") throw new Error("boom");
+      return verifiedResult(employerName, 2500);
+    });
+
+    const outcome = await verifyEmploymentSources(ADDRESS, ["Acme Corp", "Broken", "Other Co"]);
+
+    expect(outcome.sources.map((s) => s.status)).toEqual(["VERIFIED", "FAILED", "VERIFIED"]);
+    expect(outcome.sources[1].method).toBe("MANUAL_DOCUMENT");
+    expect(outcome.combinedVerifiedMonthlyIncome).toBe(5000);
+  });
+
+  it("combined income equals the sum of each verified source's amount", async () => {
+    const incomes: Record<string, number> = { A: 1234.5, B: 2000, C: 765.5 };
+    requestPayrollVerificationMock.mockImplementation(async ({ employerName }: { employerName: string }) =>
+      verifiedResult(employerName, incomes[employerName])
+    );
+
+    const outcome = await verifyEmploymentSources(ADDRESS, ["A", "B", "C"]);
+
+    const sumOfSources = outcome.sources.reduce((sum, s) => sum + (s.verifiedMonthlyIncome ?? 0), 0);
+    expect(outcome.combinedVerifiedMonthlyIncome).toBe(sumOfSources);
+    expect(outcome.combinedVerifiedMonthlyIncome).toBe(4000);
+  });
+
+  it("returns a zero combined income when every source needs manual review", async () => {
+    requestPayrollVerificationMock.mockResolvedValue({
+      covered: false,
+      verified: false,
+      employerName: null,
+      verifiedMonthlyIncome: null,
+      providerReference: null,
+      providerName: "test_provider",
+      error: null,
+    });
+
+    const outcome = await verifyEmploymentSources(ADDRESS, ["X", "Y"]);
+
+    expect(outcome.combinedVerifiedMonthlyIncome).toBe(0);
+    expect(outcome.verifiedSourceCount).toBe(0);
+    expect(outcome.manualReviewSourceCount).toBe(2);
   });
 });

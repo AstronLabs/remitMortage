@@ -4,6 +4,7 @@
 import { prisma } from "../services/db.js";
 import { queueNotification } from "../services/notification.js";
 import { getEmailTranslator } from "../i18n/emailI18n.js";
+import { paymentCutoff } from "../services/businessCalendar.js";
 
 // Hardcoded default late fee if not globally specified elsewhere
 const DEFAULT_LATE_FEE = 50.00;
@@ -22,6 +23,7 @@ export async function runRepaymentAudit() {
         status: { in: ["Approved", "Disbursing", "Repaying"] },
         deletedAt: null,
       },
+      include: { applicant: { select: { addressCountry: true } } },
     });
 
     let processed = 0;
@@ -43,8 +45,13 @@ export async function runRepaymentAudit() {
           continue;
         }
 
-        // 2. Overdue without a Grace Period
-        if (now > loan.dueDate && !loan.gracePeriodEndsAt) {
+        // 2. Overdue without a Grace Period. A due date on a weekend or bank
+        // holiday only counts as missed after the next business day.
+        if (
+          !loan.gracePeriodEndsAt &&
+          now > loan.dueDate &&
+          now > (await paymentCutoff(loan.dueDate, loan.applicant?.addressCountry))
+        ) {
           await handleEnterGracePeriod(loan.id, loan.applicantId, loan.guarantorAddress ?? null);
           processed++;
           continue;

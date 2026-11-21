@@ -35,6 +35,90 @@ export enum JobPriorityClass {
   BULK = 4,
 }
 
+/**
+ * Public priority lanes (issue #985). Every queued job is assigned exactly one
+ * lane; BullMQ uses the lane's priority number (lower runs first).
+ */
+export enum JobLane {
+  HIGH = "high",
+  NORMAL = "normal",
+  LOW = "low",
+}
+
+export const JOB_LANES: readonly JobLane[] = [
+  JobLane.HIGH,
+  JobLane.NORMAL,
+  JobLane.LOW,
+];
+
+/** BullMQ priority number for each lane (lower = higher priority). */
+export const LANE_PRIORITY: Record<JobLane, number> = {
+  [JobLane.HIGH]: 1,
+  [JobLane.NORMAL]: 2,
+  [JobLane.LOW]: 3,
+};
+
+/** Maps the finer-grained priority classes onto the public lanes. */
+export function laneForPriorityClass(priority: JobPriorityClass): JobLane {
+  if (priority === JobPriorityClass.SECURITY || priority === JobPriorityClass.URGENT) {
+    return JobLane.HIGH;
+  }
+  if (priority === JobPriorityClass.NORMAL) {
+    return JobLane.NORMAL;
+  }
+  return JobLane.LOW;
+}
+
+/** Maps a BullMQ priority number back to its lane, defaulting to NORMAL. */
+export function laneForPriority(priority: number | undefined | null): JobLane {
+  if (priority === LANE_PRIORITY[JobLane.HIGH]) return JobLane.HIGH;
+  if (priority === LANE_PRIORITY[JobLane.LOW]) return JobLane.LOW;
+  return JobLane.NORMAL;
+}
+
+/**
+ * Lane assignment for every job type currently enqueued by the backend.
+ * Choices are documented next to each entry:
+ *
+ *   - User-facing payment / security / loan notifications are HIGH: a delayed
+ *     "payment received" or "loan approved" message directly hurts the user.
+ *   - Partner webhook deliveries and transactional emails are NORMAL: timely,
+ *     but BullMQ retries absorb short delays.
+ *   - Push notifications are NORMAL: informational and safe to batch.
+ *   - Analytics persistence is LOW: a bulk write that must never delay
+ *     notifications.
+ *   - Bulk report generation is LOW: the motivating example from issue #985.
+ */
+export type QueueJobType =
+  | "notification.EMAIL"
+  | "notification.WEBHOOK"
+  | "notification.SMS"
+  | "notification.PUSH"
+  | "webhook.delivery"
+  | "email.send"
+  | "analytics.persist"
+  | "report.generate";
+
+export const JOB_LANE_CATALOG: Record<QueueJobType, JobLane> = {
+  "notification.EMAIL": JobLane.HIGH,
+  "notification.WEBHOOK": JobLane.HIGH,
+  "notification.SMS": JobLane.HIGH,
+  "notification.PUSH": JobLane.NORMAL,
+  "webhook.delivery": JobLane.NORMAL,
+  "email.send": JobLane.NORMAL,
+  "analytics.persist": JobLane.LOW,
+  "report.generate": JobLane.LOW,
+};
+
+/** Lane for a notification type, falling back to NORMAL for unknown values. */
+export function laneForNotificationType(type: string): JobLane {
+  return JOB_LANE_CATALOG[`notification.${type}` as QueueJobType] ?? JobLane.NORMAL;
+}
+
+export function laneLabel(lane: JobLane): string {
+  return lane;
+}
+
 export const PRIORITY_CLASSES: readonly JobPriorityClass[] = [
   JobPriorityClass.SECURITY,
   JobPriorityClass.URGENT,
@@ -123,19 +207,26 @@ export class FairQueueScheduler {
    * skipped rather than blocking the whole queue, so other tenants keep moving.
    */
   dequeue(now: number = Date.now()): PendingJob | null {
-    this.pending.sort((a, b) => a.priority - b.priority || a.enqueuedAt - b.enqueuedAt);
+    const runnable = this.pending.filter(
+      (job) => this.activeCount(job.tenantId) < this.perTenantCap
+    );
+    if (runnable.length === 0) return null;
 
-    for (let i = 0; i < this.pending.length; i += 1) {
-      const job = this.pending[i];
-      if (this.activeCount(job.tenantId) >= this.perTenantCap) continue;
+    // Fair-share guard (issue #985): a job that has waited past the starvation
+    // threshold bypasses its priority. Without this, a continuous stream of
+    // high-priority work would starve the low lane forever.
+    const starving = runnable.filter(
+      (job) => now - job.enqueuedAt > this.starvationThresholdMs
+    );
+    const candidates = starving.length > 0 ? starving : runnable;
+    candidates.sort((a, b) => a.priority - b.priority || a.enqueuedAt - b.enqueuedAt);
 
-      this.pending.splice(i, 1);
-      this.active.set(job.id, job);
-      this.tenantActive.set(job.tenantId, this.activeCount(job.tenantId) + 1);
-      return job;
-    }
-
-    return null;
+    const job = candidates[0];
+    const index = this.pending.indexOf(job);
+    if (index >= 0) this.pending.splice(index, 1);
+    this.active.set(job.id, job);
+    this.tenantActive.set(job.tenantId, this.activeCount(job.tenantId) + 1);
+    return job;
   }
 
   /** Marks an active job finished and records its wait time under its class. */

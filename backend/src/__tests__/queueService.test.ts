@@ -18,6 +18,8 @@ const mockGetWaitingCount = jest.fn().mockResolvedValue(0);
 const mockGetActiveCount = jest.fn().mockResolvedValue(0);
 const mockGetFailedCount = jest.fn().mockResolvedValue(0);
 const mockGetCompletedCount = jest.fn().mockResolvedValue(0);
+const mockGetCountsPerPriority = jest.fn().mockResolvedValue({});
+const mockGetJobs = jest.fn().mockResolvedValue([]);
 
 const mockQueueInstance = {
   add: mockAdd,
@@ -27,6 +29,8 @@ const mockQueueInstance = {
   getActiveCount: mockGetActiveCount,
   getFailedCount: mockGetFailedCount,
   getCompletedCount: mockGetCompletedCount,
+  getCountsPerPriority: mockGetCountsPerPriority,
+  getJobs: mockGetJobs,
   name: "mock-queue",
 };
 
@@ -60,6 +64,8 @@ import { queueService } from "../services/queueService.js";
 describe("Queue Service", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockGetCountsPerPriority.mockResolvedValue({});
+    mockGetJobs.mockResolvedValue([]);
   });
 
   describe("addNotificationJob", () => {
@@ -78,7 +84,11 @@ describe("Queue Service", () => {
 
       const result = await queueService.addNotificationJob(jobData);
       expect(result).toBeDefined();
-      expect(addSpy).toHaveBeenCalledWith("send-notification", jobData, undefined);
+      expect(addSpy).toHaveBeenCalledWith(
+        "send-notification",
+        jobData,
+        expect.objectContaining({ priority: 1 })
+      );
     });
   });
 
@@ -105,7 +115,81 @@ describe("Queue Service", () => {
 
       const result = await queueService.addWebhookJob(jobData);
       expect(result).toBeDefined();
-      expect(addSpy).toHaveBeenCalledWith("deliver-webhook", jobData, undefined);
+      expect(addSpy).toHaveBeenCalledWith(
+        "deliver-webhook",
+        jobData,
+        expect.objectContaining({ priority: 2 })
+      );
+    });
+  });
+
+  describe("priority lanes", () => {
+    it("puts analytics in the low lane and transactional email in the normal lane", async () => {
+      await queueService.initialize();
+
+      const addSpy = mockQueueInstance.add;
+      addSpy.mockClear();
+
+      await queueService.addAnalyticsJob({ events: [] });
+      expect(addSpy).toHaveBeenCalledWith(
+        "persist-analytics",
+        { events: [] },
+        expect.objectContaining({ priority: 3 })
+      );
+
+      await queueService.addEmailJob({
+        recipient: "test@example.com",
+        subject: "Subject",
+        content: "Body",
+      });
+      expect(addSpy).toHaveBeenCalledWith(
+        "send-email",
+        expect.objectContaining({ recipient: "test@example.com" }),
+        expect.objectContaining({ priority: 2 })
+      );
+    });
+
+    it("promotes low-lane jobs that have waited past the fair-share threshold", async () => {
+      await queueService.initialize();
+
+      const now = Date.now();
+      const agedChangePriority = jest.fn().mockResolvedValue(undefined);
+      const freshChangePriority = jest.fn().mockResolvedValue(undefined);
+      const highChangePriority = jest.fn().mockResolvedValue(undefined);
+
+      mockGetJobs.mockResolvedValueOnce([
+        { id: "low-aged", priority: 3, timestamp: now - 60_000, changePriority: agedChangePriority },
+        { id: "low-fresh", priority: 3, timestamp: now - 1_000, changePriority: freshChangePriority },
+        { id: "high-aged", priority: 1, timestamp: now - 60_000, changePriority: highChangePriority },
+      ]).mockResolvedValue([]);
+
+      const result = await queueService.rebalanceAgedJobs(now);
+
+      expect(result.promoted).toBe(1);
+      expect(agedChangePriority).toHaveBeenCalledWith({ priority: 1 });
+      expect(freshChangePriority).not.toHaveBeenCalled();
+      expect(highChangePriority).not.toHaveBeenCalled();
+    });
+
+    it("exposes per-lane depth and wait time metrics", async () => {
+      await queueService.initialize();
+
+      // Every queue reports the same snapshot in this mock.
+      mockGetCountsPerPriority.mockResolvedValue({ 1: 2, 2: 1, 3: 3 });
+      const now = Date.now();
+      mockGetJobs.mockResolvedValue([
+        { id: "high-1", priority: 1, timestamp: now - 1000 },
+        { id: "low-1", priority: 3, timestamp: now - 5000 },
+      ]);
+
+      const lanes = await queueService.refreshLaneMetrics();
+
+      expect(lanes.high.depth).toBe(8);
+      expect(lanes.normal.depth).toBe(4);
+      expect(lanes.low.depth).toBe(12);
+      expect(lanes.high.oldestWaitMs).toBeGreaterThanOrEqual(1000);
+      expect(lanes.low.oldestWaitMs).toBeGreaterThanOrEqual(5000);
+      expect(lanes.low.avgWaitMs).toBeGreaterThanOrEqual(5000);
     });
   });
 
