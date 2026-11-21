@@ -9,6 +9,7 @@ import logger from "../utils/logger.js";
 import { analyzeRemittanceHistory } from "../services/stellar.js";
 import { hashReportContent, streamVerificationPdf, VerificationReport } from "../services/pdf.js";
 import { calculateCreditScore } from "../services/scoring.js";
+import { buildScoreLineageRecord } from "../services/scoreLineage.js";
 import { validateVerificationBody, validateWalletAddress, validateMultiChainOwnership } from "../middleware/validate.js";
 import {
   verificationChallengeRateLimiter,
@@ -158,6 +159,7 @@ verificationRouter.post("/check", validateVerificationBody, async (req, res) => 
     // Persist applicant and verification result — non-blocking on failure
     try {
       const { score, modelVersion, breakdown, reasons } = calculateCreditScore(analysis);
+      const lineage = buildScoreLineageRecord({ analysis, score, modelVersion });
       const applicant = await upsertApplicant(senderAddress, {
         verificationStatus: analysis.eligible ? "ELIGIBLE" : "INELIGIBLE",
         creditScore: score,
@@ -173,6 +175,11 @@ verificationRouter.post("/check", validateVerificationBody, async (req, res) => 
         modelVersion,
         scoreBreakdown: breakdown,
         scoreReasons: reasons,
+        lineage: {
+          inputs: lineage.inputs,
+          computedAt: lineage.computedAt,
+          expiresAt: lineage.expiresAt,
+        },
       });
     } catch (dbErr) {
       console.error("DB persist error (non-fatal):", dbErr);

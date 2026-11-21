@@ -14,6 +14,7 @@ import { runAdminPortfolioDigestJob } from "./adminPortfolioDigest.js";
 import { runSlowQueryDigestJob } from "./slowQueryDigest.js";
 import { runSessionTokenPurgeJob } from "./sessionTokenPurge.js";
 import { runOrphanedRecordCleanupJob } from "./orphanedRecordCleanup.js";
+import { runScoreLineageCleanupJob } from "./scoreLineageCleanup.js";
 import { startAnalyticsRefreshScheduler, stopAnalyticsRefreshScheduler } from "./analyticsRefresh.js";
 import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
 import { runRateLimitAuditJob } from "./rateLimitAudit.js";
@@ -42,6 +43,7 @@ let adminDigestTask: ReturnType<typeof cron.schedule> | null = null;
 let slowQueryDigestTask: ReturnType<typeof cron.schedule> | null = null;
 let sessionTokenPurgeTask: ReturnType<typeof cron.schedule> | null = null;
 let orphanedRecordCleanupTask: ReturnType<typeof cron.schedule> | null = null;
+let scoreLineageCleanupTask: ReturnType<typeof cron.schedule> | null = null;
 let staleDraftCleanupTask: ReturnType<typeof cron.schedule> | null = null;
 let suspiciousActivityTask: ReturnType<typeof cron.schedule> | null = null;
 let rateLimitAuditTask: ReturnType<typeof cron.schedule> | null = null;
@@ -102,6 +104,17 @@ export function startScheduler() {
   orphanedRecordCleanupTask = cron.schedule(orphanedCleanupSchedule, scheduledJob("orphaned-record-cleanup", async () => {
     console.log("[Scheduler] Triggering orphaned record cleanup job...");
     await runOrphanedRecordCleanupJob();
+  }), { timezone: "UTC" });
+
+  // Daily at 05:30 UTC: delete score-lineage records past their retention window.
+  const scoreLineageCleanupSchedule =
+    process.env.SCORE_LINEAGE_CLEANUP_CRON_SCHEDULE || "30 5 * * *";
+  scoreLineageCleanupTask = cron.schedule(scoreLineageCleanupSchedule, scheduledJob("score-lineage-cleanup", async () => {
+    try {
+      await runScoreLineageCleanupJob();
+    } catch (error) {
+      logger.error("[Scheduler] Score lineage cleanup job failed", { error });
+    }
   }), { timezone: "UTC" });
 
   // Daily at 08:00 UTC: KYC document expiry reminders
@@ -301,6 +314,10 @@ export function stopScheduler() {
   if (orphanedRecordCleanupTask) {
     orphanedRecordCleanupTask.stop();
     orphanedRecordCleanupTask = null;
+  }
+  if (scoreLineageCleanupTask) {
+    scoreLineageCleanupTask.stop();
+    scoreLineageCleanupTask = null;
   }
   if (kycExpiryTask) {
     kycExpiryTask.stop();

@@ -206,6 +206,7 @@ model Applicant {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
   verificationResults VerificationResult[]
+  scoreLineages       ScoreLineage[]
   loanApplications    LoanApplication[]
   borrowerCredentials BorrowerCredential[]
   kycDocuments        KycDocument[]
@@ -268,10 +269,43 @@ model VerificationResult {
   /// reviewer view can show *why* without recomputing anything.
   scoreReasons   Json?
 
+  /// The immutable lineage record for this score (issue #982). Present for
+  /// every score produced by the verification flow, and purged independently
+  /// once its retention window expires.
+  scoreLineage   ScoreLineage?
+
   // Index backing getApplicant() which orders verificationResults by analyzedAt desc
   @@index([applicantId, analyzedAt])
   // Supports eligibility-filtered queries and analytics scans
   @@index([eligible])
+}
+
+// Data lineage for a computed credit score (issue #982). Stores the exact
+// inputs, model version and timestamp that produced a stored score, so a
+// dispute can be resolved by recomputing from the same inputs instead of
+// trusting a value whose model weights may since have changed. Retained only
+// for a configurable window (`SCORE_LINEAGE_RETENTION_DAYS`) and then deleted
+// by the scheduled cleanup job without touching the score itself.
+model ScoreLineage {
+  id                   String             @id @default(uuid())
+  verificationResultId String             @unique
+  verificationResult   VerificationResult @relation(fields: [verificationResultId], references: [id], onDelete: Cascade)
+  applicantId          String
+  applicant            Applicant          @relation(fields: [applicantId], references: [id], onDelete: Cascade)
+  /// The full `RemittanceAnalysis` snapshot passed to `calculateCreditScore`.
+  inputs               Json
+  /// The score that was stored on the verification result at computation time.
+  score                Int
+  /// The scoring model version active when the score was computed.
+  modelVersion         String
+  /// When the score was computed (lineage timestamp).
+  computedAt           DateTime           @default(now())
+  /// When this lineage record becomes eligible for deletion.
+  expiresAt            DateTime
+  createdAt            DateTime           @default(now())
+
+  @@index([expiresAt])
+  @@index([applicantId, computedAt])
 }
 
 // ---------------------------------------------------------------------------

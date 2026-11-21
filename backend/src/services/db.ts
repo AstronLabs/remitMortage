@@ -579,8 +579,42 @@ export async function createVerificationResult(data: {
   modelVersion?: string;
   scoreBreakdown?: Record<string, number>;
   scoreReasons?: unknown;
+  /**
+   * When present, the score and its lineage are written in the same statement,
+   * so a stored score can never exist without its lineage (issue #982).
+   */
+  lineage?: {
+    inputs: Prisma.InputJsonValue;
+    computedAt: Date;
+    expiresAt: Date;
+  };
 }) {
-  return prisma.verificationResult.create({ data });
+  const { lineage, ...verificationResult } = data;
+
+  if (!lineage) {
+    return prisma.verificationResult.create({ data: verificationResult });
+  }
+
+  if (typeof data.score !== "number" || !data.modelVersion) {
+    throw new Error("score and modelVersion are required when recording score lineage");
+  }
+
+  return prisma.verificationResult.create({
+    data: {
+      ...verificationResult,
+      scoreLineage: {
+        create: {
+          applicantId: data.applicantId,
+          inputs: lineage.inputs,
+          score: data.score,
+          modelVersion: data.modelVersion,
+          computedAt: lineage.computedAt,
+          expiresAt: lineage.expiresAt,
+        },
+      },
+    },
+    include: { scoreLineage: true },
+  });
 }
 
 // ── LoanApplication ────────────────────────────────────────────────────────

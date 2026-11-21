@@ -128,6 +128,8 @@ export interface Config {
   borrowerRecordRetentionDays: number;
   /** Compliance-reviewed retention window for soft-deleted loan applications. */
   loanRecordRetentionDays: number;
+  /** Days a computed score's data-lineage record is kept before it is purged. */
+  scoreLineageRetentionDays: number;
   /** Days of inactivity before a Draft loan application is flagged as stale and the applicant notified. */
   draftStaleThresholdDays: number;
   /** Days after a stale notice before an unresumed Draft is soft-deleted (expired). */
@@ -372,6 +374,10 @@ export function loadConfig(): Config {
     ),
     loanRecordRetentionDays: parseInt(
       process.env.LOAN_RECORD_RETENTION_DAYS || "2555",
+      10
+    ),
+    scoreLineageRetentionDays: parseInt(
+      process.env.SCORE_LINEAGE_RETENTION_DAYS || "365",
       10
     ),
     draftStaleThresholdDays: parseInt(
