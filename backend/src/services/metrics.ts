@@ -290,6 +290,34 @@ export const schedulerJobsTotal = new Counter({
   registers: [metricsRegistry],
 });
 
+/**
+ * Current number of waiting jobs per priority lane (issue #985). A growing
+ * `low` depth with a flat `high` depth is normal bulk work; a growing `high`
+ * depth is an alert.
+ */
+export const queueLaneDepth = new Gauge({
+  name: "remitmortgage_queue_lane_depth",
+  help: "Number of waiting background jobs per priority lane.",
+  labelNames: ["lane"] as const,
+  registers: [metricsRegistry],
+});
+
+/** Age of the oldest waiting job in each priority lane, in seconds. */
+export const queueLaneOldestWaitSeconds = new Gauge({
+  name: "remitmortgage_queue_lane_oldest_wait_seconds",
+  help: "Age of the oldest waiting job in each priority lane.",
+  labelNames: ["lane"] as const,
+  registers: [metricsRegistry],
+});
+
+/** Mean wait time across the sampled waiting jobs in each priority lane, in seconds. */
+export const queueLaneAvgWaitSeconds = new Gauge({
+  name: "remitmortgage_queue_lane_avg_wait_seconds",
+  help: "Mean wait time of waiting jobs in each priority lane.",
+  labelNames: ["lane"] as const,
+  registers: [metricsRegistry],
+});
+
 // ---------------------------------------------------------------------------
 // API key quota metrics
 // ---------------------------------------------------------------------------
