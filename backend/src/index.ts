@@ -37,6 +37,7 @@ import { didRouter } from "./routes/did.js";
 import { adminRouter } from "./routes/admin.js";
 import { adminAuthRouter } from "./routes/adminAuth.js";
 import { adminDevicesRouter } from "./routes/adminDevices.js";
+import { adminTrustedDevicePolicyRouter } from "./routes/adminTrustedDevicePolicy.js";
 import { impersonationRouter } from "./routes/impersonation.js";
 import { workspaceRouter } from "./routes/workspace.js";
 import { userRouter } from "./routes/user.js";
@@ -338,6 +339,7 @@ app.use("/api/tenant", tenantRouter);
 // POST /api/admin/devices/enroll is exempt, since it is how a session becomes
 // bound in the first place.
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminDevicesRouter);
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminTrustedDevicePolicyRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), feeWaiverAdminRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), rateSheetAdminRouter);
