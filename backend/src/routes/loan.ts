@@ -33,6 +33,10 @@ import {
 } from "../services/taxIdDedup.js";
 import { reconstructLoanApplicationAt } from "../services/loanHistory.js";
 import {
+  describeManualStatusChangeReason,
+  parseManualStatusChangeReason,
+} from "../services/manualStatusChangeReason.js";
+import {
   getLoanActivityTimeline,
   InvalidActivityCursorError,
 } from "../services/loanActivityTimeline.js";
@@ -336,7 +340,7 @@ loanRouter.post("/:id/approve", idempotencyMiddleware, async (req, res) => {
 // ---------------------------------------------------------------------------
 loanRouter.post("/:id/reject", async (req, res) => {
   const id = String(req.params?.id ?? "");
-  const { reason } = req.body ?? {};
+  const { reason, reasonCode, reasonNote } = req.body ?? {};
   // Issue #760: rejection is operator-only — even the owning borrower is rejected.
   const app = await requireLoanAdmin(req as AuthenticatedRequest, res, id);
   if (!app) return;
@@ -345,6 +349,12 @@ loanRouter.post("/:id/reject", async (req, res) => {
   const expectedVersion = parseExpectedVersion(req.body?.expectedVersion);
   if (expectedVersion === null) return missingExpectedVersionResponse(res);
   if (app.version !== expectedVersion) return versionConflictResponse(res, expectedVersion, app);
+
+  // Issue #1102: a manual status change must say why, from the fixed list.
+  const parsedReason = parseManualStatusChangeReason(reasonCode, reasonNote ?? reason);
+  if (!parsedReason.ok) {
+    return res.status(400).json({ error: parsedReason.error, message: parsedReason.message, field: "reasonCode" });
+  }
 
   if (app.status !== "Pending") {
     return res.status(400).json({
@@ -358,9 +368,16 @@ loanRouter.post("/:id/reject", async (req, res) => {
       id,
       {
         status: "Rejected",
-        reason: reason ?? "No reason provided",
+        reason: describeManualStatusChangeReason(parsedReason.reason),
       },
-      { expectedVersion }
+      {
+        expectedVersion,
+        manualStatusChange: {
+          reason: parsedReason.reason,
+          actorAddress: (req as AuthenticatedRequest).user?.walletAddress,
+          ipAddress: req.ip,
+        },
+      }
     );
     return res.json(updated);
   } catch (err) {
@@ -585,16 +602,27 @@ loanRouter.post("/:id/review", async (req, res) => {
     if (expectedVersion === null) return missingExpectedVersionResponse(res);
     if (app.version !== expectedVersion) return versionConflictResponse(res, expectedVersion, app);
 
-    const auditLog = logReviewerDecision(id, reviewerId, decision, reason);
+    // Issue #1102: a manual status change must say why, from the fixed list.
+    const parsedReason = parseManualStatusChangeReason(req.body?.reasonCode, req.body?.reasonNote ?? reason);
+    if (!parsedReason.ok) {
+      return res.status(400).json({ error: parsedReason.error, message: parsedReason.message, field: "reasonCode" });
+    }
+    const reasonText = describeManualStatusChangeReason(parsedReason.reason);
+
+    const auditLog = logReviewerDecision(id, reviewerId, decision, reasonText);
 
     const newStatus = decision === "APPROVED" ? "Pending" : "Rejected";
     const updated = await updateApplication(
       id,
+      { status: newStatus, reason: reasonText },
       {
-        status: newStatus,
-        reason: reason || (decision === "APPROVED" ? "Manual review approved" : "Manual review rejected duplicate"),
-      },
-      { expectedVersion }
+        expectedVersion,
+        manualStatusChange: {
+          reason: parsedReason.reason,
+          actorAddress: (req as AuthenticatedRequest).user?.walletAddress,
+          ipAddress: req.ip,
+        },
+      }
     );
 
     return res.json({
