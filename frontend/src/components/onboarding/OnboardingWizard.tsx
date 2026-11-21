@@ -47,6 +47,7 @@ export default function OnboardingWizard() {
 
   // State from Zustand store (persisted across reloads).
   const step = useOnboardingState((s) => s.step);
+  const furthestStep = useOnboardingState((s) => s.furthestStep ?? s.step);
   const isVerified = useOnboardingState((s) => s.isVerified);
 
   // Local component state
@@ -729,7 +730,12 @@ export default function OnboardingWizard() {
           </div>
         </div>
       )}
-      <ProgressStepper steps={STEPS} currentStep={step} />
+      <ProgressStepper
+        steps={STEPS}
+        currentStep={step}
+        furthestStep={furthestStep}
+        onStepSelect={(target) => store.getState().setStep(target)}
+      />
       <div>{renderStepContent()}</div>
       <div className="flex justify-between border-t border-slate-800/80 pt-5">
         <button
