@@ -19,11 +19,9 @@ import {
   Cell,
 } from "recharts";
 import { useDataSaver } from "@/context/DataSaverContext";
-import { useChartDirection } from "@/hooks/useChartDirection";
-import AccessibleChart from "@/components/charts/AccessibleChart";
-import ChartExportControls from "@/components/charts/ChartExportControls";
-import type { ChartExportData, ChartSeries } from "@/lib/chart-export";
-import { summarizeShares, summarizeTrend } from "@/lib/chart-summary";
+import { useReducedMotion } from "../../hooks/useReducedMotion";
+import DataFreshness from "../../components/dashboard/DataFreshness";
+import { DEFAULT_STALE_AFTER_MS } from "../../lib/dataFreshness";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 const RateBenchmarkWidget = dynamic(() => import("../../components/RateBenchmarkWidget"), {
@@ -41,8 +39,10 @@ function AnimatedCounter({
   suffix?: string;
 }) {
   const [count, setCount] = useState(0);
+  const reducedMotion = useReducedMotion();
 
   useEffect(() => {
+    if (reducedMotion) { setCount(value); return; }
     let start = 0;
     const end = value;
     if (start === end) {
@@ -66,7 +66,7 @@ function AnimatedCounter({
     }, stepTime);
 
     return () => clearInterval(timer);
-  }, [value]);
+  }, [reducedMotion, value]);
 
   return (
     <span>
@@ -90,6 +90,7 @@ interface OverviewData {
     address: string;
     timestamp: string;
   }>;
+  lastUpdated: string;
 }
 
 interface LoanPerformanceData {
@@ -114,6 +115,9 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const volumeChartRef = useRef<HTMLDivElement>(null);
   const performanceChartRef = useRef<HTMLDivElement>(null);
 
@@ -176,8 +180,10 @@ export default function AnalyticsPage() {
 
     async function fetchData() {
       try {
+        setRefreshing(true);
         setLoading(true);
         setError(null);
+        setRefreshError(null);
 
         // Call GET /api/analytics/overview, /api/loans, and /api/volume?months=12 concurrently
         const [overviewRes, loansRes, volumeRes] = await Promise.all([
@@ -201,14 +207,17 @@ export default function AnalyticsPage() {
         setVolumeData(volumeData);
       } catch (err) {
         console.error("Error loading analytics data:", err);
-        setError(err instanceof Error ? err.message : "Failed to load protocol analytics.");
+        const message = err instanceof Error ? err.message : "Failed to load protocol analytics.";
+        setError(message);
+        setRefreshError(message);
       } finally {
         setLoading(false);
+        setRefreshing(false);
       }
     }
 
     fetchData();
-  }, [dataSaver]);
+  }, [dataSaver, refreshKey]);
 
   return (
     <div>
@@ -246,6 +255,7 @@ export default function AnalyticsPage() {
 
         {!loading && !error && overview && (
           <>
+            <DataFreshness timestamp={overview.lastUpdated} staleAfterMs={DEFAULT_STALE_AFTER_MS} onRefresh={() => setRefreshKey((key) => key + 1)} refreshing={refreshing} refreshError={refreshError} />
             {/* Overview Stats Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
               {/* TVL */}

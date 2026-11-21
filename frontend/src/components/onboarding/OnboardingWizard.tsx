@@ -19,6 +19,7 @@ import DocumentChecklist from "./DocumentChecklist";
 import type { LoanType } from "@/lib/document-checklist";
 import { toast } from "react-hot-toast";
 import { useWallet } from "@/context/WalletContext";
+import { useReducedMotion } from "@/hooks/useReducedMotion";
 import {
   attributeReferralCode,
   persistReferralCode,
@@ -49,6 +50,7 @@ export default function OnboardingWizard() {
   const searchParams = useSearchParams();
   const store = getOnboardingStore();
   const { publicKey, connect, signMessage } = useWallet();
+  const reducedMotion = useReducedMotion();
 
   // State from Zustand store (persisted across reloads).
   const step = useOnboardingState((s) => s.step);
@@ -195,16 +197,16 @@ export default function OnboardingWizard() {
     if (!fieldName || step !== FIELD_STEPS[fieldName]) return;
     const field = document.getElementById(fieldName);
     if (!field) return;
-    field.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    field.scrollIntoView?.({ behavior: reducedMotion ? "auto" : "smooth", block: "center" });
     setFocus(fieldName);
     field.focus();
     pendingFieldFocus.current = null;
-  }, [setFocus, step]);
+  }, [reducedMotion, setFocus, step]);
 
   const focusErrorField = (fieldName: keyof OnboardingFormValues) => {
     const field = document.getElementById(fieldName);
     if (!field) return;
-    field.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    field.scrollIntoView?.({ behavior: reducedMotion ? "auto" : "smooth", block: "center" });
     setFocus(fieldName);
     field.focus();
   };

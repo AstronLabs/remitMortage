@@ -4,6 +4,9 @@
 
 import React, { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import { useReducedMotion } from "../../hooks/useReducedMotion";
+import DataFreshness from "../../components/dashboard/DataFreshness";
+import { DEFAULT_STALE_AFTER_MS } from "../../lib/dataFreshness";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 
@@ -27,8 +30,10 @@ function AnimatedCounter({
   suffix?: string;
 }) {
   const [count, setCount] = useState(0);
+  const reducedMotion = useReducedMotion();
 
   useEffect(() => {
+    if (reducedMotion) { setCount(value); return; }
     let start = 0;
     const end = value;
     if (start === end) {
@@ -52,7 +57,7 @@ function AnimatedCounter({
     }, stepTime);
 
     return () => clearInterval(timer);
-  }, [value]);
+  }, [reducedMotion, value]);
 
   return (
     <span>
@@ -109,6 +114,7 @@ function MetricCard({
   suffix,
   icon,
   gradient,
+  lastUpdated,
 }: {
   title: string;
   value: number;
@@ -116,6 +122,7 @@ function MetricCard({
   suffix?: string;
   icon: React.ReactNode;
   gradient: string;
+  lastUpdated: string;
 }) {
   return (
     <div className="glass-card p-6 flex items-center justify-between">
@@ -139,6 +146,7 @@ function MetricCard({
       >
         {icon}
       </div>
+      <DataFreshness timestamp={lastUpdated} staleAfterMs={DEFAULT_STALE_AFTER_MS} />
     </div>
   );
 }
@@ -147,11 +155,15 @@ export default function StatsPage() {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   async function fetchStats() {
     try {
+      setRefreshing(true);
       setLoading(true);
       setError(null);
+      setRefreshError(null);
 
       const res = await fetch("/api/analytics/stats");
       if (!res.ok) throw new Error(`Failed to fetch stats: ${res.status}`);
@@ -159,9 +171,12 @@ export default function StatsPage() {
       const data = await res.json();
       setStats(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load stats.");
+      const message = err instanceof Error ? err.message : "Failed to load stats.";
+      setError(message);
+      setRefreshError(message);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }
 
@@ -187,6 +202,7 @@ export default function StatsPage() {
 
         {!loading && !error && stats && (
           <>
+            <DataFreshness timestamp={stats.lastUpdated} staleAfterMs={DEFAULT_STALE_AFTER_MS} onRefresh={fetchStats} refreshing={refreshing} refreshError={refreshError} />
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
               <MetricCard
                 title="Total Value Locked"
@@ -205,6 +221,7 @@ export default function StatsPage() {
                     <path d="M12 2v9M8 5h8" />
                   </svg>
                 }
+                lastUpdated={stats.lastUpdated}
               />
 
               <MetricCard
@@ -223,6 +240,7 @@ export default function StatsPage() {
                     <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
                   </svg>
                 }
+                lastUpdated={stats.lastUpdated}
               />
 
               <MetricCard
@@ -242,6 +260,7 @@ export default function StatsPage() {
                     <polyline points="22 4 12 14.01 9 11.01" />
                   </svg>
                 }
+                lastUpdated={stats.lastUpdated}
               />
 
               <MetricCard
@@ -260,6 +279,7 @@ export default function StatsPage() {
                     <path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
                   </svg>
                 }
+                lastUpdated={stats.lastUpdated}
               />
             </div>
 
