@@ -1,10 +1,14 @@
 {
   "contract": "escrow",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "changes": [
     {
       "version": 1,
       "summary": "Initial baseline"
+    },
+    {
+      "version": 2,
+      "summary": "lending-pool and escrow events carry their schema version as the last topic"
     }
   ],
   "events": {
@@ -14,14 +18,16 @@
         "dataKind": "tuple",
         "data": [
           "threshold"
-        ]
+        ],
+        "version": 1
       }
     ],
     "attchg_c": [
       {
         "topicArgs": [],
         "dataKind": "tuple",
-        "data": []
+        "data": [],
+        "version": 1
       }
     ],
     "attchg_p": [
@@ -31,7 +37,8 @@
         "data": [
           "threshold",
           "execute_after"
-        ]
+        ],
+        "version": 1
       }
     ],
     "auto_cfg": [
@@ -44,7 +51,8 @@
           "borrower",
           "amount",
           "interval_ledgers"
-        ]
+        ],
+        "version": 1
       }
     ],
     "auto_cxl": [
@@ -55,7 +63,8 @@
         "dataKind": "value",
         "data": [
           "borrower"
-        ]
+        ],
+        "version": 1
       }
     ],
     "auto_dep": [
@@ -68,7 +77,8 @@
           "borrower",
           "amount",
           "deposited"
-        ]
+        ],
+        "version": 1
       }
     ],
     "ben_claim": [
@@ -81,7 +91,8 @@
           "borrower",
           "beneficiary",
           "total_amount"
-        ]
+        ],
+        "version": 1
       }
     ],
     "ben_list": [
@@ -93,7 +104,8 @@
         "data": [
           "borrower",
           "list.splits.len()"
-        ]
+        ],
+        "version": 1
       },
       {
         "topicArgs": [
@@ -103,7 +115,8 @@
         "data": [
           "borrower",
           "0u32"
-        ]
+        ],
+        "version": 1
       }
     ],
     "benefic": [
@@ -115,7 +128,8 @@
         "data": [
           "borrower",
           "beneficiary"
-        ]
+        ],
+        "version": 1
       }
     ],
     "deposit": [
@@ -128,7 +142,8 @@
           "borrower",
           "amount + matched",
           "deposited"
-        ]
+        ],
+        "version": 1
       }
     ],
     "goal_xfer": [
@@ -142,7 +157,8 @@
           "borrower",
           "amount",
           "preserved_start"
-        ]
+        ],
+        "version": 1
       }
     ],
     "hs_appr": [
@@ -155,7 +171,8 @@
           "borrower",
           "admin",
           "reason_hash"
-        ]
+        ],
+        "version": 1
       }
     ],
     "hs_pay": [
@@ -169,7 +186,8 @@
           "refund",
           "approver",
           "reason_hash"
-        ]
+        ],
+        "version": 1
       }
     ],
     "hs_req": [
@@ -181,7 +199,8 @@
         "data": [
           "borrower",
           "reason_hash"
-        ]
+        ],
+        "version": 1
       }
     ],
     "pen_prop": [
@@ -194,7 +213,8 @@
           "tier3",
           "tier4",
           "execute_after"
-        ]
+        ],
+        "version": 1
       }
     ],
     "pen_upd": [
@@ -206,7 +226,8 @@
           "tier2",
           "tier3",
           "tier4"
-        ]
+        ],
+        "version": 1
       }
     ],
     "perm_mode": [
@@ -215,7 +236,8 @@
         "dataKind": "value",
         "data": [
           "enabled"
-        ]
+        ],
+        "version": 1
       }
     ],
     "rel_conf": [
@@ -228,7 +250,8 @@
           "borrower",
           "release_time",
           "reschedule_count"
-        ]
+        ],
+        "version": 1
       }
     ],
     "rel_prop": [
@@ -240,7 +263,8 @@
         "data": [
           "borrower",
           "release_time"
-        ]
+        ],
+        "version": 1
       }
     ],
     "rollover": [
@@ -252,7 +276,8 @@
         "data": [
           "borrower",
           "auto_rollover"
-        ]
+        ],
+        "version": 1
       },
       {
         "topicArgs": [
@@ -262,7 +287,8 @@
         "data": [
           "borrower",
           "amount_withdrawn"
-        ]
+        ],
+        "version": 1
       }
     ],
     "top_up": [
@@ -275,7 +301,8 @@
           "borrower",
           "amount",
           "deposited"
-        ]
+        ],
+        "version": 1
       }
     ],
     "ttl_ext": [
@@ -284,7 +311,8 @@
         "dataKind": "value",
         "data": [
           "extended"
-        ]
+        ],
+        "version": 1
       }
     ],
     "withdraw": [
@@ -297,7 +325,8 @@
           "borrower",
           "refund",
           "penalty"
-        ]
+        ],
+        "version": 1
       }
     ],
     "wl_add": [
@@ -306,7 +335,8 @@
         "dataKind": "tuple",
         "data": [
           "address"
-        ]
+        ],
+        "version": 1
       }
     ],
     "wl_rm": [
@@ -315,7 +345,8 @@
         "dataKind": "tuple",
         "data": [
           "address"
-        ]
+        ],
+        "version": 1
       }
     ]
   }

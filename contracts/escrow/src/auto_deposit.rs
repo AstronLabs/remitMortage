@@ -10,6 +10,7 @@
 //! a manual transaction every month.
 
 use crate::errors::EscrowError;
+use crate::events::emit_event;
 use crate::token_utils::get_token_client;
 use crate::types::{AutoDepositSchedule, DataKey};
 use crate::{EscrowContract, EscrowContractArgs, EscrowContractClient};
@@ -86,10 +87,8 @@ impl EscrowContract {
         Self::write_auto_deposit(&env, &borrower, &goal_id, &schedule);
         Self::extend_instance_ttl(&env);
 
-        env.events().publish(
-            (symbol_short!("auto_cfg"), goal_id),
-            (borrower, amount, interval_ledgers),
-        );
+        emit_event(&env, 1, (symbol_short!("auto_cfg"), goal_id),
+            (borrower, amount, interval_ledgers),);
         Ok(())
     }
 
@@ -108,8 +107,7 @@ impl EscrowContract {
             .persistent()
             .remove(&Self::auto_deposit_key(&borrower, &goal_id));
 
-        env.events()
-            .publish((symbol_short!("auto_cxl"), goal_id), borrower);
+        emit_event(&env, 1, (symbol_short!("auto_cxl"), goal_id), borrower);
         Ok(())
     }
 
@@ -187,10 +185,8 @@ impl EscrowContract {
         Self::write_auto_deposit(&env, &borrower, &goal_id, &schedule);
         Self::extend_instance_ttl(&env);
 
-        env.events().publish(
-            (symbol_short!("auto_dep"), goal_id),
-            (borrower, schedule.amount, record.deposited),
-        );
+        emit_event(&env, 1, (symbol_short!("auto_dep"), goal_id),
+            (borrower, schedule.amount, record.deposited),);
         Ok(record.deposited)
     }
 
