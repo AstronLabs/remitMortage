@@ -141,6 +141,18 @@ function extractFromSource(src) {
     if (ev) found.push(ev);
     re.lastIndex = close;
   }
+  // `emit_event(env, <version>, <topics>, <data>)` is the versioned wrapper the
+  // lending-pool and escrow contracts use; the version becomes the last topic.
+  const emit = /\bemit_event\s*\(/g;
+  while ((m = emit.exec(code))) {
+    const open = m.index + m[0].length - 1;
+    const close = matchClose(code, open);
+    const parts = splitTopLevel(code.slice(open + 1, close));
+    const version = Number(parts[1]);
+    const ev = parsePublish(parts.slice(2).join(","));
+    if (ev && Number.isInteger(version)) found.push({ ...ev, version });
+    emit.lastIndex = close;
+  }
   return found;
 }
 
@@ -165,7 +177,9 @@ function eventKey(ev) {
 }
 
 function shapeOf(ev) {
-  return { topicArgs: ev.topicArgs, dataKind: ev.dataKind, data: ev.data };
+  const shape = { topicArgs: ev.topicArgs, dataKind: ev.dataKind, data: ev.data };
+  if (ev.version !== undefined) shape.version = ev.version;
+  return shape;
 }
 
 function sameShape(a, b) {
@@ -225,6 +239,10 @@ function diffEvents(golden, current) {
     }
     for (const shape of shapes) {
       if (!now.some((s) => sameShape(s, shape))) {
+        if (shape.version !== undefined && now.some((s) => s.version === shape.version)) {
+          breaking.push(`event "${key}" changed without bumping its version (still v${shape.version}): expected ${describe(shape)} but source now has ${now.map(describe).join(" | ")}`);
+          continue;
+        }
         breaking.push(`event "${key}" changed: expected ${describe(shape)} but source now has ${now.map(describe).join(" | ")}`);
       }
     }
@@ -240,7 +258,8 @@ function diffEvents(golden, current) {
 
 function describe(shape) {
   const topics = shape.topicArgs.length ? `topics[${shape.topicArgs.join(", ")}]` : "topics[]";
-  return `${topics} data(${shape.dataKind})[${shape.data.join(", ")}]`;
+  const version = shape.version !== undefined ? ` v${shape.version}` : "";
+  return `${topics} data(${shape.dataKind})[${shape.data.join(", ")}]${version}`;
 }
 
 /** Problems with the version bookkeeping inside a fixture itself. */
@@ -327,6 +346,33 @@ function planUpdate(fixtures, current, breakingReason) {
 
 // ── CLI ─────────────────────────────────────────────────────────────────────
 
+const README_START = "<!-- event-versions:start -->";
+const README_END = "<!-- event-versions:end -->";
+
+/** Rewrites the event-version table inside each contract README that has the markers. */
+function writeReadmeVersionTables(fixtures) {
+  for (const contract of Object.keys(fixtures).sort()) {
+    const readme = path.join(CONTRACTS_DIR, contract, "README.md");
+    if (!fs.existsSync(readme)) continue;
+    const raw = fs.readFileSync(readme, "utf8");
+    const nl = raw.includes("\r\n") ? "\r\n" : "\n";
+    const text = raw.replace(/\r\n/g, "\n");
+    const a = text.indexOf(README_START);
+    const b = text.indexOf(README_END);
+    if (a === -1 || b === -1) continue;
+    const rows = Object.keys(fixtures[contract].events)
+      .sort()
+      .map((key) => {
+        const versions = [...new Set(fixtures[contract].events[key].map((s) => s.version).filter((v) => v !== undefined))];
+        return `| \`${key}\` | ${versions.length ? versions.join(", ") : "unversioned"} |`;
+      });
+    const table = [README_START, "| Event | Schema version |", "|---|---|", ...rows, README_END].join("\n");
+    const next = text.slice(0, a) + table + text.slice(b + README_END.length);
+    fs.writeFileSync(readme, next.replace(/\n/g, nl));
+    console.log(`wrote event version table in ${contract}/README.md`);
+  }
+}
+
 function runCli(argv) {
   const [cmd, ...rest] = argv;
   const current = extractAll();
@@ -383,6 +429,7 @@ function runCli(argv) {
     ].join("\n");
     fs.writeFileSync(path.join(SCHEMAS_DIR, "CATALOG.md"), text);
     console.log(`wrote CATALOG.md (${rows.length} events)`);
+    writeReadmeVersionTables(fixtures);
     return;
   }
 

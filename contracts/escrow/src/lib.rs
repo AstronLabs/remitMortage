@@ -12,6 +12,7 @@ mod test_storage_keys;
 
 mod auto_deposit;
 mod errors;
+mod events;
 mod token_utils;
 mod types;
 
@@ -48,7 +49,11 @@ mod beneficiary_tests;
 #[cfg(test)]
 mod test_scheduled_release;
 
+#[cfg(test)]
+mod test_event_versions;
+
 pub use crate::errors::EscrowError;
+use crate::events::emit_event;
 use crate::token_utils::get_token_client;
 use crate::types::DataKey;
 pub use crate::types::{
@@ -470,10 +475,8 @@ impl EscrowContract {
 
             Self::extend_instance_ttl(&env);
 
-            env.events().publish(
-                (symbol_short!("deposit"), goal_id.clone()),
-                (borrower.clone(), amount + matched, record.deposited),
-            );
+            emit_event(&env, 1, (symbol_short!("deposit"), goal_id.clone()),
+                (borrower.clone(), amount + matched, record.deposited),);
 
             Ok(())
         }) // non_reentrant
@@ -554,10 +557,8 @@ impl EscrowContract {
 
             Self::extend_instance_ttl(&env);
 
-            env.events().publish(
-                (symbol_short!("top_up"), goal_id.clone()),
-                (borrower.clone(), amount, record.deposited),
-            );
+            emit_event(&env, 1, (symbol_short!("top_up"), goal_id.clone()),
+                (borrower.clone(), amount, record.deposited),);
 
             Ok(())
         }) // non_reentrant
@@ -680,14 +681,12 @@ impl EscrowContract {
             Self::owner_activity(&env, &borrower, &to_goal_id);
             Self::extend_instance_ttl(&env);
 
-            env.events().publish(
-                (
+            emit_event(&env, 1, (
                     symbol_short!("goal_xfer"),
                     from_goal_id.clone(),
                     to_goal_id.clone(),
                 ),
-                (borrower.clone(), amount, preserved_start),
-            );
+                (borrower.clone(), amount, preserved_start),);
 
             Ok(())
         }) // non_reentrant
@@ -785,10 +784,8 @@ impl EscrowContract {
 
             Self::extend_instance_ttl(&env);
 
-            env.events().publish(
-                (symbol_short!("withdraw"), goal_id.clone()),
-                (borrower.clone(), refund, penalty),
-            );
+            emit_event(&env, 1, (symbol_short!("withdraw"), goal_id.clone()),
+                (borrower.clone(), refund, penalty),);
 
             Ok(refund)
         }) // non_reentrant
@@ -900,10 +897,8 @@ impl EscrowContract {
         };
         env.storage().persistent().set(&key, &request);
 
-        env.events().publish(
-            (symbol_short!("hs_req"), goal_id.clone()),
-            (borrower.clone(), reason_hash),
-        );
+        emit_event(&env, 1, (symbol_short!("hs_req"), goal_id.clone()),
+            (borrower.clone(), reason_hash),);
 
         Self::extend_instance_ttl(&env);
         Ok(())
@@ -939,14 +934,12 @@ impl EscrowContract {
         request.approver = Some(config.admin.clone());
         env.storage().persistent().set(&key, &request);
 
-        env.events().publish(
-            (symbol_short!("hs_appr"), goal_id.clone()),
+        emit_event(&env, 1, (symbol_short!("hs_appr"), goal_id.clone()),
             (
                 borrower.clone(),
                 config.admin.clone(),
                 request.reason_hash.clone(),
-            ),
-        );
+            ),);
 
         Self::extend_instance_ttl(&env);
         Ok(())
@@ -1076,15 +1069,13 @@ impl EscrowContract {
 
             Self::extend_instance_ttl(&env);
 
-            env.events().publish(
-                (symbol_short!("hs_pay"), goal_id.clone()),
+            emit_event(&env, 1, (symbol_short!("hs_pay"), goal_id.clone()),
                 (
                     borrower.clone(),
                     refund,
                     request.approver.clone(),
                     request.reason_hash.clone(),
-                ),
-            );
+                ),);
 
             Ok(refund)
         }) // non_reentrant
@@ -1105,10 +1096,8 @@ impl EscrowContract {
         }
         record.auto_rollover = auto_rollover;
         Self::set_borrower(&env, &borrower, &goal_id, &record);
-        env.events().publish(
-            (symbol_short!("rollover"), goal_id),
-            (borrower, auto_rollover),
-        );
+        emit_event(&env, 1, (symbol_short!("rollover"), goal_id),
+            (borrower, auto_rollover),);
         Ok(())
     }
 
@@ -1204,10 +1193,8 @@ impl EscrowContract {
                 record.released = false;
                 Self::set_borrower(&env, &borrower, &goal_id, &record);
 
-                env.events().publish(
-                    (symbol_short!("rollover"), goal_id.clone()),
-                    (borrower.clone(), amount_withdrawn),
-                );
+                emit_event(&env, 1, (symbol_short!("rollover"), goal_id.clone()),
+                    (borrower.clone(), amount_withdrawn),);
             } else {
                 // Standard release: the escrowed principal is paid to the
                 // recipient, while any holding yield earned on that same
@@ -1347,10 +1334,8 @@ impl EscrowContract {
         Self::extend_persistent_ttl(&env, &key);
         Self::owner_activity(&env, &borrower, &goal_id);
 
-        env.events().publish(
-            (symbol_short!("rel_prop"), goal_id),
-            (borrower, release_time),
-        );
+        emit_event(&env, 1, (symbol_short!("rel_prop"), goal_id),
+            (borrower, release_time),);
         Self::extend_instance_ttl(&env);
         Ok(())
     }
@@ -1419,10 +1404,8 @@ impl EscrowContract {
         Self::extend_persistent_ttl(&env, &schedule_key);
         env.storage().persistent().remove(&pending_key);
 
-        env.events().publish(
-            (symbol_short!("rel_conf"), goal_id),
-            (borrower, release_time, reschedule_count),
-        );
+        emit_event(&env, 1, (symbol_short!("rel_conf"), goal_id),
+            (borrower, release_time, reschedule_count),);
         Self::extend_instance_ttl(&env);
         Ok(release_time)
     }
@@ -1478,10 +1461,8 @@ impl EscrowContract {
             .instance()
             .set(&DataKey::PendingPenaltyTiers, &proposal);
 
-        env.events().publish(
-            (symbol_short!("pen_prop"),),
-            (tier1, tier2, tier3, tier4, execute_after),
-        );
+        emit_event(&env, 1, (symbol_short!("pen_prop"),),
+            (tier1, tier2, tier3, tier4, execute_after),);
 
         Self::extend_instance_ttl(&env);
         Ok(())
@@ -1511,10 +1492,8 @@ impl EscrowContract {
             .instance()
             .remove(&DataKey::PendingPenaltyTiers);
 
-        env.events().publish(
-            (symbol_short!("pen_upd"),),
-            (pending.tier1, pending.tier2, pending.tier3, pending.tier4),
-        );
+        emit_event(&env, 1, (symbol_short!("pen_upd"),),
+            (pending.tier1, pending.tier2, pending.tier3, pending.tier4),);
 
         Self::extend_instance_ttl(&env);
         Ok(())
@@ -1597,10 +1576,8 @@ impl EscrowContract {
         Self::extend_persistent_ttl(&env, &list_key);
 
         Self::owner_activity(&env, &borrower, &goal_id);
-        env.events().publish(
-            (symbol_short!("ben_list"), goal_id),
-            (borrower, list.splits.len()),
-        );
+        emit_event(&env, 1, (symbol_short!("ben_list"), goal_id),
+            (borrower, list.splits.len()),);
         Self::extend_instance_ttl(&env);
         Ok(())
     }
@@ -1629,8 +1606,7 @@ impl EscrowContract {
             .persistent()
             .remove(&DataKey::BeneficiaryList(borrower.clone(), goal_id.clone()));
         Self::owner_activity(&env, &borrower, &goal_id);
-        env.events()
-            .publish((symbol_short!("ben_list"), goal_id), (borrower, 0u32));
+        emit_event(&env, 1, (symbol_short!("ben_list"), goal_id), (borrower, 0u32));
         Self::extend_instance_ttl(&env);
         Ok(())
     }
@@ -1659,8 +1635,7 @@ impl EscrowContract {
             None => env.storage().persistent().remove(&key),
         }
         Self::owner_activity(&env, &borrower, &goal_id);
-        env.events()
-            .publish((symbol_short!("benefic"), goal_id), (borrower, beneficiary));
+        emit_event(&env, 1, (symbol_short!("benefic"), goal_id), (borrower, beneficiary));
         Self::extend_instance_ttl(&env);
         Ok(())
     }
@@ -1779,8 +1754,7 @@ impl EscrowContract {
             .instance()
             .set(&DataKey::PendingAttestorChange, &proposal);
 
-        env.events()
-            .publish((symbol_short!("attchg_p"),), (threshold, execute_after));
+        emit_event(&env, 1, (symbol_short!("attchg_p"),), (threshold, execute_after));
 
         Self::extend_instance_ttl(&env);
         Ok(())
@@ -1810,8 +1784,7 @@ impl EscrowContract {
             .instance()
             .remove(&DataKey::PendingAttestorChange);
 
-        env.events()
-            .publish((symbol_short!("attchg_a"),), (pending.threshold,));
+        emit_event(&env, 1, (symbol_short!("attchg_a"),), (pending.threshold,));
 
         Self::extend_instance_ttl(&env);
         Ok(())
@@ -1832,7 +1805,7 @@ impl EscrowContract {
             .instance()
             .remove(&DataKey::PendingAttestorChange);
 
-        env.events().publish((symbol_short!("attchg_c"),), ());
+        emit_event(&env, 1, (symbol_short!("attchg_c"),), ());
 
         Self::extend_instance_ttl(&env);
         Ok(())
@@ -2066,10 +2039,8 @@ impl EscrowContract {
             }
 
             // ── 9. Emit event ─────────────────────────────────────────────
-            env.events().publish(
-                (symbol_short!("ben_claim"), goal_id),
-                (borrower, beneficiary, total_amount),
-            );
+            emit_event(&env, 1, (symbol_short!("ben_claim"), goal_id),
+                (borrower, beneficiary, total_amount),);
             Self::extend_instance_ttl(&env);
             Ok(total_amount)
         })
@@ -2094,7 +2065,7 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Config, &config);
         Self::extend_instance_ttl(&env);
 
-        env.events().publish((symbol_short!("perm_mode"),), enabled);
+        emit_event(&env, 1, (symbol_short!("perm_mode"),), enabled);
 
         Ok(())
     }
@@ -2109,7 +2080,7 @@ impl EscrowContract {
             .set(&DataKey::Whitelist(address.clone()), &true);
         Self::extend_instance_ttl(&env);
 
-        env.events().publish((symbol_short!("wl_add"),), (address,));
+        emit_event(&env, 1, (symbol_short!("wl_add"),), (address,));
 
         Ok(())
     }
@@ -2124,7 +2095,7 @@ impl EscrowContract {
             .remove(&DataKey::Whitelist(address.clone()));
         Self::extend_instance_ttl(&env);
 
-        env.events().publish((symbol_short!("wl_rm"),), (address,));
+        emit_event(&env, 1, (symbol_short!("wl_rm"),), (address,));
 
         Ok(())
     }
@@ -2180,7 +2151,7 @@ impl EscrowContract {
             extended += 1;
         }
 
-        env.events().publish((symbol_short!("ttl_ext"),), extended);
+        emit_event(&env, 1, (symbol_short!("ttl_ext"),), extended);
         Ok(extended)
     }
 
