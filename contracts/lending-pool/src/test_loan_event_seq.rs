@@ -28,6 +28,15 @@ fn id(env: &Env, seed: u8) -> BytesN<32> {
 fn logged_seqs(env: &Env, loan_id: &BytesN<32>) -> Vec<u32> {
     let mut out = Vec::new(env);
     for (_, topics, data) in env.events().all().iter() {
+        // Each event is also emitted in its legacy shape; count only the
+        // versioned copy, whose last topic is the u32 version.
+        let is_versioned = topics
+            .last()
+            .map(|t| u32::try_from_val(env, &t).is_ok())
+            .unwrap_or(false);
+        if !is_versioned {
+            continue;
+        }
         let payload = match Vec::<Val>::try_from_val(env, &data) {
             Ok(payload) => payload,
             Err(_) => continue,

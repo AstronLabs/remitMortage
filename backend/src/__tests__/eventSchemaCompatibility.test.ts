@@ -179,6 +179,45 @@ describe("breaking change detection", () => {
   });
 });
 
+describe("event version tracking", () => {
+  const emit = (version: number, data: string) =>
+    `emit_event(env, ${version}, (symbol_short!("deposit"), goal_id), ${data});`;
+  const toEvents = (src: string) => {
+    const events: Record<string, (Shape & { version?: number })[]> = {};
+    for (const ev of schema.extractFromSource(src)) {
+      (events[schema.eventKey(ev)] ??= []).push({
+        topicArgs: ev.topicArgs,
+        dataKind: ev.dataKind,
+        data: ev.data,
+        version: ev.version,
+      });
+    }
+    return events;
+  };
+  const golden = toEvents(emit(1, "(borrower, amount)"));
+
+  it("reads the version from emit_event and keeps it out of the topic args", () => {
+    const [ev] = schema.extractFromSource(emit(1, "(borrower, amount)"));
+    expect(ev).toMatchObject({ name: "deposit", version: 1, topicArgs: ["goal_id"], data: ["borrower", "amount"] });
+  });
+
+  it("is clean when neither payload nor version changed", () => {
+    expect(schema.diffEvents(golden, toEvents(emit(1, "(borrower, amount)")))).toEqual({ breaking: [], additive: [] });
+  });
+
+  it("fails when the payload changes without bumping the version", () => {
+    const { breaking } = schema.diffEvents(golden, toEvents(emit(1, "(borrower, amount, fee)")));
+    expect(breaking).toHaveLength(1);
+    expect(breaking[0]).toContain("without bumping its version");
+  });
+
+  it("reports a payload change that bumps the version as a recorded breaking change", () => {
+    const { breaking } = schema.diffEvents(golden, toEvents(emit(2, "(borrower, amount, fee)")));
+    expect(breaking).toHaveLength(1);
+    expect(breaking[0]).not.toContain("without bumping its version");
+  });
+});
+
 describe("indexer decodes every event the contracts emit", () => {
   const topicScVal = (value: string, literal: boolean) =>
     nativeToScVal(value, { type: literal ? "symbol" : "string" });
