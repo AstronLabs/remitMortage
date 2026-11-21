@@ -31,7 +31,7 @@ import {
   rotateSecret,
   confirmSecretRotation,
   replayDelivery,
-  verifySignature,
+  verifyWebhookSignature,
   verifySubscriptionSignature,
   type EventTopic,
 } from "../services/webhook.js";
@@ -41,6 +41,12 @@ import {
   MAX_REPLAY_WINDOW_MS,
   MAX_DELIVERIES_PER_REPLAY,
 } from "../services/webhookReplayWindow.js";
+import {
+  getWebhookSchema,
+  listWebhookSchemas,
+  WEBHOOK_SCHEMA_VERSIONS,
+  WEBHOOK_EVENT_TOPICS,
+} from "../services/webhookSchemas.js";
 
 export const webhooksRouter = Router();
 
@@ -66,6 +72,94 @@ function isValidUrl(raw: string): boolean {
     return false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Published payload schemas (issue #990)
+// ---------------------------------------------------------------------------
+
+/**
+ * @openapi
+ * /api/webhooks/schemas:
+ *   get:
+ *     summary: List published webhook payload schemas
+ *     description: Public index of every event type and schema version.
+ *     tags: [Webhooks]
+ *     responses:
+ *       200:
+ *         description: Schema index
+ */
+webhooksRouter.get("/schemas", (_req: Request, res: Response) => {
+  const entries = listWebhookSchemas();
+  return res.json({
+    versions: [...WEBHOOK_SCHEMA_VERSIONS],
+    topics: [...WEBHOOK_EVENT_TOPICS],
+    schemas: entries.map((entry) => ({
+      version: entry.version,
+      topic: entry.topic,
+      url: `/api/webhooks/schemas/${entry.version}/${entry.topic}`,
+    })),
+  });
+});
+
+/**
+ * @openapi
+ * /api/webhooks/schemas/{version}:
+ *   get:
+ *     summary: Get every schema for one webhook schema version
+ *     tags: [Webhooks]
+ *     parameters:
+ *       - in: path
+ *         name: version
+ *         required: true
+ *         schema: { type: integer, enum: [1, 2] }
+ *     responses:
+ *       200:
+ *         description: Schemas keyed by event topic
+ *       404:
+ *         description: Unknown schema version
+ */
+webhooksRouter.get("/schemas/:version", (req: Request, res: Response) => {
+  const version = Number(req.params.version);
+  const entries = listWebhookSchemas(version);
+  if (entries.length === 0) {
+    return res.status(404).json({ error: "schema_version_not_found" });
+  }
+
+  return res.json({
+    version,
+    schemas: Object.fromEntries(entries.map((entry) => [entry.topic, entry.schema])),
+  });
+});
+
+/**
+ * @openapi
+ * /api/webhooks/schemas/{version}/{topic}:
+ *   get:
+ *     summary: Get the JSON Schema for one webhook payload
+ *     tags: [Webhooks]
+ *     parameters:
+ *       - in: path
+ *         name: version
+ *         required: true
+ *         schema: { type: integer, enum: [1, 2] }
+ *       - in: path
+ *         name: topic
+ *         required: true
+ *         schema: { type: string, enum: [deposit, withdraw, release, disburse, repay] }
+ *     responses:
+ *       200:
+ *         description: JSON Schema (draft 2020-12)
+ *       404:
+ *         description: Unknown version or event topic
+ */
+webhooksRouter.get("/schemas/:version/:topic", (req: Request, res: Response) => {
+  const version = Number(req.params.version);
+  const schema = getWebhookSchema(version, String(req.params.topic));
+  if (!schema) {
+    return res.status(404).json({ error: "schema_not_found" });
+  }
+  return res.json(schema);
+});
 
 // ---------------------------------------------------------------------------
 // POST /api/webhooks/subscriptions
@@ -749,12 +843,16 @@ webhooksRouter.post(
       return;
     }
 
-    const valid = verifySignature(secret, timestamp, rawBody, signature);
+    const result = verifyWebhookSignature({ secret, timestamp, rawBody, signature });
     res.json({
-      valid,
-      message: valid
+      valid: result.valid,
+      ...(result.reason ? { reason: result.reason } : {}),
+      toleranceMs: result.toleranceMs,
+      message: result.valid
         ? "Signature is valid."
-        : "Signature is invalid or the timestamp is outside the 5-minute tolerance window.",
+        : `Signature verification failed (${result.reason}). The timestamp must be within ${Math.round(
+            result.toleranceMs / 1000
+          )} seconds of the receiver's clock.`,
     });
   }
 );

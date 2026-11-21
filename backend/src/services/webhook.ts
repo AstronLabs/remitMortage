@@ -41,6 +41,7 @@ import { encrypt, decrypt } from "../utils/crypto.js";
 import { queueService, WebhookJobData } from "./queueService.js";
 import { loadConfig } from "../config.js";
 import { correlationHeaders } from "../middleware/correlationId.js";
+import { assertValidWebhookPayload } from "./webhookSchemas.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -163,6 +164,121 @@ export function signPayload(
   return hex;
 }
 
+/** Default accepted clock skew for signed webhook timestamps. */
+export const DEFAULT_WEBHOOK_SIGNATURE_TOLERANCE_MS = 5 * 60 * 1_000;
+/** Upper bound, so a bad configuration cannot make captured requests valid forever. */
+export const MAX_WEBHOOK_SIGNATURE_TOLERANCE_MS = 24 * 60 * 60 * 1_000;
+
+function sanitizeToleranceMs(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_WEBHOOK_SIGNATURE_TOLERANCE_MS;
+  }
+  return Math.min(Math.floor(value), MAX_WEBHOOK_SIGNATURE_TOLERANCE_MS);
+}
+
+/**
+ * Resolve the accepted clock-skew window: an explicit override wins, otherwise
+ * `WEBHOOK_SIGNATURE_TOLERANCE_MS` (via {@link loadConfig}), otherwise 5 min.
+ */
+export function resolveWebhookSignatureToleranceMs(override?: number): number {
+  if (override !== undefined) return sanitizeToleranceMs(override);
+  let configured: number | undefined;
+  try {
+    configured = loadConfig().webhookSignatureToleranceMs;
+  } catch {
+    configured = undefined;
+  }
+  return sanitizeToleranceMs(configured);
+}
+
+export type WebhookSignatureFailureReason =
+  | "invalid_timestamp"
+  | "timestamp_outside_window"
+  | "signature_mismatch";
+
+export interface WebhookSignatureVerificationResult {
+  valid: boolean;
+  reason?: WebhookSignatureFailureReason;
+  /** The window actually applied to this verification. */
+  toleranceMs: number;
+  /** Signed timestamp in epoch ms, when parseable. */
+  timestampMs?: number;
+  /** now - timestampMs; negative for future-dated requests. */
+  ageMs?: number;
+}
+
+export interface VerifyWebhookSignatureInput {
+  secret: string;
+  /** Value of X-Webhook-Timestamp header (epoch ms). */
+  timestamp: string;
+  /** Raw (unparsed) request body string. */
+  rawBody: string;
+  /** Value of X-Webhook-Signature header ("sha256=<hex>" or raw hex). */
+  signature: string;
+  /** Override the configurable tolerance window. */
+  toleranceMs?: number;
+  /** Injectable clock for tests. */
+  now?: number;
+}
+
+/**
+ * Verify a webhook signature and its timestamp together (issue #991).
+ *
+ * The timestamp is part of the signed input, so a captured request carries
+ * the timestamp it was signed with. This helper rejects it when that timestamp
+ * is outside the configurable tolerance window, even if the HMAC matches.
+ */
+export function verifyWebhookSignature(
+  input: VerifyWebhookSignatureInput
+): WebhookSignatureVerificationResult {
+  const toleranceMs = resolveWebhookSignatureToleranceMs(input.toleranceMs);
+  const ts = Number(input.timestamp);
+  if (!Number.isFinite(ts) || !Number.isInteger(ts) || ts <= 0) {
+    return { valid: false, reason: "invalid_timestamp", toleranceMs };
+  }
+
+  const now = input.now ?? Date.now();
+  const ageMs = now - ts;
+  if (Math.abs(ageMs) > toleranceMs) {
+    return {
+      valid: false,
+      reason: "timestamp_outside_window",
+      toleranceMs,
+      timestampMs: ts,
+      ageMs,
+    };
+  }
+
+  // Accept either raw hex or the "sha256=<hex>" form.
+  const sig = input.signature?.startsWith("sha256=")
+    ? input.signature.slice(7)
+    : input.signature;
+  const expected = signPayload(input.secret, input.timestamp, input.rawBody);
+
+  try {
+    const sigBuf = Buffer.from(sig, "hex");
+    const expBuf = Buffer.from(expected, "hex");
+    const matches = sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf);
+    return matches
+      ? { valid: true, toleranceMs, timestampMs: ts, ageMs }
+      : {
+          valid: false,
+          reason: "signature_mismatch",
+          toleranceMs,
+          timestampMs: ts,
+          ageMs,
+        };
+  } catch {
+    return {
+      valid: false,
+      reason: "signature_mismatch",
+      toleranceMs,
+      timestampMs: ts,
+      ageMs,
+    };
+  }
+}
+
 /**
  * Verify an inbound webhook signature (for use by receivers / tests).
  *
@@ -170,32 +286,17 @@ export function signPayload(
  * @param timestamp      Value of X-Webhook-Timestamp header.
  * @param rawBody        Raw (unparsed) request body string.
  * @param signature      Value of X-Webhook-Signature header ("sha256=<hex>").
- * @param toleranceMs    Max acceptable clock skew in ms (default 5 min).
+ * @param toleranceMs    Max acceptable clock skew in ms (default: configured,
+ *                       fallback 5 min).
  */
 export function verifySignature(
   secret: string,
   timestamp: string,
   rawBody: string,
   signature: string,
-  toleranceMs = 5 * 60 * 1_000
+  toleranceMs?: number
 ): boolean {
-  // Replay protection — reject stale timestamps.
-  const ts = parseInt(timestamp, 10);
-  if (isNaN(ts) || Math.abs(Date.now() - ts) > toleranceMs) {
-    return false;
-  }
-
-  // Accept either raw hex or the "sha256=<hex>" form.
-  const sig = signature && signature.startsWith("sha256=") ? signature.slice(7) : signature;
-  const expected = signPayload(secret, timestamp, rawBody);
-
-  try {
-    const sigBuf = Buffer.from(sig, "hex");
-    const expBuf = Buffer.from(expected, "hex");
-    return crypto.timingSafeEqual(sigBuf, expBuf);
-  } catch {
-    return false;
-  }
+  return verifyWebhookSignature({ secret, timestamp, rawBody, signature, toleranceMs }).valid;
 }
 
 /**
@@ -608,7 +709,11 @@ async function _deliverToSubscription(
       timestamp: parseInt(timestamp, 10),
       data,
     };
-    const body = JSON.stringify(payload);
+    const shapedPayload = shapeWebhookPayload(payload, CURRENT_WEBHOOK_SCHEMA_VERSION);
+    // Never put a payload on the wire that no longer matches its published
+    // schema (issue #990).
+    assertValidWebhookPayload(CURRENT_WEBHOOK_SCHEMA_VERSION, topic, shapedPayload);
+    const body = JSON.stringify(shapedPayload);
     const signature = signPayload(plaintextSecret, timestamp, body);
 
     const headers: Record<string, string> = {
@@ -738,7 +843,9 @@ export async function replayDelivery(deliveryId: string): Promise<DispatchResult
     timestamp: parseInt(timestamp, 10),
   } as WebhookPayload;
 
-  const body = JSON.stringify(payload);
+  const shapedPayload = shapeWebhookPayload(payload, CURRENT_WEBHOOK_SCHEMA_VERSION);
+  assertValidWebhookPayload(CURRENT_WEBHOOK_SCHEMA_VERSION, original.topic, shapedPayload);
+  const body = JSON.stringify(shapedPayload);
   const signature = signPayload(plaintextSecret, timestamp, body);
 
   const headers: Record<string, string> = {
@@ -762,7 +869,7 @@ export async function replayDelivery(deliveryId: string): Promise<DispatchResult
       id: newDeliveryId,
       subscriptionId: sub.id,
       topic: original.topic,
-      payload: payload as any,
+      payload: shapedPayload as any,
       statusCode: "statusCode" in result ? (result.statusCode ?? null) : null,
       responseBody:
         "responseBody" in result ? (result.responseBody ?? null) : null,

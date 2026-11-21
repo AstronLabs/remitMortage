@@ -1,17 +1,19 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import { Router, Response } from "express";
+import { Router, Request, Response } from "express";
 import { StrKey } from "@stellar/stellar-sdk";
 import logger from "../utils/logger.js";
 import { validatePositiveNumber } from "../middleware/validate.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import { requireRpcAvailable } from "../middleware/rpcDegradedMode.js";
+import { strongEtag } from "../middleware/etag.js";
 import {
   createApplication,
   getApplication,
   getApplicationsByBorrower,
   getPendingApplications,
+  listApplications,
   updateApplication,
   resumeDraftApplication,
   discardDraftApplication,
@@ -64,8 +66,34 @@ import {
 } from "../security/requireResourceOwnership.js";
 import type { AuthenticatedRequest } from "../middleware/auth.js";
 import { countryForBorrower, paymentCutoff } from "../services/businessCalendar.js";
+import {
+  decodeCursor,
+  parsePageQuery,
+  InvalidPaginationError,
+  type CursorPosition,
+} from "../utils/pagination.js";
 
 export const loanRouter = Router();
+
+/**
+ * Parse `?limit`/`?cursor` for the list endpoints (issue #993). Writes the 400
+ * for a bad limit or tampered cursor and returns null so the handler stops.
+ */
+function listPageOptions(
+  req: Request,
+  res: Response
+): { limit: number; cursor: CursorPosition | null; rawCursor: string | null } | null {
+  try {
+    const query = parsePageQuery(req.query as Record<string, unknown>);
+    return { limit: query.limit, cursor: decodeCursor(query.cursor), rawCursor: query.cursor };
+  } catch (err) {
+    if (err instanceof InvalidPaginationError) {
+      res.status(400).json({ error: err.code, field: err.field, message: err.message });
+      return null;
+    }
+    throw err;
+  }
+}
 
 const REQUIRED_DOCUMENTS_BY_LOAN_TYPE: Record<string, string[]> = {
   purchase: ["identity", "income", "bank_statement", "property_contract"],
@@ -248,8 +276,18 @@ loanRouter.get("/borrower/:address", strongEtag({ userScoped: true }), async (re
   }
   // Issue #760: borrowers may only list their own applications (admins exempt).
   if (!requireBorrowerAddressOwnership(req as AuthenticatedRequest, res, address)) return;
-  const apps = await getApplicationsByBorrower(address);
-  return res.json(apps);
+  const options = listPageOptions(req, res);
+  if (!options) return;
+  const page = await getApplicationsByBorrower(address, {
+    limit: options.limit,
+    cursor: options.cursor,
+  });
+  // Keep the legacy array response for callers/mocks that still return one.
+  if (Array.isArray(page)) return res.json(page);
+  return res.json({
+    ...page,
+    pagination: { ...page.pagination, cursor: options.rawCursor },
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -328,11 +366,38 @@ loanRouter.get("/queue-metrics", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/loan
+//
+// Cursor-paginated list of every live application (issue #993). Admin-only:
+// it spans all applicants, unlike the borrower-scoped list below.
+// ---------------------------------------------------------------------------
+loanRouter.get("/", async (req, res) => {
+  if (!isAdminRequest(req as AuthenticatedRequest)) {
+    return res.status(403).json({ error: "forbidden", message: "Admin access required" });
+  }
+  const options = listPageOptions(req, res);
+  if (!options) return;
+
+  const page = await listApplications({ limit: options.limit, cursor: options.cursor });
+  if (Array.isArray(page)) return res.json(page);
+  return res.json({
+    ...page,
+    pagination: { ...page.pagination, cursor: options.rawCursor },
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /api/loan/pending
 // ---------------------------------------------------------------------------
 loanRouter.get("/pending", strongEtag(), async (req, res) => {
-  const pending = await getPendingApplications();
-  return res.json(pending);
+  const options = listPageOptions(req, res);
+  if (!options) return;
+  const pending = await getPendingApplications({ limit: options.limit, cursor: options.cursor });
+  if (Array.isArray(pending)) return res.json(pending);
+  return res.json({
+    ...pending,
+    pagination: { ...pending.pagination, cursor: options.rawCursor },
+  });
 });
 
 // ---------------------------------------------------------------------------

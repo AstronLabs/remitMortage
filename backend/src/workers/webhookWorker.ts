@@ -7,6 +7,10 @@ import { getClusterClient } from "../services/redisCluster.js";
 import { WebhookJobData } from "../services/queueService.js";
 import { decrypt } from "../utils/crypto.js";
 import { signPayload, shapeWebhookPayload } from "../services/webhook.js";
+import {
+  InvalidWebhookPayloadError,
+  assertValidWebhookPayload,
+} from "../services/webhookSchemas.js";
 import { prisma } from "../services/db.js";
 import logger from "../utils/logger.js";
 import {
@@ -136,7 +140,60 @@ export async function startWebhookWorker(): Promise<void> {
         data,
       };
 
-      const body = JSON.stringify(shapeWebhookPayload(payload, webhookSchemaVersion));
+      const shapedPayload = shapeWebhookPayload(payload, webhookSchemaVersion);
+
+      try {
+        assertValidWebhookPayload(webhookSchemaVersion, topic, shapedPayload);
+      } catch (err) {
+        // A payload that no longer matches its published schema is a code
+        // bug, not a transient delivery failure: refuse to send it, record
+        // why, and do not burn retries on it (issue #990).
+        const completedAt = new Date();
+        const reason =
+          err instanceof InvalidWebhookPayloadError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : String(err);
+
+        await prisma.webhookDelivery.create({
+          data: {
+            id: deliveryId,
+            subscriptionId,
+            topic,
+            payload: shapedPayload as any,
+            statusCode: null,
+            responseBody: null,
+            error: reason,
+            success: false,
+            attempt,
+            nextRetryAt: null,
+            dispatchedAt: new Date(job.timestamp),
+            completedAt,
+            outcome: "dlq",
+          },
+        });
+        await prisma.webhookDLQ.create({
+          data: {
+            url,
+            payload: shapedPayload as any,
+            statusCode: null,
+            responsePayload: null,
+            error: reason,
+          },
+        });
+        logger.error("[webhook-worker] refused to send payload that failed schema validation", {
+          subscriptionId,
+          deliveryId,
+          topic,
+          webhookSchemaVersion,
+          error: reason,
+        });
+        await recordDispatchOutcome(subscriptionId, "dlq", completedAt);
+        return { success: false, deliveryId, invalidPayload: true };
+      }
+
+      const body = JSON.stringify(shapedPayload);
       const signature = signPayload(plaintextSecret, timestamp, body);
 
       const headers: Record<string, string> = {
