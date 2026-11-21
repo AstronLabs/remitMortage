@@ -4,7 +4,7 @@
 //! Runs as a normal test (asserting the lifecycle emits the events the
 //! backend indexes). With `REMIT_EVENT_FIXTURE_OUT` set it also writes the raw
 //! events as XDR hex to that path; `npm run fixtures:contract-events` in
-//! `backend/` turns that dump into the versioned fixture. See
+//! `backend/` converts that dump into the versioned fixture. See
 //! docs/CONTRACT_EVENT_FIXTURES.md.
 
 use escrow::{EscrowConfig, EscrowContract, EscrowContractClient};
@@ -226,6 +226,9 @@ fn capture_full_loan_lifecycle_events() {
             ("lendingPool", address_hex(&env, &pool_id)),
             ("token", address_hex(&env, &token)),
         ];
+        if let Some(dir) = std::path::Path::new(&path).parent() {
+            std::fs::create_dir_all(dir).expect("create event fixture dump directory");
+        }
         std::fs::write(&path, rec.to_json(&contracts)).expect("write event fixture dump");
     }
 }

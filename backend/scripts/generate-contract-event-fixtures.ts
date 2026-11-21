@@ -5,29 +5,30 @@
 /**
  * Regenerates the contract-event replay fixtures (issue #981).
  *
- * Runs the `event_fixtures` contract test, which drives a full loan lifecycle
- * through the real escrow and lending-pool contracts and dumps every event
- * they emit, then rewrites that dump as the versioned fixture the backend
- * replay tests load.
+ * Converts the raw event dump written by the `event_fixtures` contract test
+ * (which drives a full loan lifecycle through the real escrow and lending-pool
+ * contracts) into the versioned fixture the backend replay tests load. The
+ * script does not run cargo itself; run the contract test first.
  *
  * Usage (from backend/):
- *   npm run fixtures:contract-events
- *   npx tsx scripts/generate-contract-event-fixtures.ts --dump <file>   # skip cargo, convert an existing dump
+ *   npm run fixtures:contract-events                 # reads the default dump path
+ *   npx tsx scripts/generate-contract-event-fixtures.ts --dump <file>
  *
- * See docs/CONTRACT_EVENT_FIXTURES.md for when to run it.
+ * See docs/CONTRACT_EVENT_FIXTURES.md for the full steps and when to run it.
  */
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { Address, scValToNative, xdr } from "@stellar/stellar-sdk";
 import {
   CONTRACT_EVENT_FIXTURE_VERSION,
   type ContractEventFixture,
 } from "../src/test-utils/contractEventFixture";
 
-const CONTRACTS_DIR = path.resolve(__dirname, "../../contracts");
+const DEFAULT_DUMP_PATH = path.resolve(
+  __dirname,
+  "../../contracts/target/event-fixtures/full-loan-lifecycle.dump.json"
+);
 const FIXTURE_PATH = path.resolve(
   __dirname,
   "../src/test-utils/fixtures/contract-events/full-loan-lifecycle.json"
@@ -37,29 +38,6 @@ const SOURCE_TEST = "contracts/integration-tests/tests/event_fixtures.rs";
 interface RawDump {
   contracts: Record<string, string>;
   events: { contract: string; ledger: number; topics: string[]; data: string }[];
-}
-
-function runContractTest(): string {
-  const dump = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "remit-events-")), "dump.json");
-  const result = spawnSync(
-    "cargo",
-    [
-      "test",
-      "--locked",
-      "-p",
-      "integration-tests",
-      "--test",
-      "event_fixtures",
-      "--",
-      "--exact",
-      "capture_full_loan_lifecycle_events",
-    ],
-    { cwd: CONTRACTS_DIR, env: { ...process.env, REMIT_EVENT_FIXTURE_OUT: dump }, stdio: "inherit" }
-  );
-  if (result.status !== 0 || !fs.existsSync(dump)) {
-    throw new Error("cargo test for event_fixtures failed; no event dump was written");
-  }
-  return dump;
 }
 
 const scVal = (hex: string) => xdr.ScVal.fromXDR(hex, "hex");
@@ -73,7 +51,7 @@ export function convertDump(raw: RawDump): ContractEventFixture {
   return {
     fixtureVersion: CONTRACT_EVENT_FIXTURE_VERSION,
     source: SOURCE_TEST,
-    regenerate: "npm run fixtures:contract-events (from backend/)",
+    regenerate: "see docs/CONTRACT_EVENT_FIXTURES.md",
     contracts,
     events: raw.events.map((event) => {
       const topics = event.topics.map(scVal);
@@ -90,10 +68,17 @@ export function convertDump(raw: RawDump): ContractEventFixture {
 
 function main() {
   const flag = process.argv.indexOf("--dump");
-  const dumpPath = flag >= 0 ? process.argv[flag + 1] : runContractTest();
+  const dumpPath = flag >= 0 ? process.argv[flag + 1] : DEFAULT_DUMP_PATH;
   if (!dumpPath) {
     console.error("--dump needs a file path");
     process.exit(2);
+  }
+  if (!fs.existsSync(dumpPath)) {
+    console.error(
+      `No event dump at ${dumpPath}. Run the event_fixtures contract test first ` +
+        "(see docs/CONTRACT_EVENT_FIXTURES.md)."
+    );
+    process.exit(1);
   }
 
   const fixture = convertDump(JSON.parse(fs.readFileSync(dumpPath, "utf8")));

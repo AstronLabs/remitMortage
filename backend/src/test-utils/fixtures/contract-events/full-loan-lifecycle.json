@@ -1,7 +1,7 @@
 {
   "fixtureVersion": 1,
   "source": "contracts/integration-tests/tests/event_fixtures.rs",
-  "regenerate": "npm run fixtures:contract-events (from backend/)",
+  "regenerate": "see docs/CONTRACT_EVENT_FIXTURES.md",
   "contracts": {
     "escrow": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
     "lendingPool": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",

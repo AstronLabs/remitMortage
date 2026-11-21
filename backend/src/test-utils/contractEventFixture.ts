@@ -36,7 +36,7 @@ export function loadContractEventFixture(name: string): ContractEventFixture {
   if (fixture.fixtureVersion !== CONTRACT_EVENT_FIXTURE_VERSION) {
     throw new Error(
       `${name}.json is fixture version ${fixture.fixtureVersion}, expected ${CONTRACT_EVENT_FIXTURE_VERSION}. ` +
-        "Run `npm run fixtures:contract-events` to regenerate it."
+        "See docs/CONTRACT_EVENT_FIXTURES.md to regenerate it."
     );
   }
   return fixture;
