@@ -213,9 +213,22 @@ auditRouter.post(
       resolvedFormat === "cef" ? "text/plain" : "application/x-ndjson";
 
     res.setHeader("Content-Type", contentType);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="audit-siem-export.${resolvedFormat === "cef" ? "cef" : "ndjson"}"`
+    );
     res.setHeader("Transfer-Encoding", "chunked");
     res.setHeader("X-Export-Format", resolvedFormat);
     res.setHeader("X-Export-Redaction-Level", resolvedRedactionLevel);
+
+    let clientDisconnected = false;
+    const markDisconnected = () => {
+      if (!res.writableEnded) {
+        clientDisconnected = true;
+      }
+    };
+    req.on("close", markDisconnected);
+    res.on("close", markDisconnected);
 
     const hmacSecret =
       process.env.SIEM_EXPORT_HMAC_SECRET ?? "default_siem_secret";
@@ -230,10 +243,12 @@ auditRouter.post(
           format: resolvedFormat,
           requestorAddress: req.user?.walletAddress,
           redactionLevel: resolvedRedactionLevel,
+          shouldAbort: () => clientDisconnected || res.destroyed || res.writableEnded,
         },
         hmacSecret,
         async (lines) => {
           for (const line of lines) {
+            if (clientDisconnected || res.destroyed || res.writableEnded) break;
             res.write(line + "\n");
           }
         }
