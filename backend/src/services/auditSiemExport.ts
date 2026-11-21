@@ -5,6 +5,13 @@ import crypto from "crypto";
 import { prisma } from "./db.js";
 import { logAudit } from "./audit.js";
 import logger from "../utils/logger.js";
+import {
+  DEFAULT_EXPORT_REDACTION_LEVEL,
+  maskIdentifier,
+  redactMetadata,
+  truncateIp,
+  type ExportRedactionLevel,
+} from "./exportRedaction.js";
 
 export const SIEM_EXPORT_PAGE_SIZE = 500;
 export const SIEM_MAX_WINDOW_DAYS = 90;
@@ -16,6 +23,8 @@ export interface SiemExportRequest {
   actorAddress?: string;
   format?: "ndjson" | "cef";
   requestorAddress?: string;
+  /** PII redaction level (issue #1104). Defaults to the most redacted, `aggregate`. */
+  redactionLevel?: ExportRedactionLevel;
 }
 
 export interface SiemExportResult {
@@ -24,6 +33,15 @@ export interface SiemExportResult {
   format: "ndjson" | "cef";
   chainHash: string; // HMAC-SHA256 over the full export payload for integrity verification
   pages: number;
+  redactionLevel: ExportRedactionLevel;
+}
+
+/** One row of an `aggregate` export: counts only, no actor, IP or metadata. */
+export interface AggregateExportRow {
+  action: string;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
 }
 
 export interface AuditExportEvent {
@@ -60,6 +78,22 @@ export function formatAsCef(event: AuditExportEvent): string {
  */
 export function formatAsNdjson(event: AuditExportEvent): string {
   return JSON.stringify(event);
+}
+
+/** Applies `partial` redaction to one event; `full` events pass through unchanged. */
+export function redactEvent(event: AuditExportEvent, level: "full" | "partial"): AuditExportEvent {
+  if (level === "full") return event;
+  return {
+    ...event,
+    actorAddress: maskIdentifier(event.actorAddress),
+    ipAddress: truncateIp(event.ipAddress),
+    metadata: redactMetadata(event.metadata),
+  };
+}
+
+export function formatAggregateAsCef(row: AggregateExportRow): string {
+  const name = row.action.replace(/[|\\=]/g, "_");
+  return `CEF:0|RemitMortgage|AuditLog|1.0|aggregate|${name}|1|cnt=${row.count} start=${new Date(row.firstSeen).getTime()} end=${new Date(row.lastSeen).getTime()}`;
 }
 
 // ── Hash-chain integrity ──────────────────────────────────────────────────────
@@ -103,6 +137,8 @@ export async function exportAuditLogToSiem(
   }
 
   const format = req.format ?? "ndjson";
+  const redactionLevel = req.redactionLevel ?? DEFAULT_EXPORT_REDACTION_LEVEL;
+  const aggregates = new Map<string, AggregateExportRow>();
   const exportId = crypto.randomUUID();
   const allLines: string[] = [];
   let cursor: string | undefined;
@@ -117,6 +153,19 @@ export async function exportAuditLogToSiem(
   }
   if (req.actorAddress) {
     where.actorAddress = req.actorAddress;
+  }
+
+  async function emitPage(lines: string[], index: number): Promise<void> {
+    try {
+      await onPage(lines, index);
+    } catch (err) {
+      logger.error("[siemExport] onPage callback failed", {
+        exportId,
+        pageIndex: index,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   }
 
   // Keyset pagination over (createdAt, id) to avoid OFFSET scans on large tables
@@ -139,7 +188,7 @@ export async function exportAuditLogToSiem(
 
     if (rows.length === 0) break;
 
-    const events: AuditExportEvent[] = rows.map((r) => ({
+    const events: AuditExportEvent[] = rows.map((r: any) => ({
       id: r.id,
       action: r.action,
       actorAddress: r.actorAddress ?? null,
@@ -148,28 +197,45 @@ export async function exportAuditLogToSiem(
       createdAt: r.createdAt.toISOString(),
     }));
 
-    const lines =
-      format === "cef"
-        ? events.map(formatAsCef)
-        : events.map(formatAsNdjson);
-
-    allLines.push(...lines);
     totalEvents += rows.length;
     cursor = rows[rows.length - 1].id;
 
-    try {
-      await onPage(lines, pageIndex);
-    } catch (err) {
-      logger.error("[siemExport] onPage callback failed", {
-        exportId,
-        pageIndex,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
+    if (redactionLevel === "aggregate") {
+      // No per-event rows leave the server; only counts, emitted once below.
+      for (const e of events) {
+        const row = aggregates.get(e.action);
+        if (row) {
+          row.count++;
+          if (e.createdAt < row.firstSeen) row.firstSeen = e.createdAt;
+          if (e.createdAt > row.lastSeen) row.lastSeen = e.createdAt;
+        } else {
+          aggregates.set(e.action, { action: e.action, count: 1, firstSeen: e.createdAt, lastSeen: e.createdAt });
+        }
+      }
+    } else {
+      const redacted = events.map((e) => redactEvent(e, redactionLevel));
+      const lines =
+        format === "cef"
+          ? redacted.map(formatAsCef)
+          : redacted.map(formatAsNdjson);
+
+      allLines.push(...lines);
+      await emitPage(lines, pageIndex);
+      pageIndex++;
     }
 
-    pageIndex++;
     if (rows.length < SIEM_EXPORT_PAGE_SIZE) break;
+  }
+
+  if (redactionLevel === "aggregate" && aggregates.size > 0) {
+    const rowsOut = [...aggregates.values()].sort((a, b) => a.action.localeCompare(b.action));
+    const lines =
+      format === "cef"
+        ? rowsOut.map(formatAggregateAsCef)
+        : rowsOut.map((r) => JSON.stringify(r));
+    allLines.push(...lines);
+    await emitPage(lines, pageIndex);
+    pageIndex++;
   }
 
   const chainHash = buildExportChainHash(allLines, hmacSecret);
@@ -180,6 +246,7 @@ export async function exportAuditLogToSiem(
     metadata: {
       exportId,
       format,
+      redactionLevel,
       totalEvents,
       pages: pageIndex,
       from: req.from.toISOString(),
@@ -190,5 +257,5 @@ export async function exportAuditLogToSiem(
     },
   });
 
-  return { exportId, totalEvents, format, chainHash, pages: pageIndex };
+  return { exportId, totalEvents, format, chainHash, pages: pageIndex, redactionLevel };
 }

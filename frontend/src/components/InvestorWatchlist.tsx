@@ -1,10 +1,13 @@
 "use client";
+
+import { EmptyState } from "@/components/EmptyState";
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
 import React, { useCallback, useEffect, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { useWallet } from "@/context/WalletContext";
+import { useUndoableAction } from "@/hooks/useUndoableAction";
 import {
   fetchUpcomingOfferings,
   fetchWatchlist,
@@ -14,6 +17,7 @@ import {
   type UpcomingOffering,
   type WatchlistItem,
 } from "@/lib/watchlistApi";
+import ConfirmationDialog from "./ConfirmationDialog";
 
 const STATE_LABEL: Record<OfferingState, string> = {
   upcoming: "Upcoming",
@@ -43,11 +47,13 @@ function formatRate(bps: number): string {
  */
 export function InvestorWatchlist() {
   const { isConnected } = useWallet();
+  const { run: runUndoable } = useUndoableAction();
   const [upcoming, setUpcoming] = useState<UpcomingOffering[]>([]);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -67,17 +73,56 @@ export function InvestorWatchlist() {
     if (isConnected) void load();
   }, [isConnected, load]);
 
+  /**
+   * Removing a watched offering is low-stakes, so it lands behind a short undo
+   * window: the row disappears immediately, the DELETE is only sent once the
+   * window lapses, and Undo cancels it and restores the row.
+   */
+  function removeFromWatchlist(loanId: string) {
+    const removedItem = watchlist.find((item) => item.loanId === loanId);
+    const wasWatchedInUpcoming = upcoming.some((o) => o.id === loanId && o.watched);
+
+    setWatchlist((prev) => prev.filter((item) => item.loanId !== loanId));
+    setUpcoming((prev) => prev.map((o) => (o.id === loanId ? { ...o, watched: false } : o)));
+
+    runUndoable({
+      title: "Removed from watchlist",
+      message: "You can undo this for a few seconds.",
+      revert: () => {
+        if (removedItem) {
+          setWatchlist((prev) =>
+            prev.some((item) => item.loanId === loanId) ? prev : [...prev, removedItem]
+          );
+        }
+        if (wasWatchedInUpcoming) {
+          setUpcoming((prev) => prev.map((o) => (o.id === loanId ? { ...o, watched: true } : o)));
+        }
+      },
+      commit: async () => {
+        try {
+          await unwatchOffering(loanId);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Couldn't update your watchlist.");
+          await load();
+        }
+      },
+    });
+  }
+
   async function toggle(loanId: string, currentlyWatched: boolean) {
+    // Adding a watch is not destructive, so it stays immediate. Removing one
+    // goes through the undo window.
+    if (currentlyWatched) {
+      removeFromWatchlist(loanId);
+      return;
+    }
+
     setBusyId(loanId);
     try {
-      if (currentlyWatched) {
-        await unwatchOffering(loanId);
-      } else {
-        await watchOffering(loanId);
-      }
+      await watchOffering(loanId);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't update your watchlist.");
+      throw new Error(err instanceof Error ? err.message : "Couldn't update your watchlist.");
     } finally {
       setBusyId(null);
     }
@@ -92,14 +137,14 @@ export function InvestorWatchlist() {
       ) : (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-6">
-            <h3 className="mb-1 text-sm font-bold text-white">Upcoming offerings</h3>
+            <h3 id="upcoming-offerings" className="mb-1 text-sm font-bold text-white">Upcoming offerings</h3>
             <p className="mb-4 text-xs text-slate-500">
               Still in underwriting. Watch one to be notified when it opens for investment.
             </p>
             {loading && upcoming.length === 0 ? (
               <p className="text-xs text-slate-400">Loading…</p>
             ) : upcoming.length === 0 ? (
-              <p className="text-xs text-slate-400">No upcoming offerings right now.</p>
+              <EmptyState title="No upcoming offerings right now." message="New offerings appear here when underwriting begins." action={{ label: "Check again", onClick: () => void load() }} />
             ) : (
               <ul className="space-y-2">
                 {upcoming.map((offering) => (
@@ -118,7 +163,15 @@ export function InvestorWatchlist() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => void toggle(offering.id, offering.watched)}
+                      onClick={() => {
+                        if (offering.watched) {
+                          setPendingRemoval(offering.id);
+                        } else {
+                          void toggle(offering.id, false).catch((err) =>
+                            setError(err instanceof Error ? err.message : "Couldn't update your watchlist.")
+                          );
+                        }
+                      }}
                       disabled={busyId === offering.id}
                       aria-pressed={offering.watched}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-cyan-400 disabled:opacity-40"
@@ -145,7 +198,7 @@ export function InvestorWatchlist() {
               Offerings you&apos;re tracking — separate from your active holdings.
             </p>
             {watchlist.length === 0 ? (
-              <p className="text-xs text-slate-400">You aren&apos;t watching any offerings yet.</p>
+              <EmptyState title="You aren't watching any offerings yet." message="Watch an offering to follow its progress." action={{ label: "Browse offerings", href: "#upcoming-offerings" }} />
             ) : (
               <ul className="space-y-2">
                 {watchlist.map((item) => (
@@ -167,7 +220,7 @@ export function InvestorWatchlist() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => void toggle(item.loanId, true)}
+                      onClick={() => setPendingRemoval(item.loanId)}
                       disabled={busyId === item.loanId}
                       className="text-xs font-semibold text-slate-400 transition-colors hover:text-rose-300 disabled:opacity-40"
                     >
@@ -182,6 +235,17 @@ export function InvestorWatchlist() {
       )}
 
       {error && <p className="mt-3 text-xs text-rose-400">{error}</p>}
+      <ConfirmationDialog
+        isOpen={pendingRemoval !== null}
+        title="Remove offering from watchlist?"
+        description="This stops tracking the offering and removes it from your watchlist. You can watch it again later."
+        confirmLabel="Remove from watchlist"
+        destructive={false}
+        onConfirm={async () => {
+          if (pendingRemoval) await toggle(pendingRemoval, true);
+        }}
+        onCancel={() => setPendingRemoval(null)}
+      />
     </section>
   );
 }

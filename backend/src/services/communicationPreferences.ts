@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { prisma, resolveOrCreateApplicant } from "./db.js";
 
 export type CommunicationCategory = "DEPOSITS" | "MILESTONES" | "GOVERNANCE" | "SECURITY";

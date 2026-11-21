@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 export type LoanType = "purchase" | "construction";
 export type DocumentChecklistStatus =
   | "missing"
@@ -94,4 +97,69 @@ export function getSubmissionBlockMessage(
   if (outstanding.length === 0) return null;
   const names = outstanding.map((document) => document.label).join(", ");
   return `Submission is unavailable until all required documents are accepted. Still needed: ${names}.`;
+}
+/**
+ * Applicant-facing checklist state (issue #1112). "Uploaded" and "Under
+ * review" both mean the applicant is waiting on a reviewer, so they collapse
+ * into a single pending-review state.
+ */
+export type ChecklistItemState = "not_submitted" | "pending_review" | "approved" | "rejected";
+
+/** The action an applicant can take on a checklist item, if any. */
+export type ChecklistItemAction = "upload" | "resubmit" | null;
+
+export function toChecklistItemState(status: DocumentChecklistStatus): ChecklistItemState {
+  switch (status) {
+    case "accepted":
+      return "approved";
+    case "rejected":
+      return "rejected";
+    case "uploaded":
+    case "under_review":
+      return "pending_review";
+    default:
+      return "not_submitted";
+  }
+}
+
+/**
+ * Only an item that was never submitted can be uploaded, and only a rejected
+ * item can be resubmitted. Pending and approved items offer no action.
+ */
+export function getChecklistItemAction(state: ChecklistItemState): ChecklistItemAction {
+  if (state === "not_submitted") return "upload";
+  if (state === "rejected") return "resubmit";
+  return null;
+}
+
+export interface ChecklistItem {
+  type: RequiredDocumentType;
+  label: string;
+  state: ChecklistItemState;
+  action: ChecklistItemAction;
+  /** Latest submission for this type, if any. */
+  document?: ApplicantDocument;
+  /** Reviewer's reason, present only for rejected items. */
+  rejectionReason?: string;
+}
+
+/** Every document the loan type requires, with its current state and action. */
+export function buildDocumentChecklist(
+  loanType: LoanType,
+  documents: ApplicantDocument[]
+): ChecklistItem[] {
+  return REQUIRED_DOCUMENTS[loanType].map((required) => {
+    const document = getLatestDocument(required.type, documents);
+    const state = toChecklistItemState(document?.status ?? "missing");
+    return {
+      type: required.type,
+      label: required.label,
+      state,
+      action: getChecklistItemAction(state),
+      ...(document ? { document } : {}),
+      ...(state === "rejected"
+        ? { rejectionReason: document?.reviewMessage?.trim() || "No reason was provided by the reviewer." }
+        : {}),
+    };
+  });
 }

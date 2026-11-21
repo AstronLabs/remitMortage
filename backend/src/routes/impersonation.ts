@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { Router, Response } from "express";
 import jwt from "jsonwebtoken";
 import { requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";

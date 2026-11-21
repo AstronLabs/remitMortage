@@ -4,6 +4,7 @@
 
 import React from "react";
 import { CreditTier, TIER_CONFIG } from "@/lib/creditRecovery";
+import { useDirection } from "@/context/DirectionContext";
 
 interface CreditScoreGaugeProps {
   currentScore: number;
@@ -18,6 +19,7 @@ export function CreditScoreGauge({
   targetScore,
   targetTier,
 }: CreditScoreGaugeProps) {
+  const { isRtl } = useDirection();
   const currentColor = TIER_CONFIG[currentTier].color;
   const targetColor = TIER_CONFIG[targetTier].color;
 
@@ -33,16 +35,20 @@ export function CreditScoreGauge({
     <div className="space-y-4">
       <div className="relative h-4 rounded-full bg-zinc-800 overflow-hidden">
         <div
-          className="absolute inset-y-0 left-0 rounded-full transition-all duration-700"
+          className="absolute inset-y-0 start-0 rounded-full transition-all duration-700"
           style={{
             width: `${currentScore}%`,
-            background: `linear-gradient(90deg, ${currentColor}, ${targetColor})`,
+            background: `linear-gradient(${isRtl ? "270deg" : "90deg"}, ${currentColor}, ${targetColor})`,
             boxShadow: `0 0 12px ${currentColor}66`,
           }}
         />
         <div
           className="absolute inset-y-0 border-r-2 border-dashed"
-          style={{ left: `${targetScore}%`, borderColor: targetColor }}
+          style={
+            isRtl
+              ? { right: `${targetScore}%`, borderColor: targetColor }
+              : { left: `${targetScore}%`, borderColor: targetColor }
+          }
         />
       </div>
 
@@ -57,7 +63,7 @@ export function CreditScoreGauge({
           <p className="text-xs text-zinc-400">{currentTier}</p>
         </div>
 
-        <div className="text-right">
+        <div className="text-end">
           <p className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">
             Target
           </p>

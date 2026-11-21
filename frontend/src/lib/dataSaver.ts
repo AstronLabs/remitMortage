@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 export const DATA_SAVER_STORAGE_KEY = "remitmortgage-data-saver";
 export const HIGH_CONTRAST_STORAGE_KEY = "remitmortgage-high-contrast";
 

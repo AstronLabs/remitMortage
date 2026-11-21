@@ -16,6 +16,8 @@ import { KeyboardShortcutsProvider } from "@/context/KeyboardShortcutsContext";
 import { NarrationProvider } from "@/context/NarrationContext";
 import { ToastContainer } from "@/components/ToastContainer";
 import { HotToaster } from "@/components/HotToaster";
+import { FeatureAnnouncements } from "@/components/FeatureAnnouncements";
+import { InstallPrompt } from "@/components/InstallPrompt";
 import WalletBanner from "@/components/WalletBanner";
 import { DemoModeProvider } from "@/context/DemoModeContext";
 import DemoModeBanner from "@/components/DemoModeBanner";
@@ -23,8 +25,14 @@ import ImpersonationBanner from "@/components/ImpersonationBanner";
 import SkipToContent from "@/components/SkipToContent";
 import { LiveRegionAnnouncer } from "@/components/LiveRegionAnnouncer";
 import Footer from "@/components/Footer";
+import CommandPalette from "@/components/CommandPalette";
+import DashboardBreadcrumbs from "@/components/DashboardBreadcrumbs";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
+import { THEME_BOOT_SCRIPT } from "./lib/theme-boot";
+import { TEXT_SIZE_BOOT_SCRIPT } from "./lib/text-size-boot";
+import { DirectionProvider } from "@/context/DirectionContext";
+import { directionForLocale } from "@/lib/direction";
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL ?? "https://remitmortgage.com";
 
@@ -81,6 +89,11 @@ export const metadata: Metadata = {
     creator: "@remitmortgage",
     site: "@remitmortgage",
   },
+  appleWebApp: {
+    capable: true,
+    title: "RemitMortgage",
+    statusBarStyle: "black-translucent",
+  },
   robots: {
     index: true,
     follow: true,
@@ -103,9 +116,10 @@ export default async function RootLayout({
 }>) {
   const locale = await getLocale();
   const messages = await getMessages();
+  const direction = directionForLocale(locale);
 
   return (
-    <html lang={locale} dir={locale === "ar" ? "rtl" : "ltr"} suppressHydrationWarning>
+    <html lang={locale} dir={direction} suppressHydrationWarning>
       <head>
         {/* SRI: This inline theme script is same-origin and not a CDN load, so Subresource Integrity does not apply.
             It resolves System / Scheduled / Manual mode before first paint (see lib/theme-boot.ts) and is intentionally inline to avoid FOUC and is protected by CSP script-src 'self'.
@@ -113,11 +127,15 @@ export default async function RootLayout({
             use `import { sriProps } from "@/lib/sri"` and spread `{...sriProps(url)}` to enforce
             integrity="sha384-..." + crossorigin="anonymous". See frontend/src/lib/sri.ts and docs/SRI_AUDIT.md. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+        {/* Same-origin inline script (CSP script-src 'self'); applies the saved text-size
+            scale before first paint to avoid a reflow flash. See lib/text-size-boot.ts. */}
+        <script dangerouslySetInnerHTML={{ __html: TEXT_SIZE_BOOT_SCRIPT }} />
       </head>
       <body className="min-h-screen bg-[#060913] text-slate-100 font-sans antialiased flex flex-col justify-between">
         <SkipToContent />
         <LiveRegionAnnouncer />
         <NextIntlClientProvider messages={messages} locale={locale}>
+          <DirectionProvider direction={direction}>
           <DemoModeProvider>
           <ImpersonationBanner />
           <WalletBanner />
@@ -133,12 +151,16 @@ export default async function RootLayout({
                     <KeyboardShortcutsProvider>
                       <NarrationProvider>
                         <main id="main-content" role="main" tabIndex={-1} className="flex-1 focus:outline-none">
+                          <CommandPalette />
+                          <DashboardBreadcrumbs />
                           {children}
                         </main>
                         <Footer />
                         <NotificationLayer />
                         <ToastContainer />
                         <HotToaster />
+                        <FeatureAnnouncements />
+                        <InstallPrompt />
                       </NarrationProvider>
                     </KeyboardShortcutsProvider>
                   </IdleSessionProvider>
@@ -150,6 +172,7 @@ export default async function RootLayout({
           </DataSaverProvider>
           </ThemeProvider>
           </DemoModeProvider>
+          </DirectionProvider>
         </NextIntlClientProvider>
       </body>
     </html>

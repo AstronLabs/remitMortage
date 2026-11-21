@@ -8,6 +8,10 @@ import { runEscrowReconciliation } from "../jobs/escrowReconciliation.js";
 import logger from "../utils/logger.js";
 import { requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";
 import { bulkReviewApplications, getApplication, type BulkReviewDecision } from "../services/loanStore.js";
+import {
+  parseManualStatusChangeReason,
+  type ManualStatusChangeReason,
+} from "../services/manualStatusChangeReason.js";
 import { mergeApplicants, MergeValidationError } from "../services/applicantMerge.js";
 import { promoteWaitlistBatch } from "../services/inviteCode.js";
 import { runSuspiciousActivityScan } from "../services/suspiciousActivity.js";
@@ -44,12 +48,29 @@ import {
   rejectRequest,
   FourEyesError,
 } from "../services/fourEyesApproval.js";
+import { requireRecentAdminReauthentication } from "../services/adminReauthentication.js";
 import {
   getModelConfig,
   getShadowEvaluations,
   getShadowMetrics,
   updateModelConfig,
 } from "../services/scoring.js";
+import { getScoreLineage } from "../services/scoreLineage.js";
+import {
+  getStageDurationSummary,
+  DEFAULT_STAGE_SUMMARY_WINDOW_DAYS,
+} from "../services/loanReviewStages.js";
+import {
+  addHoliday,
+  CalendarValidationError,
+  listHolidays,
+  removeHoliday,
+} from "../services/businessCalendar.js";
+  AssignmentError,
+  MAX_HANDOFF_NOTE_LENGTH,
+  reassignApplicationReviewer,
+} from "../services/assignmentQueue.js";
+import { getReviewerHandoffContext } from "../services/reviewerHandoff.js";
 
 export const adminRouter = Router();
 
@@ -158,17 +179,37 @@ adminRouter.post("/loans/bulk-review", requireAdmin, async (req: AuthenticatedRe
   const rawItems = Array.isArray(body.reviews)
     ? body.reviews
     : Array.isArray(body.applicationIds) && typeof body.decision === "string"
-      ? body.applicationIds.map((applicationId: unknown) => ({ applicationId, decision: body.decision, reason: body.reason }))
+      ? body.applicationIds.map((applicationId: unknown) => ({
+          applicationId,
+          decision: body.decision,
+          reason: body.reason,
+          reasonCode: body.reasonCode,
+          reasonNote: body.reasonNote,
+        }))
       : null;
 
   if (!rawItems || rawItems.length === 0 || rawItems.length > 100) {
     return res.status(400).json({ error: "invalid_request", message: "reviews must contain between 1 and 100 applications" });
   }
 
-  const items = rawItems.map((item: any) => ({
+  // Issue #1102: every manual decision needs a reason code. A per-item code
+  // wins; otherwise the batch-level `reasonCode`/`reasonNote` applies.
+  const parsedReasons = rawItems.map((item: any) =>
+    parseManualStatusChangeReason(
+      item?.reasonCode ?? body.reasonCode,
+      item?.reasonNote ?? body.reasonNote ?? item?.reason
+    )
+  );
+  const invalidReason = parsedReasons.find((parsed: ReturnType<typeof parseManualStatusChangeReason>) => !parsed.ok);
+  if (invalidReason && !invalidReason.ok) {
+    return res.status(400).json({ error: invalidReason.error, message: invalidReason.message, field: "reasonCode" });
+  }
+
+  const items = rawItems.map((item: any, index: number) => ({
     applicationId: typeof item?.applicationId === "string" ? item.applicationId : item?.id,
     decision: item?.decision,
     reason: item?.reason,
+    statusChangeReason: (parsedReasons[index] as { ok: true; reason: ManualStatusChangeReason }).reason,
     // Optimistic lock (issue #846): optional per item so batched callers can
     // stay backward compatible, strictly validated when supplied.
     version: item?.version,
@@ -199,6 +240,7 @@ adminRouter.post("/loans/bulk-review", requireAdmin, async (req: AuthenticatedRe
         applicationId: string;
         decision: BulkReviewDecision;
         reason?: string;
+        statusChangeReason: ManualStatusChangeReason;
         version?: number;
       }>,
       reviewerAddress,
@@ -225,6 +267,114 @@ adminRouter.post("/loans/bulk-review", requireAdmin, async (req: AuthenticatedRe
   } catch (error) {
     logger.error("Bulk loan review error", { error });
     return res.status(500).json({ error: "bulk_review_failed" });
+  }
+});
+
+// ── Reviewer reassignment & handoff (issues #621, #1101) ─────────────────
+//
+// Moving an application from one reviewer to another is a handoff: the
+// request must carry a short note on where the previous reviewer left off.
+// The note is written to the audit trail, so it shows up in the activity
+// timeline, and the incoming reviewer reads it via GET .../handoff.
+
+/**
+ * @openapi
+ * /api/admin/applications/{id}/reassign:
+ *   post:
+ *     summary: Reassign a loan application to a reviewer, with a handoff note
+ *     tags: [Admin]
+ *     security: [bearerAuth: []]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reviewerId, handoffNote]
+ *             properties:
+ *               reviewerId: { type: string }
+ *               handoffNote: { type: string, maxLength: 2000 }
+ *     responses:
+ *       200: { description: Reassigned }
+ *       400: { description: Missing reviewerId or handoff note }
+ *       404: { description: Application or reviewer not found }
+ *       409: { description: Reviewer is inactive/on leave }
+ */
+adminRouter.post("/applications/:id/reassign", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const { reviewerId, handoffNote } = req.body ?? {};
+  if (!reviewerId || typeof reviewerId !== "string") {
+    return res.status(400).json({ error: "invalid_request", message: "reviewerId is required" });
+  }
+  if (typeof handoffNote !== "string" || handoffNote.trim().length === 0) {
+    return res.status(400).json({
+      error: "handoff_note_required",
+      message: "A handoff note is required when reassigning an application",
+    });
+  }
+  if (handoffNote.trim().length > MAX_HANDOFF_NOTE_LENGTH) {
+    return res.status(400).json({
+      error: "handoff_note_too_long",
+      message: `Handoff note must be at most ${MAX_HANDOFF_NOTE_LENGTH} characters`,
+    });
+  }
+
+  try {
+    const result = await reassignApplicationReviewer(String(req.params.id), reviewerId, {
+      actorAddress: req.user?.walletAddress ?? "admin",
+      ipAddress: req.ip ?? null,
+      handoffNote,
+    });
+    return res.json(result);
+  } catch (error) {
+    if (error instanceof AssignmentError) {
+      return res.status(error.status).json({ error: error.code, message: error.message });
+    }
+    logger.error("Application reassign error", { error });
+    return res.status(500).json({ error: "reassign_failed" });
+  }
+});
+
+/**
+ * @openapi
+ * /api/admin/applications/{id}/handoff:
+ *   get:
+ *     summary: Latest reviewer handoff note alongside the application's prior history
+ *     tags: [Admin]
+ *     security: [bearerAuth: []]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Handoff context }
+ *       404: { description: Application not found }
+ */
+adminRouter.get("/applications/:id/handoff", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const id = String(req.params.id);
+  try {
+    const application = await prisma.loanApplication.findFirst({
+      where: { id, deletedAt: null },
+      include: { applicant: true },
+    });
+    if (!application) {
+      return res.status(404).json({ error: "application_not_found", message: "Application not found" });
+    }
+    const context = await getReviewerHandoffContext({
+      id: application.id,
+      borrowerAddress: application.applicant?.stellarAddress ?? "",
+      assignedReviewerId: application.assignedReviewerId ?? null,
+      assignedReviewerEmail: application.assignedReviewerEmail ?? null,
+    });
+    return res.json(context);
+  } catch (error) {
+    logger.error("Reviewer handoff context error", { error, applicationId: id });
+    return res.status(500).json({ error: "failed_to_load_handoff" });
   }
 });
 
@@ -264,7 +414,7 @@ adminRouter.get("/applicants/:id/communications", requireAdmin, async (req: Auth
 
 // ── Loan servicing transfer ──────────────────────────────────────────────
 
-adminRouter.post("/loans/:id/servicing-transfer", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post("/loans/:id/servicing-transfer", requireAdmin, requireRecentAdminReauthentication, async (req: AuthenticatedRequest, res: Response) => {
   const body = req.body ?? {};
   const loanId = String(req.params.id);
   const requestedBy = req.user?.walletAddress ?? "admin-api-key";
@@ -369,7 +519,7 @@ async function executeApprovedRequest(request: { id: string; actionType: string;
   await markExecuted(request.id);
 }
 
-adminRouter.post("/four-eyes/requests/:id/approve", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+adminRouter.post("/four-eyes/requests/:id/approve", requireAdmin, requireRecentAdminReauthentication, async (req: AuthenticatedRequest, res: Response) => {
   const approverAddress = req.user?.walletAddress ?? "admin-api-key";
   try {
     const approved = await approveRequest(String(req.params.id), approverAddress);
@@ -481,6 +631,88 @@ function positiveIntParam(raw: unknown, fallback: number): number | null {
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : null;
 }
+
+/** Hard cap on the stage-duration look-back window (one year). */
+const MAX_STAGE_SUMMARY_WINDOW_DAYS = 365;
+
+/**
+ * Resolve the [periodStart, periodEnd] window for the stage-duration summary.
+ * Accepts either an explicit `since`/`until` ISO range or a `windowDays`
+ * look-back ending now. Returns null when the supplied values are unusable so
+ * the caller can answer 400 rather than silently widening the window.
+ */
+function resolveStageSummaryPeriod(
+  query: Record<string, unknown>
+): { periodStart: Date; periodEnd: Date } | null {
+  const parseDate = (raw: unknown): Date | null => {
+    if (typeof raw !== "string" || raw === "") return null;
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
+  const hasSince = query.since !== undefined;
+  const hasUntil = query.until !== undefined;
+  const since = hasSince ? parseDate(query.since) : null;
+  const until = hasUntil ? parseDate(query.until) : null;
+  if ((hasSince && since === null) || (hasUntil && until === null)) return null;
+
+  const periodEnd = until ?? new Date();
+
+  let periodStart: Date;
+  if (since) {
+    periodStart = since;
+  } else {
+    const windowDays = positiveIntParam(query.windowDays, DEFAULT_STAGE_SUMMARY_WINDOW_DAYS);
+    if (windowDays === null || windowDays > MAX_STAGE_SUMMARY_WINDOW_DAYS) return null;
+    periodStart = new Date(periodEnd.getTime() - windowDays * 86_400_000);
+  }
+
+  if (periodStart.getTime() > periodEnd.getTime()) return null;
+  return { periodStart, periodEnd };
+}
+
+/**
+ * @openapi
+ * /api/admin/loans/stage-durations:
+ *   get:
+ *     summary: Average and worst-case time per loan review stage
+ *     description: >-
+ *       Aggregates how long applications spend in each review stage over a
+ *       selectable period, reporting the average and worst-case duration per
+ *       stage plus how many intervals are still open (currently in-flight).
+ *       The period is an explicit ISO `since`/`until` range or a `windowDays`
+ *       look-back ending now.
+ *     tags:
+ *       - Admin
+ *     parameters:
+ *       - in: query
+ *         name: since
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: until
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: windowDays
+ *         schema: { type: integer, minimum: 1, maximum: 365 }
+ *     responses:
+ *       200:
+ *         description: Per-stage duration report.
+ *       400:
+ *         description: Invalid period parameters.
+ */
+adminRouter.get("/loans/stage-durations", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const period = resolveStageSummaryPeriod(req.query as Record<string, unknown>);
+  if (!period) {
+    return res.status(400).json({ error: "invalid_period" });
+  }
+
+  try {
+    return res.json(await getStageDurationSummary(period));
+  } catch (error) {
+    logger.error("Stage duration summary error", { error });
+    return res.status(500).json({ error: "stage_duration_summary_failed" });
+  }
+});
 
 /**
  * @openapi
@@ -706,6 +938,51 @@ adminRouter.post("/waitlist/promote", requireAdmin, async (req: AuthenticatedReq
 
 /**
  * @openapi
+ * /api/admin/scoring/scores/{scoreId}/lineage:
+ *   get:
+ *     summary: Retrieve the data lineage behind a stored credit score
+ *     description: >
+ *       Returns the exact inputs, model version and computation timestamp that
+ *       produced a stored score, so it can be recomputed during a dispute.
+ *       `scoreId` is the verification result id returned by the verification
+ *       flow. Lineage is only available until its retention window elapses.
+ *     tags:
+ *       - Admin
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: scoreId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The score's lineage record.
+ *       404:
+ *         description: No lineage exists for the given score (never computed, or already purged).
+ */
+adminRouter.get("/scoring/scores/:scoreId/lineage", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  const rawScoreId = req.params.scoreId;
+  const scoreId = Array.isArray(rawScoreId) ? rawScoreId[0] : rawScoreId;
+
+  try {
+    const lineage = await getScoreLineage(scoreId);
+    if (!lineage) {
+      return res.status(404).json({
+        error: "score_lineage_not_found",
+        message: `No lineage found for score ${scoreId}`,
+      });
+    }
+    return res.json({ lineage });
+  } catch (error) {
+    logger.error("Failed to fetch score lineage", { error, scoreId });
+    return res.status(500).json({ error: "failed_to_fetch_score_lineage" });
+  }
+});
+
+/**
+ * @openapi
  * /api/admin/scoring/models:
  *   get:
  *     summary: Retrieve active risk scoring model configuration and shadow mode evaluation metrics
@@ -797,3 +1074,48 @@ adminRouter.post(
     }
   }
 );
+
+// ── Business-day calendar (issue #980) ───────────────────────────────────
+// Per-country bank holidays used to move payment cutoffs off non-business
+// days. Changes apply on the next cutoff check, no deploy needed.
+
+function sendCalendarError(res: Response, error: unknown, fallback: string) {
+  if (error instanceof CalendarValidationError) {
+    return res.status(400).json({ error: "invalid_request", field: error.field, message: error.message });
+  }
+  logger.error(fallback, { error });
+  return res.status(500).json({ error: fallback });
+}
+
+adminRouter.get("/calendar/holidays", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const country = typeof req.query.country === "string" ? req.query.country : undefined;
+    return res.json({ holidays: await listHolidays(country) });
+  } catch (error) {
+    return sendCalendarError(res, error, "failed_to_list_holidays");
+  }
+});
+
+adminRouter.post("/calendar/holidays", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const holiday = await addHoliday({
+      country: req.body?.country,
+      date: req.body?.date,
+      name: req.body?.name,
+      createdBy: req.user?.walletAddress ?? "admin-api-key",
+    });
+    return res.status(201).json({ holiday });
+  } catch (error) {
+    return sendCalendarError(res, error, "failed_to_add_holiday");
+  }
+});
+
+adminRouter.delete("/calendar/holidays/:country/:date", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const removed = await removeHoliday(String(req.params.country), String(req.params.date));
+    if (!removed) return res.status(404).json({ error: "holiday_not_found" });
+    return res.status(204).send();
+  } catch (error) {
+    return sendCalendarError(res, error, "failed_to_remove_holiday");
+  }
+});

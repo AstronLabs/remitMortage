@@ -12,6 +12,9 @@ import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import UnsavedChangesDialog from "@/components/forms/UnsavedChangesDialog";
 import { onboardingSchema, STEP_FIELDS, type OnboardingFormValues } from "@/lib/onboardingSchema";
 import ProgressStepper from "./ProgressStepper";
+import ApplicationResumeBanner from "./ApplicationResumeBanner";
+import { useApplicationProgressSync } from "@/hooks/useApplicationProgressSync";
+import type { SavedApplicationProgress } from "@/lib/applicationProgressApi";
 import DocumentChecklist from "./DocumentChecklist";
 import type { LoanType } from "@/lib/document-checklist";
 import { toast } from "react-hot-toast";
@@ -23,6 +26,7 @@ import {
   readPersistedReferralCode,
   REFERRAL_QUERY_PARAM,
 } from "@/lib/referralApi";
+import { Illustration } from "@/components/illustrations/Illustration";
 
 const STEPS = ["Connect Wallet", "Verify History", "Set Goal", "Documents", "Submit Application"];
 const FIELD_STEPS: Record<keyof OnboardingFormValues, number> = {
@@ -31,6 +35,8 @@ const FIELD_STEPS: Record<keyof OnboardingFormValues, number> = {
   savingsDuration: 3,
   firstDepositAmount: 5,
 };
+
+const LOAN_TYPES: readonly LoanType[] = ["purchase", "construction"];
 
 const FIELD_LABELS: Record<keyof OnboardingFormValues, string> = {
   recipientAddress: "Recipient's Stellar wallet address",
@@ -48,6 +54,7 @@ export default function OnboardingWizard() {
 
   // State from Zustand store (persisted across reloads).
   const step = useOnboardingState((s) => s.step);
+  const furthestStep = useOnboardingState((s) => s.furthestStep ?? s.step);
   const isVerified = useOnboardingState((s) => s.isVerified);
 
   // Local component state
@@ -105,6 +112,29 @@ export default function OnboardingWizard() {
       },
     }
   );
+
+  // Server-side save point (issue #1110): progress is saved to the applicant's
+  // account on every step change so it can be resumed on any device.
+  const applyServerProgress = (saved: SavedApplicationProgress) => {
+    const data = saved.data;
+    for (const field of Object.keys(FIELD_LABELS) as (keyof OnboardingFormValues)[]) {
+      const value = data[field];
+      if (typeof value === "string" || typeof value === "number") {
+        setValue(field, value as never, { shouldDirty: false });
+      }
+    }
+    if (typeof data.isVerified === "boolean") store.getState().setIsVerified(data.isVerified);
+    if (LOAN_TYPES.includes(data.loanType as LoanType)) setLoanType(data.loanType as LoanType);
+    store.getState().setStep(Math.min(Math.max(saved.step, 1), STEPS.length));
+  };
+
+  const progressSync = useApplicationProgressSync({
+    address: publicKey,
+    step,
+    totalSteps: STEPS.length,
+    getData: () => ({ ...getValues(), isVerified: store.getState().isVerified, loanType }),
+    onResume: applyServerProgress,
+  });
 
   // Warn before the tab is closed or the page is left with unsaved edits; the
   // dialog offers to save the autosave draft immediately.
@@ -283,6 +313,7 @@ export default function OnboardingWizard() {
       toast.dismiss();
       toast.success("Loan application submitted. Redirecting to Escrow Dashboard...");
       clearDraft(); // Clear autosaved data on successful submission
+      await progressSync.clear();
       store.getState().reset();
       await allowNavigation(); // submitted: nothing left to lose, so never prompt
       router.push("/dashboard");
@@ -386,6 +417,10 @@ export default function OnboardingWizard() {
       case 1: // Connect Wallet
         return (
           <div className="text-center space-y-6">
+            <Illustration
+              name="onboarding-connect-wallet"
+              className="w-full max-w-[180px] mx-auto"
+            />
             <div>
               <h3 className="text-xl font-bold text-white mb-2">Connect Freighter Wallet</h3>
               <p className="text-xs text-slate-400">
@@ -568,6 +603,10 @@ export default function OnboardingWizard() {
       case 4: // Required loan documents
         return (
           <div className="space-y-5">
+            <Illustration
+              name="onboarding-documents"
+              className="w-full max-w-[180px] mx-auto"
+            />
             <label className="block text-xs text-slate-300 font-semibold">
               Loan purpose
               <select
@@ -722,7 +761,38 @@ export default function OnboardingWizard() {
           </div>
         </div>
       )}
+      {progressSync.status === "resume-available" && progressSync.savedProgress && (
+        <ApplicationResumeBanner
+          progress={progressSync.savedProgress}
+          stepLabels={STEPS}
+          onResume={() => {
+            progressSync.resume();
+            toast.success("Application resumed where you left off.");
+          }}
+          onStartOver={progressSync.startOver}
+        />
+      )}
+      {progressSync.status === "sign-in-required" && (
+        <div className="p-4 bg-slate-800/60 border border-slate-700 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <p className="text-slate-300 text-xs leading-relaxed">
+            Sign in with your wallet to save your progress and pick it up on any device.
+          </p>
+          <button
+            type="button"
+            onClick={async () => {
+              if (await authenticateApplicant()) await progressSync.reload();
+            }}
+            className="btn-outline text-xs !py-2 !px-4 shrink-0"
+          >
+            Sign in to sync
+          </button>
+        </div>
+      )}
       <ProgressStepper steps={STEPS} currentStep={step} />
+      <p className="text-xs text-slate-400" aria-live="polite">
+        Step {step} of {STEPS.length}
+        {progressSync.lastSavedAt ? " · Progress saved to your account" : ""}
+      </p>
       <div>{renderStepContent()}</div>
       <div className="flex justify-between border-t border-slate-800/80 pt-5">
         <button

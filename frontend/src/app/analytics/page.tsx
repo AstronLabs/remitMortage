@@ -108,6 +108,7 @@ interface VolumeData {
 
 export default function AnalyticsPage() {
   const { dataSaver } = useDataSaver();
+  const chartDirection = useChartDirection();
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [loanPerformance, setLoanPerformance] = useState<LoanPerformanceData[]>([]);
   const [volumeData, setVolumeData] = useState<VolumeData[]>([]);
@@ -381,7 +382,7 @@ export default function AnalyticsPage() {
                     <ResponsiveContainer width="100%" height="100%">
                       <AreaChart
                         data={volumeData}
-                        margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+                        margin={chartDirection.margin({ top: 10, right: 10, left: -20, bottom: 0 })}
                       >
                         <defs>
                           <linearGradient id="colorDeposits" x1="0" y1="0" x2="0" y2="1">
@@ -398,8 +399,14 @@ export default function AnalyticsPage() {
                           </linearGradient>
                         </defs>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
-                        <XAxis dataKey="month" stroke="#64748b" style={{ fontSize: "11px" }} />
+                        <XAxis
+                          dataKey="month"
+                          reversed={chartDirection.reversed}
+                          stroke="#64748b"
+                          style={{ fontSize: "11px" }}
+                        />
                         <YAxis
+                          orientation={chartDirection.yAxisOrientation}
                           stroke="#64748b"
                           style={{ fontSize: "11px" }}
                           tickFormatter={(tick) => `$${tick.toLocaleString()}`}
@@ -462,7 +469,7 @@ export default function AnalyticsPage() {
                       <ResponsiveContainer width="100%" height="100%">
                         <AreaChart
                           data={volumeData}
-                          margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+                          margin={chartDirection.margin({ top: 10, right: 10, left: -20, bottom: 0 })}
                         >
                           <defs>
                             <linearGradient id="colorDeposits" x1="0" y1="0" x2="0" y2="1">
@@ -479,8 +486,14 @@ export default function AnalyticsPage() {
                             </linearGradient>
                           </defs>
                           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
-                          <XAxis dataKey="month" stroke="#64748b" style={{ fontSize: "11px" }} />
+                          <XAxis
+                            dataKey="month"
+                            reversed={chartDirection.reversed}
+                            stroke="#64748b"
+                            style={{ fontSize: "11px" }}
+                          />
                           <YAxis
+                            orientation={chartDirection.yAxisOrientation}
                             stroke="#64748b"
                             style={{ fontSize: "11px" }}
                             tickFormatter={(tick) => `$${tick.toLocaleString()}`}
@@ -569,7 +582,7 @@ export default function AnalyticsPage() {
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie
-                            data={loanPerformance}
+                            data={chartDirection.isRtl ? [...loanPerformance].reverse() : loanPerformance}
                             cx="50%"
                             cy="50%"
                             innerRadius={65}
@@ -746,7 +759,7 @@ export default function AnalyticsPage() {
                                 </code>
                               </p>
                             </div>
-                            <div className="text-right text-xs whitespace-nowrap text-[var(--text-muted)] self-center">
+                            <div className="text-end text-xs whitespace-nowrap text-[var(--text-muted)] self-center">
                               <time dateTime={activity.timestamp}>
                                 {new Date(activity.timestamp).toLocaleTimeString([], {
                                   hour: "2-digit",

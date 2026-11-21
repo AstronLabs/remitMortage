@@ -3,6 +3,13 @@
 
 #![no_std]
 
+#[cfg(test)]
+#[path = "../../storage_key_check.rs"]
+mod storage_key_check;
+
+#[cfg(test)]
+mod test_storage_keys;
+
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, Vec};
 
 mod errors;
@@ -289,12 +296,17 @@ impl StellarBridgeAdapter {
 
         let delay = Self::read_cap_change_delay(&env);
         let execute_after = env.ledger().sequence() + delay;
-        let pending = PendingCapIncrease { new_cap, execute_after };
+        let pending = PendingCapIncrease {
+            new_cap,
+            execute_after,
+        };
         env.storage()
             .instance()
             .set(&DataKey::PendingCapIncrease(source_chain.clone()), &pending);
-        env.events()
-            .publish((symbol_short!("cap_prop"), source_chain), (new_cap, execute_after));
+        env.events().publish(
+            (symbol_short!("cap_prop"), source_chain),
+            (new_cap, execute_after),
+        );
         Ok(execute_after)
     }
 
@@ -333,7 +345,9 @@ impl StellarBridgeAdapter {
     pub fn set_cap_change_delay(env: Env, admin: Address, delay_ledgers: u32) {
         Self::require_admin(&env, &admin);
         admin.require_auth();
-        env.storage().instance().set(&DataKey::CapChangeDelay, &delay_ledgers);
+        env.storage()
+            .instance()
+            .set(&DataKey::CapChangeDelay, &delay_ledgers);
     }
 
     /// Current daily mint-volume cap for `source_chain` (0 = uncapped).
@@ -348,7 +362,9 @@ impl StellarBridgeAdapter {
 
     /// Pending cap increase for `source_chain`, if any.
     pub fn get_pending_cap_increase(env: Env, source_chain: Symbol) -> Option<PendingCapIncrease> {
-        env.storage().instance().get(&DataKey::PendingCapIncrease(source_chain))
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingCapIncrease(source_chain))
     }
 
     /// Get the current bridge configuration.
@@ -509,7 +525,11 @@ impl StellarBridgeAdapter {
     /// the window to or past 80% of the cap, and again at 100%; rejects —
     /// without recording any volume, so a rejected mint can be retried once
     /// there's room — a mint that would exceed the cap.
-    fn check_and_record_volume(env: &Env, source_chain: &Symbol, amount: i128) -> Result<(), BridgeError> {
+    fn check_and_record_volume(
+        env: &Env,
+        source_chain: &Symbol,
+        amount: i128,
+    ) -> Result<(), BridgeError> {
         let cap = Self::read_daily_cap(env, source_chain);
         if cap <= 0 {
             return Ok(());

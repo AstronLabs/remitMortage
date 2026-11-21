@@ -4,6 +4,7 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
+import CopyValueButton from "@/components/CopyValueButton";
 import {
   createStatementMetadata,
   downloadStatementCsv,
@@ -376,6 +377,7 @@ export default function PayoutHistoryClient() {
                       </td>
                       <td className="px-6 py-4 font-mono text-xs text-slate-400 truncate max-w-[150px]">
                         {payout.escrowContract.slice(0, 8)}…{payout.escrowContract.slice(-6)}
+                        <CopyValueButton value={payout.escrowContract} label="escrow contract ID" />
                       </td>
                       <td className="px-6 py-4 font-mono text-xs">
                         <a
@@ -386,6 +388,7 @@ export default function PayoutHistoryClient() {
                         >
                           {payout.txHash.slice(0, 8)}…
                         </a>
+                        <CopyValueButton value={payout.txHash} label="transaction hash" />
                       </td>
                     </tr>
                   ))

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 /**
  * CID tracker — persists a record for every CID pinned by the application.
  *

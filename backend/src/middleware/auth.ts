@@ -6,11 +6,14 @@ import jwt from "jsonwebtoken";
 import { verifySessionToken } from "../services/jwtKeyRing.js";
 import { loadConfig } from "../config.js";
 import { IMPERSONATION_COOKIE, isImpersonationSessionActive } from "../services/impersonation.js";
+import { tenantRateLimitMiddleware } from "./tenantRateLimit.js";
+import { isSessionActive, touchSession } from "../services/userSessions.js";
 
 export interface AuthenticatedRequest extends Request {
   user?: {
     walletAddress: string;
     network: string;
+    sessionId?: string;
     /**
      * SHA-256 fingerprint of the device public key this session is bound to,
      * from the token's `dbk` claim (issue #886). Undefined on an unbound
@@ -79,12 +82,12 @@ export async function authMiddleware(req: AuthenticatedRequest, res: Response, n
       }
 
       req.user = decoded;
-      next();
-      return;
     } catch (err) {
       res.status(401).json({ error: "unauthorized", message: "Invalid or expired impersonation session" });
       return;
     }
+    tenantRateLimitMiddleware(req, res, next);
+    return;
   }
 
   // Accept token from HTTP-only cookie or Authorization: Bearer <token> header
@@ -102,13 +105,25 @@ export async function authMiddleware(req: AuthenticatedRequest, res: Response, n
     const decoded = verifySessionToken(token) as {
       walletAddress: string;
       network: string;
+      sid?: string;
+      sessionId?: string;
     };
-    req.user = { ...decoded, deviceFingerprint: deviceFingerprintOf(decoded) };
-    next();
+    const sid = decoded.sid ?? decoded.sessionId;
+    if (sid && !isSessionActive(sid)) {
+      res.status(401).json({
+        error: "SESSION_REVOKED",
+        code: "SESSION_REVOKED",
+        message: "This session has been revoked",
+      });
+      return;
+    }
+    if (sid) touchSession(sid);
+    req.user = { ...decoded, sessionId: sid, deviceFingerprint: deviceFingerprintOf(decoded) };
   } catch (err) {
     res.status(401).json({ error: "unauthorized", message: "Invalid or expired token" });
     return;
   }
+  tenantRateLimitMiddleware(req, res, next);
 }
 
 /** Populate a verified wallet identity when present, without requiring login. */
@@ -128,7 +143,7 @@ export function optionalAuthMiddleware(
       // Public endpoints remain available to anonymous callers.
     }
   }
-  next();
+  tenantRateLimitMiddleware(req, _res, next);
 }
 
 /**
@@ -144,7 +159,7 @@ export function requireAdmin(req: AuthenticatedRequest, res: Response, next: Nex
   // require a wallet identity.
   if (bearer && bearer === adminApiKey) {
     req.adminAuth = { via: "api_key" };
-    next();
+    tenantRateLimitMiddleware(req, res, next);
     return;
   }
 
@@ -173,9 +188,9 @@ export function requireAdmin(req: AuthenticatedRequest, res: Response, next: Nex
       return;
     }
 
-    next();
   } catch (err) {
     res.status(401).json({ error: "unauthorized", message: "Invalid or expired token" });
     return;
   }
+  tenantRateLimitMiddleware(req, res, next);
 }

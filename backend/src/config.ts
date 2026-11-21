@@ -109,6 +109,11 @@ export interface Config {
   rpcHealthCheckIntervalMs: number;
   /** Per-status SLA window in hours for loan applications. */
   applicationSlaHours: Record<string, number>;
+  /**
+   * Hours an application may sit in a single review stage before the
+   * stuck-stage alert fires. Overridable per scan from the admin endpoint.
+   */
+  reviewStageStuckThresholdHours: number;
   /** Fallback recipient email for ops SLA alerts. */
   opsFallbackAlertEmail: string;
   /** Incoming Slack webhook URL for ops SLA alerts. */
@@ -123,6 +128,8 @@ export interface Config {
   borrowerRecordRetentionDays: number;
   /** Compliance-reviewed retention window for soft-deleted loan applications. */
   loanRecordRetentionDays: number;
+  /** Days a computed score's data-lineage record is kept before it is purged. */
+  scoreLineageRetentionDays: number;
   /** Days of inactivity before a Draft loan application is flagged as stale and the applicant notified. */
   draftStaleThresholdDays: number;
   /** Days after a stale notice before an unresumed Draft is soft-deleted (expired). */
@@ -342,6 +349,10 @@ export function loadConfig(): Config {
       10
     ),
     applicationSlaHours: parseApplicationSlaHours(process.env.APPLICATION_SLA_HOURS),
+    reviewStageStuckThresholdHours: parseInt(
+      process.env.REVIEW_STAGE_STUCK_THRESHOLD_HOURS || "72",
+      10
+    ),
     opsFallbackAlertEmail:
       process.env.OPS_FALLBACK_ALERT_EMAIL ||
       process.env.ALERT_DEFAULT_RECIPIENT ||
@@ -363,6 +374,10 @@ export function loadConfig(): Config {
     ),
     loanRecordRetentionDays: parseInt(
       process.env.LOAN_RECORD_RETENTION_DAYS || "2555",
+      10
+    ),
+    scoreLineageRetentionDays: parseInt(
+      process.env.SCORE_LINEAGE_RETENTION_DAYS || "365",
       10
     ),
     draftStaleThresholdDays: parseInt(

@@ -19,7 +19,12 @@ import { decryptBuffer } from "../services/kmsEncryption.js";
 import { issueKycAccessToken, verifyKycAccessToken } from "../services/kycAccessToken.js";
 import { extractKycFields } from "../services/ocrService.js";
 import { analyzeAndRecordDocument } from "../services/kycDocumentForensics.js";
-import { verifyEmployment, getEmploymentVerificationStatus } from "../services/employmentVerification.js";
+import {
+  verifyEmployment,
+  verifyEmploymentSources,
+  getEmploymentVerificationStatus,
+  MAX_INCOME_SOURCES,
+} from "../services/employmentVerification.js";
 import {
   createOcrResult,
   getOcrResult,
@@ -674,7 +679,10 @@ kycRouter.get("/:documentId/decrypt", requireOperatorKey, async (req: Request, r
  *       Attempts automated employment and income verification through the
  *       configured payroll provider. Falls back to manual document review
  *       (never blocking the applicant) when the employer isn't covered or
- *       the provider is unavailable.
+ *       the provider is unavailable. Pass `sources` instead of `employerName`
+ *       to verify several income sources in one request (issue #1108); each
+ *       source is verified independently and the response carries a combined
+ *       verified monthly income.
  *     tags:
  *       - KYC
  *     parameters:
@@ -690,11 +698,20 @@ kycRouter.get("/:documentId/decrypt", requireOperatorKey, async (req: Request, r
  *             type: object
  *             properties:
  *               employerName: { type: string }
+ *               sources:
+ *                 type: array
+ *                 maxItems: 10
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     employerName: { type: string }
  *     responses:
  *       200:
- *         description: Verification outcome (VERIFIED, NOT_COVERED, or FAILED).
+ *         description: >-
+ *           Verification outcome (VERIFIED, NOT_COVERED, or FAILED), or for a
+ *           multi-source request, per-source outcomes plus combinedVerifiedMonthlyIncome.
  *       400:
- *         description: Missing employerName.
+ *         description: Missing employerName, or an invalid sources list.
  *       403:
  *         description: Authenticated wallet does not match the path address.
  */
@@ -711,7 +728,42 @@ kycRouter.post(
       return;
     }
 
-    const { employerName } = req.body ?? {};
+    const { employerName, sources } = req.body ?? {};
+
+    if (sources !== undefined) {
+      const valid =
+        Array.isArray(sources) &&
+        sources.length > 0 &&
+        sources.length <= MAX_INCOME_SOURCES &&
+        sources.every(
+          (s: unknown) =>
+            !!s && typeof (s as { employerName?: unknown }).employerName === "string" &&
+            (s as { employerName: string }).employerName.length > 0
+        );
+      if (!valid) {
+        res.status(400).json({
+          error: "invalid_sources",
+          message: `sources must be a list of 1-${MAX_INCOME_SOURCES} entries, each with an employerName.`,
+        });
+        return;
+      }
+
+      try {
+        const outcome = await verifyEmploymentSources(
+          address,
+          sources.map((s: { employerName: string }) => s.employerName)
+        );
+        res.status(200).json(outcome);
+      } catch (error) {
+        logger.error("[KYC] Multi-source employment verification error", { error, address });
+        res.status(500).json({
+          error: "employment_verification_failed",
+          message: (error as Error).message || "Failed to verify employment.",
+        });
+      }
+      return;
+    }
+
     if (!employerName || typeof employerName !== "string") {
       res.status(400).json({ error: "missing_field", message: "employerName is required." });
       return;

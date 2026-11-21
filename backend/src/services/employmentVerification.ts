@@ -41,7 +41,15 @@ export async function verifyEmployment(
   employerName: string
 ): Promise<EmploymentVerificationOutcome> {
   const applicant = await upsertApplicant(stellarAddress, {});
+  return verifySource(applicant, stellarAddress, employerName);
+}
 
+/** Verifies one income source for an already-resolved applicant — the single-source flow's body. */
+async function verifySource(
+  applicant: { id: string },
+  stellarAddress: string,
+  employerName: string
+): Promise<EmploymentVerificationOutcome> {
   const result = await requestPayrollVerification({ applicantAddress: stellarAddress, employerName });
 
   if (result.error) {
@@ -98,6 +106,57 @@ export async function verifyEmployment(
     verifiedMonthlyIncome: result.verifiedMonthlyIncome,
     verifiedAt: verifiedAt.toISOString(),
     message: "Employment and income verified automatically.",
+  };
+}
+
+/** Upper bound on income sources per request, so one call can't fan out unbounded provider requests. */
+export const MAX_INCOME_SOURCES = 10;
+
+export interface MultiSourceEmploymentVerificationOutcome {
+  sources: EmploymentVerificationOutcome[];
+  /** Sum of every automatically verified source's monthly income — the figure used for scoring. */
+  combinedVerifiedMonthlyIncome: number;
+  verifiedSourceCount: number;
+  /** Sources that fell back to manual document review (NOT_COVERED or FAILED). */
+  manualReviewSourceCount: number;
+}
+
+/**
+ * Verifies several income sources (issue #1108) — e.g. two part-time jobs, or
+ * a job plus freelance income — in one request. Each source runs independently
+ * through the same path as `verifyEmployment`, so a source that falls back to
+ * manual review (or even throws unexpectedly) never blocks the others from
+ * completing automatically. Outcomes are returned in request order.
+ */
+export async function verifyEmploymentSources(
+  stellarAddress: string,
+  employerNames: string[]
+): Promise<MultiSourceEmploymentVerificationOutcome> {
+  const applicant = await upsertApplicant(stellarAddress, {});
+
+  const settled = await Promise.allSettled(
+    employerNames.map((employerName) => verifySource(applicant, stellarAddress, employerName))
+  );
+
+  const sources = settled.map((entry): EmploymentVerificationOutcome =>
+    entry.status === "fulfilled"
+      ? entry.value
+      : {
+          status: "FAILED",
+          method: "MANUAL_DOCUMENT",
+          employerName: null,
+          verifiedMonthlyIncome: null,
+          verifiedAt: null,
+          message: FAILED_MESSAGE,
+        }
+  );
+
+  const verified = sources.filter((s) => s.status === "VERIFIED");
+  return {
+    sources,
+    combinedVerifiedMonthlyIncome: verified.reduce((sum, s) => sum + (s.verifiedMonthlyIncome ?? 0), 0),
+    verifiedSourceCount: verified.length,
+    manualReviewSourceCount: sources.length - verified.length,
   };
 }
 

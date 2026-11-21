@@ -9,6 +9,7 @@ import logger from "../utils/logger.js";
 import { analyzeRemittanceHistory } from "../services/stellar.js";
 import { hashReportContent, streamVerificationPdf, VerificationReport } from "../services/pdf.js";
 import { calculateCreditScore } from "../services/scoring.js";
+import { buildScoreLineageRecord } from "../services/scoreLineage.js";
 import { validateVerificationBody, validateWalletAddress, validateMultiChainOwnership } from "../middleware/validate.js";
 import {
   verificationChallengeRateLimiter,
@@ -30,6 +31,12 @@ import {
   LocationCheckResult,
 } from "../services/locationAnomalyService.js";
 import { logAudit } from "../services/audit.js";
+import {
+  TRUSTED_DEVICE_COOKIE,
+  getTrustPeriodDays,
+  isTrustedDevice,
+  trustDevice,
+} from "../services/trustedDevices.js";
 import { sendEmail, getBrandedHtml } from "../services/email.js";
 
 /**
@@ -152,6 +159,7 @@ verificationRouter.post("/check", validateVerificationBody, async (req, res) => 
     // Persist applicant and verification result — non-blocking on failure
     try {
       const { score, modelVersion, breakdown, reasons } = calculateCreditScore(analysis);
+      const lineage = buildScoreLineageRecord({ analysis, score, modelVersion });
       const applicant = await upsertApplicant(senderAddress, {
         verificationStatus: analysis.eligible ? "ELIGIBLE" : "INELIGIBLE",
         creditScore: score,
@@ -167,6 +175,11 @@ verificationRouter.post("/check", validateVerificationBody, async (req, res) => 
         modelVersion,
         scoreBreakdown: breakdown,
         scoreReasons: reasons,
+        lineage: {
+          inputs: lineage.inputs,
+          computedAt: lineage.computedAt,
+          expiresAt: lineage.expiresAt,
+        },
       });
     } catch (dbErr) {
       console.error("DB persist error (non-fatal):", dbErr);
@@ -400,7 +413,20 @@ verificationRouter.post("/verify-ownership", verificationOwnershipRateLimiter, v
   const clientIp = (req.headers["x-forwarded-for"] as string) || req.ip || "127.0.0.1";
   const locationCheck = await evaluateLoginLocation(walletAddress, clientIp);
 
-  if (locationCheck.requiresStepUp) {
+  // A device the user trusted after a previous step-up (issue #1105) skips
+  // the location step-up until its trust period expires or it is revoked.
+  const trustedDevice =
+    locationCheck.requiresStepUp && isTrustedDevice(walletAddress, req.cookies?.[TRUSTED_DEVICE_COOKIE]);
+  if (trustedDevice) {
+    await logAudit({
+      action: "login.stepup.skipped_trusted_device",
+      actorAddress: walletAddress,
+      ipAddress: clientIp,
+      metadata: { reason: locationCheck.reason },
+    });
+  }
+
+  if (locationCheck.requiresStepUp && !trustedDevice) {
     const stepUpCode = generateStepUpCode(walletAddress);
     await notifyLoginAnomaly(walletAddress, clientIp, locationCheck);
     res.status(202).json({
@@ -431,7 +457,7 @@ verificationRouter.post("/verify-ownership", verificationOwnershipRateLimiter, v
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
   });
 
-  res.json({ verified: true, walletAddress, network, stepUpRequired: false });
+  res.json({ verified: true, walletAddress, network, stepUpRequired: false, trustedDevice });
 });
 
 /**
@@ -454,6 +480,11 @@ verificationRouter.post("/verify-ownership", verificationOwnershipRateLimiter, v
  *                 type: string
  *               code:
  *                 type: string
+ *               trustDevice:
+ *                 type: boolean
+ *                 description: >-
+ *                   Mark this device as trusted so later logins from it skip
+ *                   step-up verification for the admin-configured trust period.
  *     responses:
  *       200:
  *         description: Step-up verification successful and session token granted.
@@ -461,7 +492,7 @@ verificationRouter.post("/verify-ownership", verificationOwnershipRateLimiter, v
  *         description: Invalid or expired confirmation code.
  */
 verificationRouter.post("/step-up", async (req, res) => {
-  const { walletAddress, network, code } = req.body;
+  const { walletAddress, network, code, trustDevice: shouldTrustDevice } = req.body;
 
   if (!walletAddress || !code) {
     res.status(400).json({ error: "missing_field", message: "walletAddress and code are required" });
@@ -496,6 +527,30 @@ verificationRouter.post("/step-up", async (req, res) => {
     maxAge: 24 * 60 * 60 * 1000,
   });
 
-  res.json({ verified: true, walletAddress, network: network || "stellar", stepUpCompleted: true });
+  let trustedDeviceId: string | undefined;
+  if (shouldTrustDevice === true) {
+    const { token: deviceToken, device } = trustDevice(walletAddress, req.headers["user-agent"]);
+    trustedDeviceId = device.deviceId;
+    res.cookie(TRUSTED_DEVICE_COOKIE, deviceToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: getTrustPeriodDays() * 24 * 60 * 60 * 1000,
+    });
+    await logAudit({
+      action: "login.device.trusted",
+      actorAddress: walletAddress,
+      ipAddress: clientIp,
+      metadata: { deviceId: device.deviceId, expiresAt: device.expiresAt },
+    });
+  }
+
+  res.json({
+    verified: true,
+    walletAddress,
+    network: network || "stellar",
+    stepUpCompleted: true,
+    ...(trustedDeviceId ? { trustedDeviceId } : {}),
+  });
 });
 

@@ -6,13 +6,13 @@ RemitMortgage enables diaspora communities to leverage their verified remittance
 It's the bridge between consistent remittance behavior and real homeownership.
 
 ## Motivation
-Millions of people in the global diaspora send money home every month — consistently, reliably, for years. Yet this financial track record is invisible to traditional lenders. Banks don't recognize cross-border remittance history as proof of creditworthiness, leaving hardworking families locked out of property ownership in their home countries.
+Millions of people in the global diaspora send money home every month — consistently, reliably, for years. Yet this financial track record is invisible to traditional lenders. Banks don't recognize cross-border remittance history as proof of creditworthiness, leaving hardworking families locked out of property ownership in their home countries
 
 RemitMortgage makes remittance history count:
 
 *   **Prove Your Track Record:** Verify ownership of wallets used to send remittances and let the protocol analyze your Stellar payment history for consistency and reliability.
 *   **Save Toward Ownership:** Contribute 30% down payment over 6–12 months into a Soroban escrow contract, earning yield on pooled funds while you save.
-*   **Build With Accountability:** The remaining 70% is disbursed from a lending pool in milestone-based tranches to vetted contractors — gated by photo/video evidence on IPFS and multisig governance approval.
+*   **Build With Accountability:** The remaining 70% is disbursed from a lending pool in milestone-based tranches to vetted contractors — gated by photo/video evidence on IPFS and multisig governance Consent.
 
 ## Features
 *   **Remittance Verification** — Off-chain scoring service analyzes Stellar payment history for recurring amounts, regular intervals, and sustained sending patterns to establish borrower eligibility.

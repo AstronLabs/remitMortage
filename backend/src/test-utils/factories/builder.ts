@@ -77,6 +77,7 @@ export class Builder<T extends object> {
   /** Queue overrides; later calls win over earlier ones. Returns a new builder. */
   with(overrides: DeepPartial<T>): this {
     const next = Object.create(Object.getPrototypeOf(this)) as this;
+    // safe-merge-ok: test-only builder copying its own fields onto a fresh object
     Object.assign(next, this, { queued: [...this.queued, overrides] });
     return next;
   }

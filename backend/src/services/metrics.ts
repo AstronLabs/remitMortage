@@ -109,6 +109,47 @@ export const httpRequestsByVersionTotal = new Counter({
   registers: [metricsRegistry],
 });
 
+/**
+ * HTTP request body size in bytes, labelled by method and matched route
+ * template (never the raw URL, so ids cannot create new label values).
+ * Sizes are taken from the `Content-Length` header.
+ */
+export const httpRequestBodySizeBytes = new Histogram({
+  name: "remitmortgage_http_request_body_size_bytes",
+  help: "HTTP request body size in bytes.",
+  labelNames: ["method", "route"] as const,
+  buckets: [100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000],
+  registers: [metricsRegistry],
+});
+
+/**
+ * HTTP response body size in bytes, counted from the bytes actually written
+ * to the socket, labelled by method and matched route template.
+ */
+export const httpResponseBodySizeBytes = new Histogram({
+  name: "remitmortgage_http_response_body_size_bytes",
+  help: "HTTP response body size in bytes.",
+  labelNames: ["method", "route"] as const,
+  buckets: [100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000],
+  registers: [metricsRegistry],
+});
+
+// ---------------------------------------------------------------------------
+// Per-route latency budgets (issue #988)
+// ---------------------------------------------------------------------------
+
+/**
+ * Requests that took longer than their route's latency budget. A non-zero
+ * rate is the signal behind the admin budget-violation summary; see
+ * `services/latencyBudgetMonitor.ts` and `config/routeLatencyBudgets.ts`.
+ */
+export const routeLatencyBudgetExceededTotal = new Counter({
+  name: "remitmortgage_route_latency_budget_exceeded_total",
+  help: "Requests that exceeded the latency budget for their method and route.",
+  labelNames: ["method", "route"] as const,
+  registers: [metricsRegistry],
+});
+
 // ---------------------------------------------------------------------------
 // Indexer / event-listener metrics
 // ---------------------------------------------------------------------------
@@ -249,6 +290,34 @@ export const schedulerJobsTotal = new Counter({
   registers: [metricsRegistry],
 });
 
+/**
+ * Current number of waiting jobs per priority lane (issue #985). A growing
+ * `low` depth with a flat `high` depth is normal bulk work; a growing `high`
+ * depth is an alert.
+ */
+export const queueLaneDepth = new Gauge({
+  name: "remitmortgage_queue_lane_depth",
+  help: "Number of waiting background jobs per priority lane.",
+  labelNames: ["lane"] as const,
+  registers: [metricsRegistry],
+});
+
+/** Age of the oldest waiting job in each priority lane, in seconds. */
+export const queueLaneOldestWaitSeconds = new Gauge({
+  name: "remitmortgage_queue_lane_oldest_wait_seconds",
+  help: "Age of the oldest waiting job in each priority lane.",
+  labelNames: ["lane"] as const,
+  registers: [metricsRegistry],
+});
+
+/** Mean wait time across the sampled waiting jobs in each priority lane, in seconds. */
+export const queueLaneAvgWaitSeconds = new Gauge({
+  name: "remitmortgage_queue_lane_avg_wait_seconds",
+  help: "Mean wait time of waiting jobs in each priority lane.",
+  labelNames: ["lane"] as const,
+  registers: [metricsRegistry],
+});
+
 // ---------------------------------------------------------------------------
 // API key quota metrics
 // ---------------------------------------------------------------------------
@@ -261,6 +330,26 @@ export const apiKeyQuotaExceededTotal = new Counter({
   name: "remitmortgage_apikey_quota_exceeded_total",
   help: "Total API requests rejected for exceeding the caller's per-billing-period quota.",
   labelNames: ["plan"] as const,
+  registers: [metricsRegistry],
+});
+
+// ---------------------------------------------------------------------------
+// Tenant request rate-limit metrics
+// ---------------------------------------------------------------------------
+
+/** Current request-window usage for each tenant and plan. */
+export const tenantRateLimitUsage = new Gauge({
+  name: "remitmortgage_tenant_rate_limit_usage",
+  help: "Authenticated requests used by each tenant in the current rate-limit window.",
+  labelNames: ["tenant_id", "plan"] as const,
+  registers: [metricsRegistry],
+});
+
+/** Requests rejected after exceeding a tenant's plan-based request budget. */
+export const tenantRateLimitExceededTotal = new Counter({
+  name: "remitmortgage_tenant_rate_limit_exceeded_total",
+  help: "Authenticated tenant requests rejected for exceeding the plan-based request budget.",
+  labelNames: ["tenant_id", "plan"] as const,
   registers: [metricsRegistry],
 });
 

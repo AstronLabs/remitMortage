@@ -15,6 +15,13 @@
 //! own — the payer always initiates the transfer, and reserves can only ever
 //! flow back out to a claim recipient chosen by the admin.
 
+#[cfg(test)]
+#[path = "../../storage_key_check.rs"]
+mod storage_key_check;
+
+#[cfg(test)]
+mod test_storage_keys;
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
     Vec,

@@ -25,7 +25,13 @@ import {
 } from "./slowQueryLog.js";
 import { configuredSecretId, secrets } from "./secretsManager.js";
 
-export type VerificationStatus = "PENDING" | "ELIGIBLE" | "INELIGIBLE";
+/**
+ * Applicant verification states, mirroring the Prisma `VerificationStatus`
+ * enum. Kept as a runtime list so `prismaEnumMirrors.test.ts` can assert the
+ * two never drift; the union below is derived from it.
+ */
+export const VERIFICATION_STATUSES = ["PENDING", "ELIGIBLE", "INELIGIBLE"] as const;
+export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];
 
 // ── Connection pool configuration ────────────────────────────────────────────
 //
@@ -271,6 +277,15 @@ export async function saveIndexerState(key: string, lastProcessedLedger: number,
     create: { key, lastProcessedLedger, cursor },
     update: { lastProcessedLedger, cursor },
   });
+}
+
+/** Borrower wallet behind an on-chain loan id (hex), or null when unknown. */
+export async function findBorrowerAddressByLoanId(loanId: string): Promise<string | null> {
+  const loan = await prisma.loanApplication.findFirst({
+    where: { loanId, deletedAt: null },
+    select: { applicant: { select: { stellarAddress: true } } },
+  });
+  return loan?.applicant?.stellarAddress ?? null;
 }
 
 export async function getBorrower(stellarAddress: string) {
@@ -564,8 +579,42 @@ export async function createVerificationResult(data: {
   modelVersion?: string;
   scoreBreakdown?: Record<string, number>;
   scoreReasons?: unknown;
+  /**
+   * When present, the score and its lineage are written in the same statement,
+   * so a stored score can never exist without its lineage (issue #982).
+   */
+  lineage?: {
+    inputs: Prisma.InputJsonValue;
+    computedAt: Date;
+    expiresAt: Date;
+  };
 }) {
-  return prisma.verificationResult.create({ data });
+  const { lineage, ...verificationResult } = data;
+
+  if (!lineage) {
+    return prisma.verificationResult.create({ data: verificationResult });
+  }
+
+  if (typeof data.score !== "number" || !data.modelVersion) {
+    throw new Error("score and modelVersion are required when recording score lineage");
+  }
+
+  return prisma.verificationResult.create({
+    data: {
+      ...verificationResult,
+      scoreLineage: {
+        create: {
+          applicantId: data.applicantId,
+          inputs: lineage.inputs,
+          score: data.score,
+          modelVersion: data.modelVersion,
+          computedAt: lineage.computedAt,
+          expiresAt: lineage.expiresAt,
+        },
+      },
+    },
+    include: { scoreLineage: true },
+  });
 }
 
 // ── LoanApplication ────────────────────────────────────────────────────────
@@ -608,7 +657,8 @@ export async function createLoanApplication(data: {
  * so this module doesn't require `prisma generate` to have run for a type
  * check — the two are interchangeable at the Prisma Client boundary.
  */
-export type NotificationFrequency = "IMMEDIATE" | "DAILY_DIGEST" | "WEEKLY_DIGEST";
+export const NOTIFICATION_FREQUENCIES = ["IMMEDIATE", "DAILY_DIGEST", "WEEKLY_DIGEST"] as const;
+export type NotificationFrequency = (typeof NOTIFICATION_FREQUENCIES)[number];
 
 export type NotificationPreferenceData = {
   email?: string;

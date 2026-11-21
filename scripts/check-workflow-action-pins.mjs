@@ -2,8 +2,10 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const workflowDir = path.resolve(".github/workflows");
+// Resolve relative to this script so it works from any working directory.
+const workflowDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.github/workflows");
 const trustedOwners = new Set([
   "actions", "anchore", "aquasecurity", "aws-actions", "codecov", "dawidd6",
   "dependabot", "docker", "dtolnay", "github", "hashicorp", "infracost",

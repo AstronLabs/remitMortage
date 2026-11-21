@@ -1,4 +1,6 @@
 "use client";
+
+import { EmptyState } from "@/components/EmptyState";
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
@@ -19,6 +21,7 @@ import PortfolioBreakdownChart from "../../components/PortfolioBreakdownChart";
 import InvestorRebalancingSuggestions from "../../components/investor/InvestorRebalancingSuggestions";
 import { computeConcentrationMetrics, type TrancheHolding } from "../../lib/investorRebalancing";
 import { useImpersonation } from "../../hooks/useImpersonation";
+import ConfirmationDialog from "../../components/ConfirmationDialog";
 import {
   LoadingRegion,
   PoolOverviewSkeleton,
@@ -101,7 +104,7 @@ function UtilizationGauge({ rate }: { rate: number }) {
       </div>
       <div className="w-full bg-slate-950 rounded-full h-2.5 border border-slate-800 overflow-hidden">
         <div
-          className="h-2.5 rounded-full bg-gradient-to-r from-cyan-400 to-indigo-500 transition-all duration-700"
+          className="h-2.5 rounded-full bg-gradient-to-r rtl:bg-gradient-to-l from-cyan-400 to-indigo-500 transition-all duration-700"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -139,9 +142,14 @@ function InvestPageInner() {
   const [depositError, setDepositError] = useState<string | null>(null);
   const [depositing, setDepositing] = useState(false);
   const [depositSuccess, setDepositSuccess] = useState(false);
+  const [pendingDeposit, setPendingDeposit] = useState<{
+    amount: number;
+    tranche: Tranche;
+  } | null>(null);
 
   const [withdrawing, setWithdrawing] = useState(false);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [pendingWithdrawal, setPendingWithdrawal] = useState(false);
 
   const [autoReinvest, setAutoReinvest] = useState(false);
   const [showAutoReinvestModal, setShowAutoReinvestModal] = useState(false);
@@ -222,29 +230,32 @@ function InvestPageInner() {
       return;
     }
 
-    const confirmed = confirm(
-      `Confirm deposit of ${formatUSDC(amount)} USDC into the ${selectedTranche} tranche?`
-    );
-    if (!confirmed) return;
+    setPendingDeposit({ amount, tranche: selectedTranche });
+  }
 
-    track("investment_started", { tranche: selectedTranche });
+  async function confirmDeposit() {
+    if (!pendingDeposit) return;
+    if (isReadOnly) throw new Error("Deposits are disabled while viewing this account read-only.");
+
+    const { amount, tranche } = pendingDeposit;
+    track("investment_started", { tranche });
     setDepositing(true);
     try {
       await new Promise((r) => setTimeout(r, 1000));
 
       setPosition((prev: InvestorPosition | null) => ({
         deposited: String((parseFloat(prev?.deposited ?? "0") + amount).toFixed(2)),
-        tranche: prev?.tranche ?? selectedTranche,
+        tranche: prev?.tranche ?? tranche,
         accruedYield: prev?.accruedYield ?? "0",
         startLedger: prev?.startLedger ?? 0,
       }));
 
-      setDepositAmount("");
+      setDepositAmount(null);
       setDepositSuccess(true);
-      track("investment_completed", { tranche: selectedTranche });
+      track("investment_completed", { tranche });
       setTimeout(() => setDepositSuccess(false), 5000);
-    } catch (err: any) {
-      setDepositError(err?.message || "Deposit transaction failed.");
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : "Deposit transaction failed.");
     } finally {
       setDepositing(false);
     }
@@ -289,18 +300,19 @@ function InvestPageInner() {
       }
     }
 
-    const confirmed = confirm(
-      `Withdraw your ${formatUSDC(position.deposited)} USDC from the ${position.tranche} tranche?`
-    );
-    if (!confirmed) return;
+    setPendingWithdrawal(true);
+  }
 
+  async function confirmWithdrawal() {
+    if (!pendingWithdrawal || !position) return;
+    if (isReadOnly) throw new Error("Withdrawals are disabled while viewing this account read-only.");
     setWithdrawing(true);
     try {
       await new Promise((r) => setTimeout(r, 800));
       setPosition({ deposited: "0", tranche: null, accruedYield: "0", startLedger: 0 });
       track("investment_withdrawal_completed");
-    } catch (err: any) {
-      setWithdrawError(err?.message || "Withdrawal failed.");
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : "Withdrawal failed.");
     } finally {
       setWithdrawing(false);
     }
@@ -518,14 +530,15 @@ function InvestPageInner() {
                     >
                       Deposit Amount (USDC)
                     </label>
-                    <input
+                    <CurrencyAmountInput
                       id="deposit-amount"
-                      type="number"
-                      min="1"
-                      step="0.01"
-                      placeholder="e.g. 5000"
+                      data-testid="deposit-amount"
+                      locale={locale}
                       value={depositAmount}
-                      onChange={(e) => setDepositAmount(e.target.value)}
+                      onChange={setDepositAmount}
+                      min={1}
+                      placeholder="e.g. 5000"
+                      currencyLabel="USDC"
                       className="input-field font-mono"
                     />
                   </div>
@@ -568,6 +581,8 @@ function InvestPageInner() {
 
                 {!isConnected ? (
                   <p className="text-xs text-slate-500">Connect wallet to view portfolio status.</p>
+                ) : position && Number(position.deposited) === 0 ? (
+                  <EmptyState title="No active investments" message="A pool deposit will appear in your position here." action={isReadOnly ? undefined : { label: "Make a deposit", href: "#deposit-amount" }} />
                 ) : position ? (
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-3">
@@ -767,6 +782,30 @@ function InvestPageInner() {
           />
         )}
       </main>
+
+      {pendingDeposit && (
+        <ConfirmationDialog
+          isOpen
+          title="Confirm USDC deposit"
+          description={`Deposit ${formatUSDC(pendingDeposit.amount)} USDC into the ${pendingDeposit.tranche} tranche. This submits a financial transaction and cannot be reversed after it is confirmed.`}
+          confirmationText="DEPOSIT"
+          confirmLabel="Deposit USDC"
+          onConfirm={confirmDeposit}
+          onCancel={() => setPendingDeposit(null)}
+        />
+      )}
+
+      {pendingWithdrawal && position && (
+        <ConfirmationDialog
+          isOpen
+          title="Confirm liquidity withdrawal"
+          description={`Withdraw ${formatUSDC(position.deposited)} USDC from the ${position.tranche} tranche. This changes your pool position and cannot be reversed after confirmation.`}
+          confirmationText="WITHDRAW"
+          confirmLabel="Withdraw USDC"
+          onConfirm={confirmWithdrawal}
+          onCancel={() => setPendingWithdrawal(false)}
+        />
+      )}
     </div>
   );
 }

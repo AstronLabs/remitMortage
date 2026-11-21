@@ -6,6 +6,13 @@ import { prisma } from "../services/db.js";
 import { requireScopedApiKey } from "../middleware/apiKeyAuth.js";
 import { exportRateLimiter, recordExportedRows } from "../middleware/exportRateLimit.js";
 import { apiKeyQuotaMiddleware } from "../middleware/apiKeyQuota.js";
+import { apiKeyRateLimiter } from "../middleware/apiKeyRateLimit.js";
+import {
+  getLongRunningStatementTimeoutMs,
+  isStatementTimeoutError,
+  runWithStatementTimeout,
+  StatementTimeoutError,
+} from "../services/statementTimeout.js";
 
 export const exportsRouter = Router();
 
@@ -13,10 +20,10 @@ const TRANSACTIONS_SCOPE = "export:transactions";
 const MAX_PAGE_SIZE = 5000;
 
 const TRANSACTION_SOURCES = {
-  deposits: () => prisma.escrowDeposit,
-  withdrawals: () => prisma.escrowWithdrawal,
-  disbursements: () => prisma.loanDisbursement,
-  repayments: () => prisma.loanRepayment,
+  deposits: (client: any) => client.escrowDeposit,
+  withdrawals: (client: any) => client.escrowWithdrawal,
+  disbursements: (client: any) => client.loanDisbursement,
+  repayments: (client: any) => client.loanRepayment,
 } as const;
 
 type TransactionType = keyof typeof TRANSACTION_SOURCES;
@@ -25,6 +32,9 @@ type TransactionType = keyof typeof TRANSACTION_SOURCES;
 exportsRouter.get(
   "/transactions",
   requireScopedApiKey(TRANSACTIONS_SCOPE),
+  // Plan-tiered request rate (issue #1106), checked before the request is
+  // metered against the billing-period quota.
+  apiKeyRateLimiter(),
   apiKeyQuotaMiddleware(),
   exportRateLimiter(TRANSACTIONS_SCOPE),
   async (req, res) => {
@@ -45,18 +55,42 @@ exportsRouter.get(
       });
     }
 
+    // Exports are a legitimately long-running job, so they run with an explicit
+    // statement timeout that overrides the interactive default for this
+    // transaction only (issue #1034).
+    const exportTimeoutMs = getLongRunningStatementTimeoutMs();
+
     try {
-      const delegate = TRANSACTION_SOURCES[type]() as unknown as {
-        findMany: (args: unknown) => Promise<unknown[]>;
-      };
-      const rows = await delegate.findMany({
-        where: { ledger: { gte: fromLedger } },
-        orderBy: [{ ledger: "asc" }, { id: "asc" }],
-        take: limit,
-      });
+      const rows = await runWithStatementTimeout(
+        prisma,
+        exportTimeoutMs,
+        async (tx) => {
+          const delegate = TRANSACTION_SOURCES[type](tx) as unknown as {
+            findMany: (args: unknown) => Promise<unknown[]>;
+          };
+          return delegate.findMany({
+            where: { ledger: { gte: fromLedger } },
+            orderBy: [{ ledger: "asc" }, { id: "asc" }],
+            take: limit,
+          });
+        },
+      );
       recordExportedRows(res, rows.length);
       return res.json({ type, count: rows.length, rows });
     } catch (error) {
+      if (isStatementTimeoutError(error)) {
+        const timeout =
+          error instanceof StatementTimeoutError
+            ? error
+            : new StatementTimeoutError(exportTimeoutMs);
+        res.setHeader("Retry-After", "1");
+        return res.status(timeout.statusCode).json({
+          error: timeout.code,
+          message: timeout.message,
+          retryable: timeout.retryable,
+          statusCode: timeout.statusCode,
+        });
+      }
       console.error("Transaction export error:", error);
       return res.status(500).json({ error: "export_failed" });
     }

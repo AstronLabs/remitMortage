@@ -1,4 +1,6 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 import React, { useEffect, useState } from "react";
 import toast from "react-hot-toast";
@@ -18,6 +20,16 @@ function formatCountdown(expiresAt: string | null): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+/** "4m 05s" style duration for the end-of-session confirmation. */
+export function formatSessionDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const ss = String(seconds).padStart(2, "0");
+  return hours > 0 ? `${hours}h ${String(minutes).padStart(2, "0")}m ${ss}s` : `${minutes}m ${ss}s`;
 }
 
 /**
@@ -41,8 +53,13 @@ export default function ImpersonationBanner() {
 
   async function handleEndSession() {
     try {
-      await endSession();
-      toast.success("Impersonation session ended.");
+      const durationMs = await endSession();
+      // The backend writes the matching audit entry (with duration) on /end.
+      toast.success(
+        durationMs === null
+          ? "Impersonation session ended."
+          : `Impersonation session ended after ${formatSessionDuration(durationMs)}.`
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to end session.");
     }
@@ -61,9 +78,13 @@ export default function ImpersonationBanner() {
             <Eye className="h-4 w-4 shrink-0" />
             Read-only support view
           </span>
-          <span className="text-sm text-rose-100">
-            Viewing as{" "}
-            <span className="font-mono font-semibold text-white">
+          <span className="text-sm text-rose-100" data-testid="impersonation-identities">
+            Admin{" "}
+            <span className="font-mono font-semibold text-white" title={status.adminAddress ?? undefined}>
+              {status.adminAddress ? shortenAddress(status.adminAddress) : "unknown admin"}
+            </span>{" "}
+            is viewing as{" "}
+            <span className="font-mono font-semibold text-white" title={status.targetAddress ?? undefined}>
               {status.targetAddress ? shortenAddress(status.targetAddress) : "unknown user"}
             </span>{" "}
             — all deposits, withdrawals, and approvals are disabled.
@@ -80,7 +101,7 @@ export default function ImpersonationBanner() {
             data-testid="end-impersonation-button"
             className="rounded-lg bg-white/20 px-3 py-1.5 text-xs font-semibold hover:bg-white/30 transition-colors disabled:opacity-50"
           >
-            {ending ? "Ending…" : "End Session"}
+            {ending ? "Ending…" : "Exit view"}
           </button>
         </div>
       </div>

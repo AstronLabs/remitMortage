@@ -236,6 +236,14 @@ pub struct PoolConfig {
     /// valid. A payoff executed within the window settles at exactly the
     /// quoted amount. `0` disables quoting (quotes cannot be created).
     pub payoff_quote_window_ledgers: u32,
+    /// Number of ledgers of inactivity after which an investor position is
+    /// reported as dormant by the read-only `is_investor_dormant`. The clock
+    /// is the investor's most recent deposit, withdrawal or claim.
+    ///
+    /// `0` — the deployment default — disables the report entirely (no
+    /// position is ever flagged), so existing behaviour is unchanged until an
+    /// admin opts in via `set_dormant_period_ledgers`.
+    pub dormant_period_ledgers: u32,
 }
 
 /// Tracks an individual investor's capital contribution.
@@ -586,10 +594,17 @@ pub enum FeatureKey {
     /// Absent until the investor makes their first deposit.
     /// Used to enforce `deposit_cooldown_ledgers`.
     InvestorLastDeposit(Address),
+    /// Ledger sequence of an investor's most recent deposit, withdrawal or
+    /// claim. Absent until the investor's first position-changing action.
+    /// Used to report dormant positions; kept separate from the
+    /// deposit-only `InvestorLastDeposit` so cooldown semantics are unaffected.
+    InvestorLastActivity(Address),
     /// Rate-lock snapshot stored when `request_refinance` is called.
     /// Cleared on successful `execute_refinance` or when superseded by a
     /// new request.  Keyed by loan ID.
     RefinanceRateLock(BytesN<32>),
+    /// Refinance fee rate and pool/treasury shares, all in basis points.
+    RefinanceFeeConfig,
     /// Address of the Governance contract used to gate
     /// `inject_emergency_liquidity`.  Absent until `set_governance_contract`
     /// is called by the admin.
@@ -677,6 +692,188 @@ pub enum FeatureKey {
     /// Ledgers that must elapse between proposing and executing wind-down.
     /// `0` disables the timelock (wind-down starts immediately).
     WindDownDelay,
+    /// Terms latched when a loan is created (original principal and starting
+    /// interest rate), keyed by loan ID. Used by the cumulative late-fee cap
+    /// and the adjustable-rate caps, which are both measured against the
+    /// loan's own origination terms rather than anything pool-wide.
+    LoanOriginTerms(BytesN<32>),
+    /// Admin-set maximum total a single borrower may repay within one ledger
+    /// day, in token stroops. Absent or zero disables the cap.
+    DailyRepaymentCap,
+    /// A borrower's running repayment total for the current ledger day.
+    BorrowerDailyRepaid(Address),
+    /// Admin-set maximum share of a tranche any one investor may hold, in
+    /// basis points. Absent or zero disables the cap.
+    MaxInvestorTrancheShareBps,
+    /// Admin-set maximum change, in basis points, a single rate adjustment
+    /// may make to a loan's rate. Absent or zero disables this cap.
+    RateAdjustPeriodicCapBps,
+    /// Admin-set maximum distance, in basis points, a loan's rate may move
+    /// from its own starting rate over its lifetime. Absent or zero disables
+    /// this cap.
+    RateAdjustLifetimeCapBps,
+    /// Admin-set ceiling on a loan's cumulative late fees, in basis points of
+    /// that loan's original principal. Absent or zero disables the cap.
+    LateFeeLifetimeCapBps,
+    /// Cumulative late fees charged on a loan so far, in token stroops.
+    /// Absent means zero.
+    LoanLateFeesCharged(BytesN<32>),
+    /// Minimum number of ledgers each new investor deposit must wait before
+    /// becoming eligible for withdrawal (`0` disables the grace window).
+    WithdrawalGraceLedgers,
+    /// Per-investor list of deposit lots still subject to a withdrawal grace
+    /// window so each deposit tracks eligibility independently.
+    InvestorDepositLots(Address),
+    /// Optional 32-byte SHA-256 hash referencing an off-chain promissory note
+    /// or servicing agreement for a loan. Hash-only (no document or URL).
+    LoanNoteHash(BytesN<32>),
+    /// Admin-configured pool utilization safety threshold in basis points
+    /// (0..=10_000). When non-zero, new loan originations are automatically
+    /// paused once pool utilization reaches or exceeds this threshold.
+    UtilizationPauseThresholdBps,
+    /// Latched automatic origination-pause flag triggered when pool
+    /// utilization reached or exceeded `UtilizationPauseThresholdBps`.
+    UtilizationAutoPaused,
+}
+
+/// Extension storage keys kept separate from [`FeatureKey`] so neither enum
+/// exceeds Soroban's 50-variant `#[contracttype]` enum limit.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum PoolExtKey {
+    /// Aggregate outstanding loan principal currently deployed out of the pool
+    /// (incremented on disbursement, decremented on principal repayment, refund,
+    /// or default write-off).
+    OutstandingPrincipal,
+    /// Active utilization-based kinked borrow rate curve configuration.
+    BorrowRateCurve,
+    /// Pending timelocked borrow rate curve change.
+    PendingRateCurve,
+    /// Pause-only guardian address separate from the pool admin.
+    PauseGuardian,
+    /// Cumulative fees paid on a loan (application + origination + protocol interest fees).
+    LoanFees(BytesN<32>),
+    /// Cumulative early-prepayment penalties paid on a loan.
+    LoanPrepayPenalties(BytesN<32>),
+    /// Cumulative rebates credited/paid on a loan (maturity rebate).
+    LoanRebates(BytesN<32>),
+    /// Authoritative final accounting closing statement stored when a loan is paid off.
+    LoanClosingStatement(BytesN<32>),
+}
+
+/// Single-ledger solvency snapshot of the lending pool, returned by
+/// `get_proof_of_reserves`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProofOfReserves {
+    /// Actual pool token balance currently held by this contract (`token.balance(pool)`).
+    pub token_balance: i128,
+    /// Net investor claims owed by the pool across senior and junior tranches
+    /// (`senior.total_deposited + junior.total_deposited`, already net of
+    /// absorbed default losses).
+    pub total_investor_claims: i128,
+    /// Outstanding loan principal currently deployed to borrowers (disbursed
+    /// principal minus repaid principal, refunds, and defaulted write-offs).
+    pub outstanding_loan_principal: i128,
+    /// Current reserves held by the configured `InsurancePool` contract (`0` if unset).
+    pub insurance_reserve: i128,
+    /// Coverage ratio in basis points (`10_000 = 100%`):
+    /// `((token_balance + outstanding_loan_principal + insurance_reserve) * 10_000) / total_investor_claims`
+    /// when `total_investor_claims > 0`, or `10_000` when `total_investor_claims == 0`.
+    pub coverage_ratio_bps: u32,
+    /// Ledger sequence at which all figures were atomically read.
+    pub ledger: u32,
+}
+
+/// Utilization-based kinked borrow rate curve parameters (all in basis points).
+///
+/// For pool utilization `u` in `0..=10_000`:
+/// - When `u <= optimal_utilization_bps`:
+///   `rate = base_rate_bps + (u * slope1_bps) / optimal_utilization_bps`
+///   (if `optimal_utilization_bps == 0`, `base_rate_bps` at `u == 0`, else `base_rate_bps + slope1_bps`).
+/// - When `u > optimal_utilization_bps`:
+///   `excess = u - optimal_utilization_bps`
+///   `max_excess = 10_000 - optimal_utilization_bps`
+///   `rate = base_rate_bps + slope1_bps + (excess * slope2_bps) / max_excess`.
+///
+/// The resulting rate is clamped to `[min_rate_bps, max_rate_bps]`.
+/// Setting `slope1_bps == 0` and `slope2_bps == 0` preserves a flat rate.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BorrowRateCurve {
+    /// Base annual borrow rate at 0% utilization, in basis points.
+    pub base_rate_bps: u32,
+    /// Target (kink) utilization point in basis points (`0..=10_000`, e.g. 8_000 = 80%).
+    pub optimal_utilization_bps: u32,
+    /// Rate increase across `0..=optimal_utilization_bps`, in basis points.
+    pub slope1_bps: u32,
+    /// Additional steep rate increase across `optimal_utilization_bps..=10_000`, in basis points.
+    pub slope2_bps: u32,
+    /// Interest rate floor in basis points.
+    pub min_rate_bps: u32,
+    /// Interest rate cap in basis points.
+    pub max_rate_bps: u32,
+}
+
+/// A pending timelocked update to the borrow rate curve.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingRateCurveChange {
+    /// The rate curve queued to take effect.
+    pub curve: BorrowRateCurve,
+    /// The ledger sequence after which this change may be executed.
+    pub execute_after: u32,
+}
+
+/// Authoritative final accounting closing statement emitted and stored when a
+/// loan is fully repaid.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoanClosingStatement {
+    /// Total principal repaid over the life of the loan.
+    pub total_principal: i128,
+    /// Total interest repaid over the life of the loan.
+    pub total_interest: i128,
+    /// Total fees paid on the loan (application fee + origination fees + protocol interest fees).
+    pub total_fees: i128,
+    /// Total penalties paid on the loan (late fees + early-prepayment penalty).
+    pub total_penalties: i128,
+    /// Total rebates paid/credited on the loan (e.g., maturity rebate).
+    pub total_rebates: i128,
+    /// Ledger sequence at which the loan reached `LoanStatus::Repaid`.
+    pub closing_ledger: u32,
+}
+
+/// One investor deposit lot tracked independently for the withdrawal grace window.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DepositGraceLot {
+    /// Principal deposited in this lot (token stroops).
+    pub amount: i128,
+    /// Ledger sequence at which this lot becomes eligible for withdrawal.
+    pub unlock_ledger: u32,
+}
+
+/// Terms a loan was originated with, latched at creation and never changed
+/// afterwards (restructures, prepayments and rate adjustments leave it as is).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoanOriginTerms {
+    /// Principal at origination.
+    pub original_principal: i128,
+    /// Interest rate at origination, in basis points.
+    pub starting_rate_bps: u32,
+}
+
+/// A borrower's repayments within one ledger day, used to enforce the
+/// per-borrower daily repayment cap.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DailyRepaymentWindow {
+    /// Ledger day (`ledger sequence / LEDGERS_PER_DAY`) the total belongs to.
+    pub day: u32,
+    /// Total repaid by the borrower during `day`.
+    pub repaid: i128,
 }
 
 /// Function groups that can be paused independently of the global pause.

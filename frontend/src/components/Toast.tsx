@@ -34,7 +34,7 @@ export function Toast({
   notification: ToastNotification;
   onDismiss: (id: string) => void;
 }) {
-  const { id, variant, title, message, duration } = notification;
+  const { id, variant, title, message, duration, action } = notification;
   const { icon: Icon, color } = VARIANT_STYLES[variant];
   const [paused, setPaused] = useState(false);
 
@@ -43,6 +43,11 @@ export function Toast({
     const timer = setTimeout(() => onDismiss(id), duration);
     return () => clearTimeout(timer);
   }, [id, duration, paused, onDismiss]);
+
+  function handleAction() {
+    action?.onAction();
+    onDismiss(id);
+  }
 
   return (
     <div
@@ -60,6 +65,15 @@ export function Toast({
           <p className="text-sm font-semibold text-[var(--text-primary)]">{title}</p>
           {message ? (
             <p className="mt-0.5 break-words text-xs text-[var(--text-secondary)]">{message}</p>
+          ) : null}
+          {action ? (
+            <button
+              type="button"
+              onClick={handleAction}
+              className="mt-2 inline-flex min-h-[36px] items-center rounded-[var(--radius-sm)] border border-[var(--border-color)] px-3 text-xs font-semibold text-[var(--text-primary)] transition-colors hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)]"
+            >
+              {action.label}
+            </button>
           ) : null}
         </div>
         <button

@@ -6,6 +6,11 @@ import {
   type RpcHealthAlert,
   type RpcLedgerProbe,
 } from "../services/rpcHealthMonitor";
+import {
+  getRpcDegradedState,
+  isRpcDegraded,
+  resetRpcDegradedState,
+} from "../services/rpcDegradedState";
 
 // Silence structured logging during the test run.
 jest.mock("../utils/logger", () => ({
@@ -52,6 +57,10 @@ function makeProber(state: Record<string, RpcLedgerProbe | Error>) {
 }
 
 describe("RpcHealthMonitor", () => {
+  beforeEach(() => {
+    resetRpcDegradedState();
+  });
+
   it("throws when constructed without any RPC URLs", () => {
     expect(() => new RpcHealthMonitor([])).toThrow(
       "At least one RPC URL must be provided"
@@ -185,6 +194,29 @@ describe("RpcHealthMonitor", () => {
 
     expect(monitor.getActiveUrl()).toBe(URL_A);
     expect(alerts.some((a) => a.type === "recovered")).toBe(true);
+  });
+
+  it("exposes an internal degraded flag that clears automatically on recovery", async () => {
+    const state: Record<string, RpcLedgerProbe | Error> = {
+      [URL_A]: new Error("connection refused"),
+    };
+    const monitor = new RpcHealthMonitor([URL_A], {
+      prober: makeProber(state),
+      alert: jest.fn(),
+    });
+
+    // Unknown before the first probe is not treated as degraded.
+    expect(isRpcDegraded()).toBe(false);
+
+    await monitor.checkOnce();
+    expect(isRpcDegraded()).toBe(true);
+    expect(getRpcDegradedState()).toMatchObject({ degraded: true });
+
+    state[URL_A] = healthyProbe(1000);
+    await monitor.checkOnce();
+
+    expect(isRpcDegraded()).toBe(false);
+    expect(getRpcDegradedState().degraded).toBe(false);
   });
 
   it("does not fire duplicate alerts while a node stays in the same state", async () => {

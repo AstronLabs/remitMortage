@@ -1,4 +1,6 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 import React, { useMemo, useState } from "react";
 import { usePortfolioBreakdown } from "../hooks/usePortfolioBreakdown";
@@ -242,7 +244,7 @@ export default function PortfolioBreakdownChart({
                   </p>
                   <p className="text-[11px] text-slate-400">{loan.region}</p>
                 </div>
-                <div className="text-right">
+                <div className="text-end">
                   <p className="font-mono text-sm font-bold text-white">
                     ${formatUSDC(loan.allocatedAmount)}
                   </p>

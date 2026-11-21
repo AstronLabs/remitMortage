@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { prisma, getNotificationPreference } from "../services/db.js";
 import { getCommunicationPreferences } from "../services/communicationPreferences.js";
 import { dispatchMaturityAlerts } from "../services/notification.js";

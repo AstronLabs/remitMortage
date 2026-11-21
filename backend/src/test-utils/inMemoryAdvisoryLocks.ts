@@ -123,6 +123,7 @@ export class InMemoryJobRunStore implements JobRunStore {
     id: string,
     patch: { status: "succeeded" | "failed"; finishedAt: Date; durationMs: number; error?: string }
   ): Promise<void> {
+    // safe-merge-ok: in-memory test double patching its own typed row with a fixed-shape patch
     Object.assign(this.rows.find((r) => r.id === id)!, patch);
   }
 }

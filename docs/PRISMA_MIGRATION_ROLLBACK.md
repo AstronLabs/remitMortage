@@ -54,6 +54,33 @@ A migration must have exactly one of the two: a `down.sql`, or a manifest entry
 with an existing runbook. Having both, having neither, or pointing at a missing
 runbook all fail the check.
 
+## Unsafe-operation lint
+
+Separately from rollback coverage, `backend/scripts/migration-safety-gate.ts`
+lints migration SQL for operations that can fail or stall production: a
+`NOT NULL` column added with no default, `SET NOT NULL`, `ALTER COLUMN ... TYPE`,
+a foreign key or check constraint added without `NOT VALID`, a `UNIQUE`
+constraint, a non-`CONCURRENTLY` index build, and `DROP COLUMN` / `DROP TABLE` /
+`RENAME`. Print the full list with:
+
+```bash
+cd backend
+npx tsx scripts/migration-safety-gate.ts --list-patterns
+```
+
+A migration that genuinely needs one of these operations declares a reviewed
+waiver with a reason, on the statement it covers or the line above:
+
+```sql
+-- migration-ok: the table is empty at deploy time, so NOT NULL is instant
+ALTER TABLE "Loan" ADD COLUMN "flag" TEXT NOT NULL;
+```
+
+A bare `-- migration-ok:` with no reason is not honoured. Migrations that
+predate the lint are grandfathered in; only migrations added afterwards are
+checked. Run it over history with `--all`, or pin a cut-off with
+`--since <stamp>`.
+
 ## Running the check locally
 
 Coverage only (no database needed):

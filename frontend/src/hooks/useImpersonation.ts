@@ -1,7 +1,10 @@
 "use client";
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  IMPERSONATION_CHANGED_EVENT,
   endImpersonation as endImpersonationRequest,
   fetchImpersonationStatus,
   type ImpersonationStatus,
@@ -42,20 +45,29 @@ export function useImpersonation() {
   useEffect(() => {
     refresh();
     pollRef.current = setInterval(refresh, POLL_INTERVAL_MS);
+    // Start/end in this tab refresh every instance immediately, so the banner
+    // appears the moment an admin enters the view rather than on the next poll.
+    window.addEventListener(IMPERSONATION_CHANGED_EVENT, refresh);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      window.removeEventListener(IMPERSONATION_CHANGED_EVENT, refresh);
     };
   }, [refresh]);
 
-  const endSession = useCallback(async () => {
+  /** Ends the session; resolves with how long it lasted, in milliseconds. */
+  const endSession = useCallback(async (): Promise<number | null> => {
     setEnding(true);
     try {
       await endImpersonationRequest(status.sessionId ?? undefined);
+      const durationMs = status.startedAt
+        ? Math.max(0, Date.now() - new Date(status.startedAt).getTime())
+        : null;
       setStatus(INACTIVE_STATUS);
+      return durationMs;
     } finally {
       setEnding(false);
     }
-  }, [status.sessionId]);
+  }, [status.sessionId, status.startedAt]);
 
   return { status, ending, endSession, refresh };
 }

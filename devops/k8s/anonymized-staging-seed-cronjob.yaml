@@ -14,6 +14,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: anonymized-staging-seed
+  namespace: remitmortgage
   labels:
     app: remitmortgage-backend
     role: staging-data-pipeline

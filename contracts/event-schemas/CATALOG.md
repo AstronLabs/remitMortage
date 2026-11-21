@@ -108,6 +108,7 @@ Every event follows the naming convention in
 | lending-pool | `rst_cncl` | topics[] data(tuple)[loan_id] |
 | lending-pool | `rst_prop` | topics[] data(tuple)[borrower, loan_id] |
 | lending-pool | `set_dpcl` | topics[] data(value)[cooldown] |
+| lending-pool | `set_drmnt` | topics[] data(value)[period] |
 | lending-pool | `set_eicap` | topics[] data(value)[cap_bps] |
 | lending-pool | `set_exposure_cap` | topics[] data(tuple)[max_amount, max_bps] |
 | lending-pool | `set_fwaiv` | topics[] data(value)[waiver_ledgers] |

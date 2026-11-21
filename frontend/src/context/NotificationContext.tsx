@@ -8,6 +8,17 @@ import { announceToast } from "@/lib/announcer";
 
 export type ToastVariant = "success" | "info" | "warning" | "error";
 
+/**
+ * An optional inline action rendered inside a toast (e.g. "Undo"), letting the
+ * user reverse a low-stakes destructive action before its window lapses.
+ */
+export interface ToastAction {
+  /** Button label, e.g. "Undo". */
+  label: string;
+  /** Invoked when the user activates the action. */
+  onAction: () => void;
+}
+
 export interface ToastNotification {
   id: string;
   variant: ToastVariant;
@@ -16,6 +27,8 @@ export interface ToastNotification {
   message?: string;
   /** Auto-dismiss delay in milliseconds. Defaults to 5000. */
   duration: number;
+  /** Optional inline action (e.g. an "Undo" button). */
+  action?: ToastAction;
 }
 
 export interface NotificationRecord extends ToastNotification {
@@ -27,6 +40,12 @@ export interface NotificationRecord extends ToastNotification {
 export type ToastInput = Omit<ToastNotification, "id" | "duration"> & {
   id?: string;
   duration?: number;
+  /**
+   * When true the toast is pure UI feedback: it is neither appended to the
+   * notification inbox nor persisted to the backend. Used for transient
+   * affordances such as an undo window.
+   */
+  transient?: boolean;
 };
 
 type NotificationContextType = {
@@ -42,6 +61,10 @@ type NotificationContextType = {
   markRead: (id: string) => void;
   markAllRead: () => void;
   clearHistory: () => void;
+  /** Remove a single notification from the inbox history. */
+  removeNotification: (id: string) => void;
+  /** Re-insert previously removed notifications, keeping chronological order. */
+  restoreNotifications: (records: NotificationRecord[]) => void;
 };
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
@@ -141,6 +164,23 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     setNotificationHistory([]);
   }, []);
 
+  const removeNotification = useCallback((id: string) => {
+    setNotificationHistory((current) => current.filter((item) => item.id !== id));
+    setNotifications((current) => current.filter((item) => item.id !== id));
+  }, []);
+
+  const restoreNotifications = useCallback((records: NotificationRecord[]) => {
+    if (records.length === 0) return;
+    setNotificationHistory((current) => {
+      const existingIds = new Set(current.map((item) => item.id));
+      const restored = records.filter((item) => !existingIds.has(item.id));
+      if (restored.length === 0) return current;
+      return [...current, ...restored]
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .slice(-MAX_HISTORY);
+    });
+  }, []);
+
   const openPanel = useCallback(() => {
     setPanelOpen(true);
   }, []);
@@ -163,6 +203,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         title: input.title,
         message: input.message,
         duration: input.duration ?? DEFAULT_DURATION_MS,
+        action: input.action,
       };
 
       announceToast(toast.variant, toast.title, toast.message);
@@ -171,6 +212,12 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         const withoutDup = current.filter((n) => n.id !== id);
         return [...withoutDup, toast].slice(-MAX_VISIBLE);
       });
+
+      // Transient toasts (e.g. an undo window) are UI-only: they must not
+      // clutter the notification inbox or hit the backend.
+      if (input.transient) {
+        return id;
+      }
 
       const newRecord: NotificationRecord = {
         ...toast,
@@ -218,6 +265,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       markRead,
       markAllRead,
       clearHistory,
+      removeNotification,
+      restoreNotifications,
     }),
     [
       notifications,
@@ -232,6 +281,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       markRead,
       markAllRead,
       clearHistory,
+      removeNotification,
+      restoreNotifications,
     ]
   );
 

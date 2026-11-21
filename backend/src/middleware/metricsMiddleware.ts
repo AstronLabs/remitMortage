@@ -6,8 +6,13 @@ import {
   httpRequestsTotal,
   httpRequestDurationSeconds,
   httpRequestsByVersionTotal,
+  httpRequestBodySizeBytes,
+  httpResponseBodySizeBytes,
 } from "../services/metrics.js";
 import { CURRENT_API_VERSION } from "./apiVersioning.js";
+import { getCorrelationId } from "./correlationId.js";
+import { ROUTE_LATENCY_BUDGETS, resolveLatencyBudget, type RouteLatencyBudgetConfig } from "../config/routeLatencyBudgets.js";
+import { recordLatencySample } from "../services/latencyBudgetMonitor.js";
 
 // ---------------------------------------------------------------------------
 // Route normalisation
@@ -46,57 +51,122 @@ export function normaliseRoute(url: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Records per-request HTTP metrics:
- *   - `remitmortgage_http_requests_total`   (counter)
- *   - `remitmortgage_http_request_duration_seconds` (histogram)
+ * Full, bounded route template for a request: the mounted router path plus
+ * the matched route path (`/api/loan` + `/:id` → `/api/loan/:id`). Falls back
+ * to the normalised raw URL when routing did not resolve (e.g. 404s).
+ */
+export function resolveRouteLabel(req: Request): string {
+  const matched = req.route?.path as unknown;
+  if (typeof matched === "string") {
+    const base = req.baseUrl ?? "";
+    if (matched === "/") return base || "/";
+    return `${base}${matched}`;
+  }
+  return normaliseRoute(req.originalUrl ?? req.url ?? "/");
+}
+
+function byteLength(chunk: unknown): number {
+  if (typeof chunk === "string") return Buffer.byteLength(chunk);
+  if (Buffer.isBuffer(chunk)) return chunk.length;
+  if (chunk instanceof Uint8Array) return chunk.byteLength;
+  return 0;
+}
+
+/**
+ * Counts the bytes actually written to the response, including body chunks
+ * passed to `res.end`. Returns a reader for the running total.
+ */
+function countResponseBytes(res: Response): () => number {
+  let bytes = 0;
+  const write = res.write.bind(res) as (...args: unknown[]) => boolean;
+  const end = res.end.bind(res) as (...args: unknown[]) => Response;
+
+  res.write = ((chunk: unknown, ...rest: unknown[]) => {
+    bytes += byteLength(chunk);
+    return write(chunk, ...rest);
+  }) as Response["write"];
+
+  res.end = ((chunk?: unknown, ...rest: unknown[]) => {
+    bytes += byteLength(chunk);
+    return end(chunk, ...rest);
+  }) as Response["end"];
+
+  return () => bytes;
+}
+
+export interface HttpMetricsOptions {
+  /** Latency budgets to compare against; defaults to the shared config. */
+  latencyBudgets?: RouteLatencyBudgetConfig;
+}
+
+/**
+ * Builds the HTTP instrumentation middleware. The default export compares
+ * against `config/routeLatencyBudgets.ts`; tests pass a tighter config to
+ * exercise the warning path without slow handlers.
+ *
+ * Records per-request:
+ *   - `remitmortgage_http_requests_total`             (counter)
+ *   - `remitmortgage_http_request_duration_seconds`   (histogram)
+ *   - `remitmortgage_http_request_body_size_bytes`    (histogram)
+ *   - `remitmortgage_http_response_body_size_bytes`   (histogram)
+ *   - `remitmortgage_route_latency_budget_exceeded_total` (counter)
  *
  * Must be mounted **before** all route handlers so the timer starts from the
- * moment the request enters Express.
- *
- * Note: the route label is resolved from `req.route.path` *after* routing
- * completes (in the `finish` event) so matched Express routes are used where
- * possible, falling back to the normalised raw URL for unmatched paths.
+ * moment the request enters Express. The route label is resolved after
+ * routing completes, so it is the route template rather than the raw URL.
  */
-export function httpMetricsMiddleware(
-  req: Request,
-  res: Response,
-  next: NextFunction
-): void {
-  const startHr = process.hrtime.bigint();
-  const method = req.method.toUpperCase();
+export function createHttpMetricsMiddleware(
+  options: HttpMetricsOptions = {}
+): (req: Request, res: Response, next: NextFunction) => void {
+  const budgets = options.latencyBudgets ?? ROUTE_LATENCY_BUDGETS;
 
-  // API versioning (issue #847): echo back whichever version was served so
-  // a client can confirm it, defaulting to CURRENT_API_VERSION since no
-  // client sends the request header yet — every endpoint today is that
-  // version. Set eagerly (not in the `finish` handler) so it's present even
-  // if a later middleware/handler ends the response early.
-  const requestedVersion =
-    (req.headers["api-version"] as string | undefined)?.trim() || CURRENT_API_VERSION;
-  res.setHeader("Api-Version", requestedVersion);
+  return (req, res, next) => {
+    const startHr = process.hrtime.bigint();
+    const method = req.method.toUpperCase();
+    const declaredLength = Number(req.headers["content-length"]);
+    const requestBytes =
+      Number.isFinite(declaredLength) && declaredLength >= 0 ? declaredLength : 0;
+    const responseBytes = countResponseBytes(res);
 
-  res.on("finish", () => {
-    const durationS =
-      Number(process.hrtime.bigint() - startHr) / 1e9;
+    // API versioning (issue #847): echo back whichever version was served so
+    // a client can confirm it, defaulting to CURRENT_API_VERSION since no
+    // client sends the request header yet — every endpoint today is that
+    // version. Set eagerly (not in the `finish` handler) so it's present even
+    // if a later middleware/handler ends the response early.
+    const requestedVersion =
+      (req.headers["api-version"] as string | undefined)?.trim() || CURRENT_API_VERSION;
+    res.setHeader("Api-Version", requestedVersion);
 
-    // Prefer the matched Express route pattern (e.g. /api/loan/:id) over the
-    // raw URL to keep cardinality low.  Fall back to the normalised URL when
-    // routing hasn't resolved (e.g. 404s).
-    const route =
-      (req.route?.path as string | undefined) ??
-      normaliseRoute(req.originalUrl ?? req.url ?? "/");
+    res.on("finish", () => {
+      const durationS = Number(process.hrtime.bigint() - startHr) / 1e9;
+      const durationMs = durationS * 1000;
+      const route = resolveRouteLabel(req);
+      const statusCode = String(res.statusCode);
 
-    const statusCode = String(res.statusCode);
+      httpRequestsTotal.inc({ method, route, status_code: statusCode });
+      httpRequestDurationSeconds.observe(
+        { method, route, status_code: statusCode },
+        durationS
+      );
+      httpRequestsByVersionTotal.inc({ version: requestedVersion, method, route });
+      httpRequestBodySizeBytes.observe({ method, route }, requestBytes);
+      httpResponseBodySizeBytes.observe({ method, route }, responseBytes());
 
-    httpRequestsTotal.inc({ method, route, status_code: statusCode });
-    httpRequestDurationSeconds.observe(
-      { method, route, status_code: statusCode },
-      durationS
-    );
-    httpRequestsByVersionTotal.inc({ version: requestedVersion, method, route });
-  });
+      recordLatencySample({
+        method,
+        route,
+        durationMs,
+        budgetMs: resolveLatencyBudget(method, route, budgets),
+        requestId: getCorrelationId(),
+      });
+    });
 
-  next();
+    next();
+  };
 }
+
+/** Shared middleware instance using the configured route budgets. */
+export const httpMetricsMiddleware = createHttpMetricsMiddleware();
 
 // ---------------------------------------------------------------------------
 // Metrics endpoint auth middleware

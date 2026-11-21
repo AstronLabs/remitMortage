@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import NotificationDrawer from "../NotificationDrawer";
 
@@ -10,6 +10,10 @@ const mockMarkRead = jest.fn();
 const mockMarkAllRead = jest.fn();
 const mockClearHistory = jest.fn();
 const mockClosePanel = jest.fn();
+const mockRemoveNotification = jest.fn();
+const mockRestoreNotifications = jest.fn();
+const mockNotify = jest.fn();
+const mockDismiss = jest.fn();
 
 // NotificationContext appends new records to the end of the array (oldest
 // first); NotificationDrawer reverses this for newest-first display.
@@ -43,12 +47,41 @@ jest.mock("@/context/NotificationContext", () => ({
     clearHistory: mockClearHistory,
     markRead: mockMarkRead,
     markAllRead: mockMarkAllRead,
+    removeNotification: mockRemoveNotification,
+    restoreNotifications: mockRestoreNotifications,
+    notify: mockNotify,
+    dismiss: mockDismiss,
   }),
 }));
 
 describe("NotificationDrawer Component", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  it("shows an onboarding action when the inbox has no history", () => {
+    const original = mockHistory.splice(0);
+    try {
+      render(<NotificationDrawer />);
+      expect(screen.getByText("No notifications yet")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Go to dashboard" })).toHaveAttribute("href", "/dashboard");
+    } finally {
+      mockHistory.push(...original);
+    }
+  });
+
+  it("clears the unread filter when only read notifications exist", () => {
+    const original = mockHistory.splice(0);
+    mockHistory.push({ ...original[0], read: true });
+    try {
+      render(<NotificationDrawer />);
+      fireEvent.click(screen.getByRole("button", { name: /unread/i }));
+      expect(screen.getByText("No unread notifications")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+      expect(screen.getAllByRole("article")).toHaveLength(1);
+    } finally {
+      mockHistory.splice(0, mockHistory.length, ...original);
+    }
   });
 
   it("renders notification inbox drawer when panel is open", () => {
@@ -91,5 +124,18 @@ describe("NotificationDrawer Component", () => {
 
     fireEvent.click(screen.getByTestId("mark-all-read-btn"));
     expect(mockMarkAllRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires typed confirmation before clearing notification history", () => {
+    render(<NotificationDrawer />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear notification history" }));
+    expect(mockClearHistory).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("textbox", { name: /type clear to continue/i }), {
+      target: { value: "CLEAR" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Clear history" }));
+
+    expect(mockClearHistory).toHaveBeenCalledTimes(1);
   });
 });

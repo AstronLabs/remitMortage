@@ -10,6 +10,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: remitmortgage-backend
+  namespace: remitmortgage
   labels:
     app: remitmortgage-backend
 spec:

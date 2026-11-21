@@ -1,0 +1,58 @@
+name: Security
+
+on:
+  pull_request:
+    branches: [main, development]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      # Only meaningful on a pull request: it diffs the dependency graph
+      # between the base and the head.
+      - name: Dependency review
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+
+      - name: Every crate comes from crates.io
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r lock; do
+            bad=$(grep -E '^source = ' "$lock" | grep -v '^source = "registry+https://github.com/rust-lang/crates.io-index"$' || true)
+            if [ -n "$bad" ]; then
+              echo "::error file=$lock::crates not from crates.io:"
+              echo "$bad" | sort -u
+              status=1
+            fi
+          done < <(git ls-files '*Cargo.lock')
+          while IFS= read -r manifest; do
+            if grep -nE '^[^#]*(^|[ ,{])(git|registry) *=' "$manifest"; then
+              echo "::error file=$manifest::git/alternate-registry dependency is not allowed"
+              status=1
+            fi
+          done < <(git ls-files '*Cargo.toml')
+          exit $status
+
+      - name: Install Gitleaks
+        run: |
+          VERSION=8.30.1
+          ARCHIVE="gitleaks_${VERSION}_linux_x64.tar.gz"
+          curl -sSfL -o "$ARCHIVE" "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/${ARCHIVE}"
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  ${ARCHIVE}" | sha256sum -c -
+          tar -xzf "$ARCHIVE" gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+
+      - name: Scan for secrets
+        run: gitleaks detect --source . --config .gitleaks.toml --verbose --exit-code 1 --log-opts="--all"

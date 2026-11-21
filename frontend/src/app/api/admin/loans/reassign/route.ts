@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { NextRequest, NextResponse } from "next/server";
 
 const backendUrl = process.env.BACKEND_API_URL || "http://localhost:4000";
@@ -63,7 +66,9 @@ export async function POST(request: NextRequest) {
             body: JSON.stringify({
               reviewerId: targetReviewer,
               decision: "APPROVED",
-              reason: reason || `Reassigned to reviewer ${targetReviewer}`,
+              // Manual status changes require a reason code (issue #1102).
+              reasonCode: "REVIEWER_REASSIGNMENT",
+              reasonNote: reason || `Reassigned to reviewer ${targetReviewer}`,
               expectedVersion: current.version,
             }),
           });

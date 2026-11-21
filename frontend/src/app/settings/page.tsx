@@ -6,6 +6,24 @@ import dynamic from "next/dynamic";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { getProductTourStore } from "@/hooks/useProductTourState";
 import { useDataSaver } from "@/context/DataSaverContext";
+import { useThemeStore } from "@/app/stores/useThemeStore";
+import { useTextSizeStore } from "@/app/stores/useTextSizeStore";
+import ThemeModeSettings from "@/components/ThemeModeSettings";
+import TextSizeSettings from "@/components/TextSizeSettings";
+import { isTextSize } from "@/app/lib/textSize";
+import NotificationFrequencyControl, {
+  type NotificationFrequency,
+} from "@/components/NotificationFrequencyControl";
+import TimezoneSettings from "@/components/TimezoneSettings";
+import NotificationChannelMatrix from "@/components/NotificationChannelMatrix";
+import {
+  globalFlagsFromEventChannels,
+  resolveEventChannels,
+  toggleEventChannel,
+  type ChannelEventType,
+  type EventChannels,
+  type NotificationChannel,
+} from "@/lib/notificationChannels";
 
 const Navbar = dynamic(() => import("../../components/Navbar"), { ssr: false });
 // Push relies on browser-only APIs (ServiceWorker, PushManager, Notification),
@@ -95,6 +113,12 @@ const notificationDetails: Record<
     category: "loan",
   },
 };
+
+// Channels are chosen per event type now (issue #1116), so only the event
+// toggles count as notification rules.
+const eventNotificationKeys = (Object.keys(notificationDetails) as NotificationKey[]).filter(
+  (key) => notificationDetails[key].category !== "channel"
+);
 
 type FrequencyCategory = "deposits" | "milestones" | "governance";
 
@@ -192,6 +216,9 @@ export default function SettingsPage() {
     milestones: "IMMEDIATE",
     governance: "IMMEDIATE",
   });
+  const [eventChannels, setEventChannels] = useState<EventChannels>(() =>
+    resolveEventChannels({ emailAlerts: true, smsAlerts: false })
+  );
   const [webhookUrl, setWebhookUrl] = useState("https://partner.example.com/remitmortgage/webhook");
   const [businessName, setBusinessName] = useState("Keystone Build Partners");
   const [registrationNumber, setRegistrationNumber] = useState("NG-RC-204918");
@@ -202,6 +229,7 @@ export default function SettingsPage() {
   const [isSaving, setIsSaving] = useState(false);
 
   const { theme, palette, toggleTheme, togglePalette } = useThemeStore();
+  const { textSize, setTextSize } = useTextSizeStore();
 
   const emailError = email && !isValidEmail(email) ? "Enter a valid linked email address." : "";
   const webhookError =
@@ -211,7 +239,7 @@ export default function SettingsPage() {
   const canSave = isValidEmail(email) && isValidWebhookUrl(webhookUrl);
 
   const enabledNotificationCount = useMemo(
-    () => Object.values(notifications).filter(Boolean).length,
+    () => eventNotificationKeys.filter((key) => notifications[key]).length,
     [notifications]
   );
 
@@ -233,6 +261,9 @@ export default function SettingsPage() {
                 ...prev,
                 ...data.settings.notifications,
               }));
+              // Seeds any event type without its own channels from the global
+              // email/SMS setting, so pre-existing preferences carry over.
+              setEventChannels(resolveEventChannels(data.settings.notifications));
               if (data.settings.notifications.webhookUrl !== undefined) {
                 setWebhookUrl(data.settings.notifications.webhookUrl);
               }
@@ -247,6 +278,9 @@ export default function SettingsPage() {
               if (data.settings.contractor.registrationNumber)
                 setRegistrationNumber(data.settings.contractor.registrationNumber);
               if (data.settings.contractor.serviceRegion) setServiceRegion(data.settings.contractor.serviceRegion);
+            }
+            if (isTextSize(data.settings.textSize)) {
+              setTextSize(data.settings.textSize);
             }
           }
         }
@@ -305,6 +339,7 @@ export default function SettingsPage() {
 
     try {
       const userId = stellarAddress || email;
+      const globalChannelFlags = globalFlagsFromEventChannels(eventChannels);
 
       // Save user profile & notification settings
       const response = await fetch("/api/user/settings", {
@@ -315,12 +350,15 @@ export default function SettingsPage() {
           profile: { displayName, email, phone },
           notifications: {
             ...notifications,
+            ...globalChannelFlags,
+            eventChannels,
             webhookUrl,
             depositsFrequency: frequencies.deposits,
             milestonesFrequency: frequencies.milestones,
             governanceFrequency: frequencies.governance,
           },
           contractor: { businessName, registrationNumber, serviceRegion },
+          textSize,
         }),
       });
 
@@ -332,8 +370,8 @@ export default function SettingsPage() {
           address: userId,
           email,
           phone,
-          emailAlerts: notifications.emailAlerts,
-          smsAlerts: notifications.smsAlerts,
+          ...globalChannelFlags,
+          eventChannels,
           escrowApproaching: notifications.escrowApproaching,
           escrowReached: notifications.escrowReached,
           paymentMissed: notifications.paymentMissed,
@@ -360,6 +398,10 @@ export default function SettingsPage() {
     } finally {
       setIsSaving(false);
     }
+  }
+
+  function toggleChannel(type: ChannelEventType, channel: NotificationChannel) {
+    setEventChannels((current) => toggleEventChannel(current, type, channel));
   }
 
   function toggleNotification(key: NotificationKey) {
@@ -467,10 +509,6 @@ export default function SettingsPage() {
                       <span><span className="font-semibold">Data saver</span><span className="block text-xs text-slate-400 mt-1">Honors your browser&apos;s Save-Data hint, reduces polling and chart payloads, and defers heavy visuals.</span></span>
                       <input aria-label="Data saver" type="checkbox" checked={dataSaver} onChange={(event) => setDataSaver(event.target.checked)} className="mt-1 h-5 w-5 accent-cyan-500" />
                     </label>
-                    <label className="flex items-start justify-between gap-4 text-sm text-slate-200">
-                      <span><span className="font-semibold">High-contrast palette</span><span className="block text-xs text-slate-400 mt-1">Uses stronger borders and focus indicators in addition to Windows forced-colors support.</span></span>
-                      <input aria-label="High contrast palette" type="checkbox" checked={highContrast} onChange={(event) => setHighContrast(event.target.checked)} className="mt-1 h-5 w-5 accent-cyan-500" />
-                    </label>
                   </div>
                 </section>
               )}
@@ -524,36 +562,14 @@ export default function SettingsPage() {
                     </p>
                   </div>
 
-                  {/* Channel Preferences */}
+                  {/* Channel Preferences — per event type (issue #1116) */}
                   <div className="space-y-3">
                     <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-400">1. Delivery Channels</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {(["emailAlerts", "smsAlerts"] as NotificationKey[]).map((key) => {
-                        const item = notificationDetails[key];
-                        const enabled = notifications[key];
-                        return (
-                          <button
-                            key={key}
-                            type="button"
-                            onClick={() => toggleNotification(key)}
-                            aria-pressed={enabled}
-                            className={`rounded-xl border p-5 text-left transition-all ${
-                              enabled
-                                ? "border-cyan-500 bg-cyan-500/10 text-white shadow-lg shadow-cyan-500/10"
-                                : "border-slate-800 bg-slate-950/40 text-slate-400 hover:border-slate-700"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="text-sm font-bold text-white">{item.label}</span>
-                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${enabled ? "bg-cyan-500 text-slate-950" : "bg-slate-800 text-slate-400"}`}>
-                                {enabled ? "ACTIVE" : "OFF"}
-                              </span>
-                            </div>
-                            <p className="text-xs mt-2 text-slate-400 leading-relaxed">{item.description}</p>
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <p className="text-xs text-slate-400">
+                      Choose how each kind of alert reaches you — for example payment reminders by SMS and
+                      email, governance updates by email only. Pick as many channels as you like per alert.
+                    </p>
+                    <NotificationChannelMatrix value={eventChannels} onToggle={toggleChannel} />
                   </div>
 
                   {/* Escrow Maturity Milestones */}
@@ -689,7 +705,7 @@ export default function SettingsPage() {
 
                   <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between text-xs text-slate-400">
                     <span>Active Notification Rules:</span>
-                    <span className="font-bold text-white">{enabledNotificationCount} of 7 enabled</span>
+                    <span className="font-bold text-white">{enabledNotificationCount} of {eventNotificationKeys.length} enabled</span>
                   </div>
                 </section>
               )}
@@ -769,19 +785,25 @@ export default function SettingsPage() {
                   </div>
 
                   <ThemeModeSettings />
+                  <TimezoneSettings userId={stellarAddress || email || "anonymous"} />
 
-                  {/* Theme: Light / Dark (picking one switches to Manual mode) */}
+                  <TextSizeSettings />
+
+                  {/* Theme: Light / Dark / High contrast (picking one switches to Manual mode) */}
                   <div className="space-y-3">
                     <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-400">Color Theme</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                       {(["dark", "light"] as const).map((t) => (
                         <button
                           key={t}
                           type="button"
-                          aria-pressed={theme === t}
-                          onClick={() => theme !== t && toggleTheme()}
-                          className={`rounded-xl border p-5 text-left transition-all flex items-start gap-4 ${
-                            theme === t
+                          aria-pressed={theme === t && !highContrast}
+                          onClick={() => {
+                            if (theme !== t) toggleTheme();
+                            if (highContrast) setHighContrast(false);
+                          }}
+                          className={`rounded-xl border p-5 text-start transition-all flex items-start gap-4 ${
+                            theme === t && !highContrast
                               ? "border-cyan-500 bg-cyan-500/10 shadow-lg shadow-cyan-500/10"
                               : "border-slate-800 bg-slate-950/40 text-slate-400 hover:border-slate-700"
                           }`}
@@ -803,12 +825,39 @@ export default function SettingsPage() {
                             <p className="text-xs text-slate-400 mt-1">
                               {t === "dark" ? "Deep navy background with high-contrast accents." : "Light paper background for bright environments."}
                             </p>
-                            {theme === t && (
+                            {theme === t && !highContrast && (
                               <span className="inline-block mt-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500 text-slate-950">ACTIVE</span>
                             )}
                           </div>
                         </button>
                       ))}
+
+                      <button
+                        type="button"
+                        aria-pressed={highContrast}
+                        onClick={() => setHighContrast(!highContrast)}
+                        className={`rounded-xl border p-5 text-start transition-all flex items-start gap-4 ${
+                          highContrast
+                            ? "border-cyan-500 bg-cyan-500/10 shadow-lg shadow-cyan-500/10"
+                            : "border-slate-800 bg-slate-950/40 text-slate-400 hover:border-slate-700"
+                        }`}
+                      >
+                        <span className="mt-0.5 w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-black text-white border border-white">
+                          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
+                            <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" />
+                          </svg>
+                        </span>
+                        <div>
+                          <span className="text-sm font-bold text-white">High Contrast</span>
+                          <p className="text-xs text-slate-400 mt-1">
+                            Pure black surfaces and maximum-contrast text meeting WCAG AAA, layered on your theme.
+                          </p>
+                          {highContrast && (
+                            <span className="inline-block mt-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500 text-slate-950">ACTIVE</span>
+                          )}
+                        </div>
+                      </button>
                     </div>
                   </div>
 

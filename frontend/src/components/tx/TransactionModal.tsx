@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { announce } from "../../lib/announcer";
+import CopyValueButton from "../CopyValueButton";
 import {
   describeTransactionAnnouncement,
   formatTransactionErrorMessage,
@@ -246,9 +247,10 @@ export default function TransactionModal({
                   <p className="text-[11px] uppercase tracking-[0.2em] text-slate-500">
                     Transaction Hash
                   </p>
-                  <p className="mt-2 font-mono text-sm text-slate-100" title={hash}>
-                    {shortenAddress(hash)}
-                  </p>
+                  <div className="mt-2 inline-flex items-center gap-1 font-mono text-sm text-slate-100">
+                    <span title={hash}>{shortenAddress(hash)}</span>
+                    <CopyValueButton key={hash} value={hash} label="transaction hash" />
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap gap-2">

@@ -8,6 +8,8 @@ import { persist, createJSONStorage } from "zustand/middleware";
 
 interface OnboardingState {
   step: number;
+  /** Furthest step reached; every step before it is complete (issue #1114). */
+  furthestStep: number;
   recipientAddress: string;
   isVerified: boolean;
   savingsTarget: number;
@@ -26,18 +28,21 @@ const useOnboardingStore = create<OnboardingState>()(
   persist(
     (set) => ({
       step: 1,
+      furthestStep: 1,
       recipientAddress: "",
       isVerified: false,
       savingsTarget: 10000,
       savingsDuration: 12,
       firstDepositAmount: 0,
-      setStep: (step) => set({ step }),
+      setStep: (step) =>
+        set((state) => ({ step, furthestStep: Math.max(state.furthestStep ?? state.step, step) })),
       setRecipientAddress: (address) => set({ recipientAddress: address }),
       setIsVerified: (verified) => set({ isVerified: verified }),
       setSavingsTarget: (target) => set({ savingsTarget: target }),
       setSavingsDuration: (duration) => set({ savingsDuration: duration }),
       setFirstDepositAmount: (amount) => set({ firstDepositAmount: amount }),
-      reset: () => set({ step: 1, recipientAddress: "", isVerified: false, firstDepositAmount: 0 }),
+      reset: () =>
+        set({ step: 1, furthestStep: 1, recipientAddress: "", isVerified: false, firstDepositAmount: 0 }),
     }),
     {
       name: "onboarding-storage",

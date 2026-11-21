@@ -215,15 +215,36 @@ fn warning_events_fire_at_eighty_percent_and_at_the_cap_but_not_before() {
 
     // Below 80%: no cap_warn.
     assert!(lock_and_try_mint(&client, &user, &recipient, 500).is_ok());
-    assert_eq!(env.events().all().iter().filter(|e| e.1 == warn_topic).count(), 0);
+    assert_eq!(
+        env.events()
+            .all()
+            .iter()
+            .filter(|e| e.1 == warn_topic)
+            .count(),
+        0
+    );
 
     // Crosses 80% (500 -> 850): cap_warn fires exactly once.
     assert!(lock_and_try_mint(&client, &user, &recipient, 350).is_ok());
-    assert_eq!(env.events().all().iter().filter(|e| e.1 == warn_topic).count(), 1);
+    assert_eq!(
+        env.events()
+            .all()
+            .iter()
+            .filter(|e| e.1 == warn_topic)
+            .count(),
+        1
+    );
 
     // Reaches exactly 100% (850 -> 1000): cap_full fires exactly once.
     assert!(lock_and_try_mint(&client, &user, &recipient, 150).is_ok());
-    assert_eq!(env.events().all().iter().filter(|e| e.1 == full_topic).count(), 1);
+    assert_eq!(
+        env.events()
+            .all()
+            .iter()
+            .filter(|e| e.1 == full_topic)
+            .count(),
+        1
+    );
 }
 
 #[test]

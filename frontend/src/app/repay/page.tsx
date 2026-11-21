@@ -17,6 +17,8 @@ import {
 } from "../../lib/transaction-status";
 import { computePayoffCountdown, isFinalPayment } from "../../lib/payoffCountdown";
 import { track } from "../../lib/analytics";
+import ConfirmationDialog from "../../components/ConfirmationDialog";
+import PaymentSimulator from "../../components/PaymentSimulator";
 
 const Navbar = loadDynamic(() => import("../../components/Navbar"), { ssr: false });
 
@@ -170,6 +172,7 @@ function RepayInner() {
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
   const [paySuccess, setPaySuccess] = useState(false);
+  const [pendingRepayment, setPendingRepayment] = useState<number | null>(null);
 
   // Transaction history
   const [records, setRecords] = useState<TxRecord[]>([]);
@@ -373,8 +376,8 @@ function RepayInner() {
     setPayError(null);
     setPaySuccess(false);
 
-    const amount = parseFloat(payAmount.replace(/,/g, ""));
-    if (isNaN(amount) || amount <= 0) {
+    const amount = payAmount;
+    if (amount === null || !Number.isFinite(amount) || amount <= 0) {
       setPayError("Enter a valid positive USDC amount.");
       return;
     }
@@ -389,11 +392,15 @@ function RepayInner() {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Confirm repayment of ${formatUSDC(amount)} USDC?\n\nThis will sign a transaction via Freighter.`
-    );
-    if (!confirmed) return;
+    setPendingRepayment(amount);
+  }
 
+  async function confirmRepayment() {
+    if (pendingRepayment === null) return;
+    if (pendingRepayment > remaining) {
+      throw new Error("The repayment amount now exceeds the remaining balance.");
+    }
+    const amount = pendingRepayment;
     setPaying(true);
     try {
       // TODO: Build and submit Soroban transaction via Freighter:
@@ -418,12 +425,12 @@ function RepayInner() {
           : prev
       );
 
-      setPayAmount("");
+      setPayAmount(null);
       setPaySuccess(true);
       track("loan_repayment_completed");
       setTimeout(() => setPaySuccess(false), 5000);
     } catch (err: any) {
-      setPayError(err?.message || "Repayment transaction failed.");
+      throw new Error(err?.message || "Repayment transaction failed.");
     } finally {
       setPaying(false);
     }
@@ -436,6 +443,18 @@ function RepayInner() {
       <Navbar />
 
       {isRepaid && <Confetti />}
+
+      {pendingRepayment !== null && (
+        <ConfirmationDialog
+          isOpen
+          title="Confirm loan repayment"
+          description={`Repay ${formatUSDC(pendingRepayment)} USDC toward your loan balance. This financial transaction cannot be reversed after it is confirmed.`}
+          confirmationText="REPAY"
+          confirmLabel="Repay USDC"
+          onConfirm={confirmRepayment}
+          onCancel={() => setPendingRepayment(null)}
+        />
+      )}
 
       <main className="max-w-5xl mx-auto px-6 pt-32 pb-20">
         <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-cyan-500/10 text-cyan-400 text-xs font-semibold uppercase tracking-wider mb-4 border border-cyan-500/20">
@@ -749,6 +768,14 @@ function RepayInner() {
                       );
                     })}
                   </div>
+                  {!isRepaid && schedule.monthlyAmount > 0 && paymentsRemaining !== null && (
+                    <PaymentSimulator
+                      balance={remaining}
+                      monthlyAmount={schedule.monthlyAmount}
+                      paymentsRemaining={paymentsRemaining}
+                      totalInterest={interest}
+                    />
+                  )}
                 </div>
               ) : (
                 <div className="p-6 bg-[var(--bg-card)] rounded-lg text-sm text-[var(--text-muted)]">
@@ -787,21 +814,22 @@ function RepayInner() {
                           Amount (USDC)
                         </label>
                         <div className="relative">
-                          <input
+                          <CurrencyAmountInput
                             id="repay-amount"
-                            type="number"
-                            min="0.01"
-                            step="0.01"
-                            placeholder="0.00"
+                            data-testid="repay-amount"
+                            locale={locale}
                             value={payAmount}
-                            onChange={(e) => setPayAmount(e.target.value)}
+                            onChange={setPayAmount}
+                            min={0.01}
+                            placeholder="0.00"
+                            currencyLabel="USDC"
                             className="w-full p-3 pr-20 rounded-lg border border-[var(--border-color)] bg-[var(--bg-primary)] text-lg font-semibold tabular-nums outline-none focus:border-[var(--accent-primary)] transition-colors"
                             aria-describedby="pay-error"
                           />
                           {schedule && schedule.monthlyAmount > 0 && (
                             <button
                               type="button"
-                              onClick={() => setPayAmount(formatUSDC(schedule.monthlyAmount))}
+                              onClick={() => setPayAmount(schedule.monthlyAmount)}
                               className="absolute right-2 top-1/2 -translate-y-1/2 text-xs px-2 py-1 rounded bg-[var(--accent-primary)]/10 text-[var(--accent-primary-light)] hover:bg-[var(--accent-primary)]/20 transition-colors"
                             >
                               Suggested
@@ -833,7 +861,7 @@ function RepayInner() {
                       >
                         {paying
                           ? "Signing transaction\u2026"
-                          : `Repay ${formatUSDC(payAmount || 0)} USDC`}
+                          : `Repay ${formatUSDC(payAmount ?? 0)} USDC`}
                       </button>
                     </form>
                   )}

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { NextRequest, NextResponse } from "next/server";
 
 const BACKEND_URL = process.env.BACKEND_API_URL || "http://localhost:4000";
@@ -39,3 +42,5 @@ async function proxyLoanRequest(request: NextRequest): Promise<NextResponse> {
 
 export const GET = proxyLoanRequest;
 export const POST = proxyLoanRequest;
+export const PUT = proxyLoanRequest;
+export const DELETE = proxyLoanRequest;

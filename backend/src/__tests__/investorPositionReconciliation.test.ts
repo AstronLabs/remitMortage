@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 jest.mock("../config.js", () => ({ loadConfig: () => ({ lendingPoolContractId: "pool", alertWebhookUrl: "https://alerts.test" }) }));
 jest.mock("../services/db.js", () => ({ prisma: {} }));
 jest.mock("../services/soroban.js", () => ({ getInvestorInfo: jest.fn() }));

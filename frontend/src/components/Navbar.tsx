@@ -13,6 +13,8 @@ import { useKeyboardShortcuts } from "@/context/KeyboardShortcutsContext";
 import { describeNetworkMismatch } from "../lib/wallet-errors";
 import { LocaleSwitcher } from "@/i18n/LocaleSwitcher";
 import { ChevronDown, Landmark, Menu, X, Keyboard } from "lucide-react";
+import CopyValueButton from "./CopyValueButton";
+import WalletAccountMenu, { type WalletAccountMenuProps } from "./WalletAccountMenu";
 
 function shorten(pk: string) {
   return `${pk.slice(0, 6)}...${pk.slice(-4)}`;
@@ -52,6 +54,13 @@ function InnerNavbar() {
     walletError,
     clearError,
     isConnecting,
+    connectedWallets = [],
+    activeAddress,
+    setActiveWallet,
+    disconnectWallet,
+    connectLedger,
+    connectEVM,
+    connectSolana,
   } = useWallet();
   const { isDemoMode, exitDemoMode } = useDemoMode();
   const { unreadCount, togglePanel } = useNotifications();
@@ -63,6 +72,16 @@ function InnerNavbar() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   const showDisconnectNotice = !!walletError && !isConnected;
+
+  // Every connected wallet, side by side, with the active-wallet switch (issue #1117).
+  const accountMenu: WalletAccountMenuProps = {
+    connectedWallets,
+    onSetActive: setActiveWallet,
+    onDisconnect: disconnectWallet,
+    connectors: { stellar: connect, ledger: connectLedger, evm: connectEVM, solana: connectSolana },
+    isConnecting,
+  };
+  const displayAddress = activeAddress ?? publicKey;
   const noticeOffset = wrongNetwork ? (showDisconnectNotice ? "6.75rem" : "5rem") : "5rem";
 
   return (
@@ -173,7 +192,7 @@ function InnerNavbar() {
             <span id="tour-wallet">
               <WalletButton
                 isConnected={isConnected}
-                publicKey={publicKey}
+                publicKey={displayAddress}
                 usdcBalance={usdcBalance}
                 walletType={walletType}
                 isConnecting={isConnecting}
@@ -181,6 +200,7 @@ function InnerNavbar() {
                 disconnect={disconnect}
                 isDemoMode={isDemoMode}
                 onExitDemo={exitDemoMode}
+                accountMenu={accountMenu}
               />
             </span>
           </div>
@@ -198,7 +218,7 @@ function InnerNavbar() {
             </button>
             <WalletButton
               isConnected={isConnected}
-              publicKey={publicKey}
+              publicKey={displayAddress}
               usdcBalance={usdcBalance}
               walletType={walletType}
               isConnecting={isConnecting}
@@ -206,6 +226,7 @@ function InnerNavbar() {
               disconnect={disconnect}
               isDemoMode={isDemoMode}
               onExitDemo={exitDemoMode}
+              accountMenu={accountMenu}
               compact
             />
           </div>
@@ -259,7 +280,7 @@ function InnerNavbar() {
           </div>
           <WalletButton
             isConnected={isConnected}
-            publicKey={publicKey}
+            publicKey={displayAddress}
             usdcBalance={usdcBalance}
             walletType={walletType}
             isConnecting={isConnecting}
@@ -267,6 +288,7 @@ function InnerNavbar() {
             disconnect={disconnect}
             isDemoMode={isDemoMode}
             onExitDemo={exitDemoMode}
+            accountMenu={accountMenu}
             fullWidth
           />
         </div>
@@ -366,6 +388,8 @@ interface WalletButtonProps {
   disconnect: () => void;
   isDemoMode?: boolean;
   onExitDemo?: () => void;
+  /** Multi-wallet account menu; omitted when unavailable. */
+  accountMenu?: WalletAccountMenuProps;
   compact?: boolean;
   fullWidth?: boolean;
 }
@@ -380,10 +404,13 @@ function WalletButton({
   disconnect,
   isDemoMode = false,
   onExitDemo,
+  accountMenu,
   compact = false,
   fullWidth = false,
 }: WalletButtonProps) {
   const t = useTranslations("nav");
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const accountMenuId = React.useId();
 
   // Demo mode never calls the real `connect()` — exiting is the only action
   // available so sandbox exploration can't accidentally touch a real wallet.
@@ -451,6 +478,7 @@ function WalletButton({
             >
               {publicKey ? shorten(publicKey) : "Connected"}
             </span>
+            {publicKey && <CopyValueButton key={publicKey} value={publicKey} label="wallet address" />}
           </div>
           <button
             onClick={disconnect}
@@ -465,6 +493,7 @@ function WalletButton({
             {usdcBalance} USDC
           </div>
         )}
+        {accountMenu && <WalletAccountMenu {...accountMenu} />}
       </div>
     );
   }
@@ -494,6 +523,28 @@ function WalletButton({
       >
         {publicKey ? shorten(publicKey) : "Conn"}
       </span>
+      {publicKey && <CopyValueButton key={publicKey} value={publicKey} label="wallet address" />}
+      {accountMenu && (
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setAccountMenuOpen((open) => !open)}
+            aria-expanded={accountMenuOpen}
+            aria-controls={accountMenuId}
+            aria-label="Wallets"
+            data-testid="wallet-account-menu-toggle"
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900/70 px-2 py-1.5 text-[11px] font-semibold text-slate-200 transition-colors hover:border-cyan-400/40"
+          >
+            {accountMenu.connectedWallets.length > 1 ? accountMenu.connectedWallets.length : null}
+            <ChevronDown size={14} aria-hidden="true" />
+          </button>
+          {accountMenuOpen && (
+            <div className="absolute end-0 top-full z-50 mt-2 w-72 rounded-xl border border-slate-700 bg-[#0b0f1d] p-3 shadow-2xl shadow-black/50">
+              <WalletAccountMenu {...accountMenu} id={accountMenuId} />
+            </div>
+          )}
+        </div>
+      )}
       {!compact && (
         <button
           onClick={disconnect}

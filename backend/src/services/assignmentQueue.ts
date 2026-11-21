@@ -20,7 +20,8 @@ import { loadConfig } from "../config.js";
 import logger from "../utils/logger.js";
 
 /** Availability of a review-staff member. Mirrors the Prisma `ReviewerStatus`. */
-export type ReviewerStatus = "ACTIVE" | "INACTIVE" | "ON_LEAVE";
+export const REVIEWER_STATUSES = ["ACTIVE", "INACTIVE", "ON_LEAVE"] as const;
+export type ReviewerStatus = (typeof REVIEWER_STATUSES)[number];
 
 /** The fields of a reviewer that the rotation cares about. */
 export interface ReviewerLike {
@@ -174,21 +175,67 @@ export async function autoAssignApplicationReviewer(
   }
 }
 
+/** Audit action written for every manual reassignment / reviewer handoff. */
+export const REASSIGNED_AUDIT_ACTION = "loan_application.reassigned";
+
+/** Upper bound on a handoff note; it is a short summary, not a case file. */
+export const MAX_HANDOFF_NOTE_LENGTH = 2000;
+
+/**
+ * Validates and trims a handoff note (issue #1101). Throws when the note is
+ * missing, blank or too long, so a reassignment can never silently drop the
+ * context of where the previous reviewer left off.
+ */
+export function normalizeHandoffNote(note: unknown): string {
+  if (typeof note !== "string" || note.trim().length === 0) {
+    throw new AssignmentError(
+      "handoff_note_required",
+      "A handoff note is required when reassigning an application to a different reviewer",
+      400
+    );
+  }
+  const trimmed = note.trim();
+  if (trimmed.length > MAX_HANDOFF_NOTE_LENGTH) {
+    throw new AssignmentError(
+      "handoff_note_too_long",
+      `Handoff note must be at most ${MAX_HANDOFF_NOTE_LENGTH} characters`,
+      400
+    );
+  }
+  return trimmed;
+}
+
 export interface ReassignOptions extends AssignmentOptions {
   actorAddress?: string | null;
   ipAddress?: string | null;
+  /**
+   * Where the previous reviewer left off (issue #1101). Required whenever the
+   * application is moving away from a different, already-assigned reviewer.
+   */
+  handoffNote?: string | null;
+}
+
+export interface ReassignResult {
+  applicationId: string;
+  reviewerId: string;
+  reviewerEmail: string | null;
+  assignedAt: Date;
+  previousReviewerId: string | null;
+  handoffNote: string | null;
 }
 
 /**
  * Manual override: force-assigns an application to a specific reviewer.
  * Rejects unknown reviewers and anyone not `ACTIVE`, so an inactive or
- * on-leave reviewer can never be handed an application.
+ * on-leave reviewer can never be handed an application. Moving an application
+ * from one reviewer to another is a handoff and requires a handoff note, which
+ * is recorded in the audit trail (and therefore the activity timeline).
  */
 export async function reassignApplicationReviewer(
   applicationId: string,
   reviewerId: string,
   options: ReassignOptions = {}
-): Promise<{ applicationId: string; reviewerId: string; reviewerEmail: string | null; assignedAt: Date }> {
+): Promise<ReassignResult> {
   const client = resolveClient(options);
 
   const reviewer = await client.reviewer.findUnique({ where: { id: reviewerId } });
@@ -210,8 +257,13 @@ export async function reassignApplicationReviewer(
     throw new AssignmentError("application_not_found", "Application not found", 404);
   }
 
+  const previousReviewerId: string | null = application.assignedReviewerId ?? null;
+  const previousReviewerEmail: string | null = application.assignedReviewerEmail ?? null;
+  const isHandoff = previousReviewerId !== null && previousReviewerId !== reviewerId;
+  const hasNote = typeof options.handoffNote === "string" && options.handoffNote.trim().length > 0;
+  const handoffNote = isHandoff || hasNote ? normalizeHandoffNote(options.handoffNote) : null;
+
   const assignedAt = (options.now ?? (() => new Date()))();
-  const previousReviewerId = application.assignedReviewerId ?? null;
 
   await client.$transaction(async (tx) => {
     await tx.reviewer.update({
@@ -230,13 +282,16 @@ export async function reassignApplicationReviewer(
     if (tx.auditLog) {
       await tx.auditLog.create({
         data: {
-          action: "loan_application.reassigned",
+          action: REASSIGNED_AUDIT_ACTION,
           actorAddress: options.actorAddress ?? "admin",
           ipAddress: options.ipAddress ?? null,
           metadata: {
             applicationId,
             reviewerId,
+            reviewerEmail: reviewer.email ?? null,
             previousReviewerId,
+            previousReviewerEmail,
+            handoffNote,
             assignedAt: assignedAt.toISOString(),
           },
         },
@@ -244,7 +299,14 @@ export async function reassignApplicationReviewer(
     }
   });
 
-  return { applicationId, reviewerId, reviewerEmail: reviewer.email ?? null, assignedAt };
+  return {
+    applicationId,
+    reviewerId,
+    reviewerEmail: reviewer.email ?? null,
+    assignedAt,
+    previousReviewerId,
+    handoffNote,
+  };
 }
 
 export interface ReviewerInput {

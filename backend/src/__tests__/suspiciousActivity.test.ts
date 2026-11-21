@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import { evaluateSuspiciousActivity, type ActivityTransaction, type SuspiciousActivityConfig } from "../services/suspiciousActivity.js";
 
 const config: SuspiciousActivityConfig = {

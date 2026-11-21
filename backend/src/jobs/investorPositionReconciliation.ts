@@ -1,3 +1,6 @@
+// Copyright (c) 2026 RemitMortgage Protocol Contributors
+// SPDX-License-Identifier: MIT
+
 import axios from "axios";
 import { prisma } from "../services/db.js";
 import { getInvestorInfo } from "../services/soroban.js";
@@ -41,7 +44,7 @@ export async function runInvestorPositionReconciliation(deps: ReconciliationDeps
 
   for (const database of positions as InvestorPositionRecord[]) {
     try {
-      const rawOnChain = await read(contractId, database.walletAddress);
+      const rawOnChain = (await read(contractId, database.walletAddress)) as Record<string, any>;
       const onChain: Record<string, unknown> = {
         deposited: rawOnChain.deposited ?? rawOnChain.deposited_amount,
         claimedYield: rawOnChain.claimedYield ?? rawOnChain.claimed_yield,

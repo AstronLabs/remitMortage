@@ -26,7 +26,9 @@ cron tick on every instance
   holder crashes or its connection drops, PostgreSQL rolls the transaction back
   and releases the lock immediately** — there is no TTL to wait out. The lock
   transaction's timeout (`maxHoldMs`, default 30 min) bounds a hung job; it
-  must exceed the job's longest runtime.
+  must exceed the job's longest runtime. Long-running jobs set their own value
+  in `JOB_LOCK_TIMEOUTS_MS` (`services/jobLeaderElection.ts`), and a per-call
+  `maxHoldMs` overrides both.
 - **`recently_run`.** The lock alone only stops *concurrent* runs. A replica
   whose cron fires a few hundred ms after the leader finished would otherwise
   run the job again, so within the lock the run is skipped if a succeeded/failed

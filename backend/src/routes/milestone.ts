@@ -5,6 +5,7 @@ import { Router } from "express";
 import multer from "multer";
 import logger from "../utils/logger.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
+import { requireRpcAvailable } from "../middleware/rpcDegradedMode.js";
 import { pinFileToIPFS, unpinFileFromIPFS } from "../services/ipfs.js";
 import { uploadToArweave } from "../services/arweave.js";
 import { logUnpinnedCid } from "../services/ipfsAudit.js";
@@ -269,7 +270,7 @@ milestoneRouter.delete("/unpin/:cid", async (req, res) => {
  *     tags:
  *       - Milestone
  */
-milestoneRouter.post("/proposals", idempotencyMiddleware, async (req, res) => {
+milestoneRouter.post("/proposals", requireRpcAvailable(), idempotencyMiddleware, async (req, res) => {
   const { milestoneId, evidenceCid, arweaveTxId } = req.body ?? {};
 
   if (!milestoneId || !evidenceCid) {

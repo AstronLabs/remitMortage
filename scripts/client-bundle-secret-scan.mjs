@@ -462,6 +462,7 @@ export function run(args, env = process.env) {
   }
   const allowlist = loadAllowlist(args.allowlist ?? "devops/client-bundle-secret-allowlist.json");
   const mergedEnv = { ...env };
+  // safe-merge-ok: CI-only scan; env files are repo-tracked paths passed on the command line, never request data
   for (const file of args.envFiles ?? []) Object.assign(mergedEnv, parseEnvFile(fs.readFileSync(file, "utf8")));
 
   const envSecrets = collectEnvSecrets(mergedEnv, allowlist.env);

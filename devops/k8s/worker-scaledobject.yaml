@@ -2,6 +2,7 @@ apiVersion: keda.sh/v1alpha1
 kind: TriggerAuthentication
 metadata:
   name: remitmortgage-redis-auth
+  namespace: remitmortgage
   labels:
     app: remitmortgage-workers
 spec:
@@ -14,6 +15,7 @@ apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
   name: remitmortgage-workers
+  namespace: remitmortgage
   labels:
     app: remitmortgage-workers
 spec:

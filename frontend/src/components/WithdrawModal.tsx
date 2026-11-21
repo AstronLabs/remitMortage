@@ -32,6 +32,7 @@ import {
   type TransactionModalPhase,
 } from "../lib/transaction-status";
 import TransactionModal from "./tx/TransactionModal";
+import ConfirmationDialog from "./ConfirmationDialog";
 import GasFeeAdjuster from "./tx/GasFeeAdjuster";
 import { useXlmPrice } from "../hooks/useXlmPrice";
 import { baselineFeeStroops, feeToUsd, formatFee } from "../lib/gas-fees";
@@ -48,7 +49,7 @@ export default function WithdrawModal({ isOpen, onClose, deposited }: Props) {
   const { publicKey, isConnected, wrongNetwork, walletError, connect } = useWallet();
   const [penaltyBps, setPenaltyBps] = useState<number | null>(null);
   const [loadingConfig, setLoadingConfig] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
+  const [showConfirmation, setShowConfirmation] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [txPhase, setTxPhase] = useState<TransactionModalPhase>("idle");
   const [txHash, setTxHash] = useState<string | null>(null);
@@ -74,7 +75,6 @@ export default function WithdrawModal({ isOpen, onClose, deposited }: Props) {
   useEffect(() => {
     if (!isOpen || !publicKey) return;
     const accountId = publicKey;
-    setConfirmed(false);
     setSubmitting(false);
 
     async function load() {
@@ -186,7 +186,7 @@ export default function WithdrawModal({ isOpen, onClose, deposited }: Props) {
   }, [isConnected, txPhase, walletError]);
 
   const submit = useCallback(async () => {
-    if (!publicKey || !confirmed || !txXdr) return;
+    if (!publicKey || !txXdr) return;
     if (!preview?.ok) return;
     if (preview.requiresAcknowledgement && !acknowledged) return;
     const xdr = txXdr;
@@ -227,7 +227,7 @@ export default function WithdrawModal({ isOpen, onClose, deposited }: Props) {
     } finally {
       setSubmitting(false);
     }
-  }, [acknowledged, confirmed, preview, publicKey, txXdr]);
+  }, [acknowledged, preview, publicKey, txXdr]);
 
   function resetTransactionState() {
     setTxPhase("idle");
@@ -242,7 +242,6 @@ export default function WithdrawModal({ isOpen, onClose, deposited }: Props) {
     resetTransactionState();
 
     if (wasSuccessful) {
-      setConfirmed(false);
       setTxXdr(null);
       setMaxFeeStroops(null);
       onClose();
@@ -395,22 +394,9 @@ export default function WithdrawModal({ isOpen, onClose, deposited }: Props) {
                 </div>
               </div>
 
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={confirmed}
-                  onChange={(e) => setConfirmed(e.target.checked)}
-                  className="mt-1 w-4 h-4 rounded border-[var(--border-color)] accent-[var(--accent-primary)]"
-                />
-                <span className="text-sm text-[var(--text-secondary)]">
-                  I understand the penalty and want to proceed with early withdrawal.
-                </span>
-              </label>
-
               <button
-                onClick={submit}
+                onClick={() => setShowConfirmation(true)}
                 disabled={
-                  !confirmed ||
                   submitting ||
                   estimatingTx ||
                   !usableXdr ||
@@ -437,6 +423,16 @@ export default function WithdrawModal({ isOpen, onClose, deposited }: Props) {
           )}
         </div>
       </div>
+
+      <ConfirmationDialog
+        isOpen={showConfirmation}
+        title="Confirm early withdrawal"
+        description={`Withdraw ${depositNum.toLocaleString()} USDC. The estimated penalty is ${penaltyAmount?.toLocaleString() ?? "still being calculated"} USDC and the estimated refund is ${refundAmount?.toLocaleString() ?? "still being calculated"} USDC. This transaction cannot be reversed.`}
+        confirmationText="WITHDRAW"
+        confirmLabel="Confirm and sign withdrawal"
+        onConfirm={submit}
+        onCancel={() => setShowConfirmation(false)}
+      />
 
       <TransactionModal
         isOpen={txPhase !== "idle"}

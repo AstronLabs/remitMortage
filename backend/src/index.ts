@@ -25,6 +25,7 @@ import { verificationRouter } from "./routes/verification.js";
 import { verifyRouter } from "./routes/verify.js";
 import { borrowerRouter } from "./routes/borrower.js";
 import { loanRouter } from "./routes/loan.js";
+import { loanAgreementRouter } from "./routes/loanAgreement.js";
 import { milestoneRouter } from "./routes/milestone.js";
 import { analyticsRouter } from "./routes/analytics.js";
 import { auditRouter } from "./routes/audit.js";
@@ -36,6 +37,7 @@ import { didRouter } from "./routes/did.js";
 import { adminRouter } from "./routes/admin.js";
 import { adminAuthRouter } from "./routes/adminAuth.js";
 import { adminDevicesRouter } from "./routes/adminDevices.js";
+import { adminTrustedDevicePolicyRouter } from "./routes/adminTrustedDevicePolicy.js";
 import { impersonationRouter } from "./routes/impersonation.js";
 import { workspaceRouter } from "./routes/workspace.js";
 import { userRouter } from "./routes/user.js";
@@ -63,7 +65,12 @@ import {
 import { rateSheetAdminRouter } from "./routes/rateSheet.js";
 import { notificationTemplatesAdminRouter } from "./routes/notificationTemplates.js";
 import { adminSearchRouter } from "./routes/adminSearch.js";
+import { adminLatencyRouter } from "./routes/adminLatency.js";
+import { adminDeadLetterRouter } from "./routes/adminDeadLetter.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { errorCatalogRouter } from "./routes/errorCatalog.js";
+import { sessionsRouter } from "./routes/sessions.js";
+import { dsarAdminRouter } from "./routes/dsar.js";
 import { requestLogger } from "./middleware/requestLogger.js";
 import { logMasker } from "./middleware/logMasker.js";
 import { payloadLimits } from "./middleware/payloadLimits.js";
@@ -73,6 +80,7 @@ import { correlationId } from "./middleware/correlationId.js";
 import { tenantContext } from "./services/tenant.js";
 import { httpMetricsMiddleware } from "./middleware/metricsMiddleware.js";
 import { tracingMiddleware } from "./middleware/tracingMiddleware.js";
+import { tracingBaggageMiddleware } from "./middleware/tracingBaggage.js";
 import { authMiddleware, optionalAuthMiddleware } from "./middleware/auth.js";
 import { readYourWritesMiddleware } from "./middleware/readYourWrites.js";
 import { credentialStuffingGuard } from "./middleware/credentialStuffing.js";
@@ -231,6 +239,9 @@ void (async () => {
 app.use(inFlightRequestTracker());
 app.use(correlationId);
 app.use(tenantContext);
+// Attach user/tenant identity to the tracing baggage right after the tenant is
+// resolved, so every span and downstream hop can be filtered by user or tenant.
+app.use(tracingBaggageMiddleware);
 // HTTP metrics must be first so the timer starts at the earliest possible point.
 app.use(httpMetricsMiddleware);
 app.use(tracingMiddleware);
@@ -299,11 +310,16 @@ const verificationLimiter = rateLimit({
 app.use("/metrics", metricsRouter);
 app.use("/api/health/rpc", rpcHealthRouter);
 app.use("/api/health", healthRouter);
+// Public, cache-backed up/down summary — no authentication, no internal detail.
+app.use("/api/status", statusRouter);
+app.use("/api/errors", errorCatalogRouter);
+app.use("/api/sessions", authMiddleware, readYourWritesMiddleware, sessionsRouter);
 app.use("/api/verification", verificationLimiter, verificationRouter);
 app.use("/api/verify", verificationLimiter, verifyRouter);
 app.use("/api/borrower", mutationRateLimiter, authMiddleware, readYourWritesMiddleware, borrowerRouter);
 app.use("/api/borrower", mutationRateLimiter, authMiddleware, readYourWritesMiddleware, feeWaiverBorrowerRouter);
 app.use("/api/loan", mutationRateLimiter, authMiddleware, readYourWritesMiddleware, loanRouter);
+app.use("/api/loan", mutationRateLimiter, authMiddleware, readYourWritesMiddleware, loanAgreementRouter);
 app.use("/api/loan", mutationRateLimiter, authMiddleware, readYourWritesMiddleware, feeWaiverLoanRouter);
 app.use("/api/loan/import", mutationRateLimiter, authMiddleware, readYourWritesMiddleware, loanImportRouter);
 app.use("/api/milestone", mutationRateLimiter, milestoneRouter);
@@ -324,11 +340,14 @@ app.use("/api/tenant", tenantRouter);
 // POST /api/admin/devices/enroll is exempt, since it is how a session becomes
 // bound in the first place.
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminDevicesRouter);
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminTrustedDevicePolicyRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), feeWaiverAdminRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), rateSheetAdminRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), notificationTemplatesAdminRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminSearchRouter);
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminLatencyRouter);
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminDeadLetterRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), investorAdminRouter);
 app.use("/api/admin", adminAuthRouter);
 // Bare (no outer authMiddleware): impersonation/start and /end authenticate
@@ -339,6 +358,7 @@ app.use("/api/admin", adminAuthRouter);
 // ends an active impersonation session.
 app.use("/api/admin", impersonationRouter);
 app.use("/api/admin/api-keys", apiKeysRouter);
+app.use("/api/admin/dsar", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), dsarAdminRouter);
 app.use("/api/exports", exportsRouter);
 app.use("/api/keys", apiKeyUsageRouter);
 app.use("/api/webhooks/pagerduty", incidentWebhookRouter);
