@@ -7,37 +7,33 @@ import { EmptyState } from "@/components/EmptyState";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, CircleAlert, Clock3, FileUp, LoaderCircle, XCircle } from "lucide-react";
 import {
+  buildDocumentChecklist,
   canSubmitApplication,
-  getChecklistStatus,
-  getLatestDocument,
   getSubmissionBlockMessage,
   normalizeDocumentStatus,
-  REQUIRED_DOCUMENTS,
   type ApplicantDocument,
+  type ChecklistItemState,
   type LoanType,
 } from "@/lib/document-checklist";
 
-const STATUS_LABELS = {
-  missing: "Missing",
-  uploaded: "Uploaded",
-  under_review: "Under review",
-  accepted: "Accepted",
+const STATE_LABELS: Record<ChecklistItemState, string> = {
+  not_submitted: "Not submitted",
+  pending_review: "Pending review",
+  approved: "Approved",
   rejected: "Rejected",
-} as const;
+};
 
-const STATUS_STYLES = {
-  missing: "border-slate-700 bg-slate-900/60 text-slate-400",
-  uploaded: "border-sky-500/30 bg-sky-500/10 text-sky-300",
-  under_review: "border-amber-500/30 bg-amber-500/10 text-amber-300",
-  accepted: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+const STATE_STYLES: Record<ChecklistItemState, string> = {
+  not_submitted: "border-slate-700 bg-slate-900/60 text-slate-400",
+  pending_review: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  approved: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
   rejected: "border-red-500/30 bg-red-500/10 text-red-300",
-} as const;
+};
 
-const STATUS_ICONS = {
-  missing: CircleAlert,
-  uploaded: FileUp,
-  under_review: Clock3,
-  accepted: CheckCircle2,
+const STATE_ICONS = {
+  not_submitted: CircleAlert,
+  pending_review: Clock3,
+  approved: CheckCircle2,
   rejected: XCircle,
 } as const;
 
@@ -137,6 +133,8 @@ export default function DocumentChecklist({
     };
   }, [applicantAddress, pollIntervalMs, refresh, refreshToken]);
 
+  const items = useMemo(() => buildDocumentChecklist(loanType, documents), [loanType, documents]);
+  const approvedCount = items.filter((item) => item.state === "approved").length;
   const eligible = useMemo(() => canSubmitApplication(loanType, documents), [loanType, documents]);
   const blockMessage = useMemo(() => getSubmissionBlockMessage(loanType, documents), [loanType, documents]);
 
@@ -220,37 +218,53 @@ export default function DocumentChecklist({
           <LoaderCircle className="h-4 w-4 animate-spin" /> Loading documents…
         </p>
       ) : (
+        <>
+        <p data-testid="document-checklist-summary" className="text-xs text-slate-400">
+          {approvedCount} of {items.length} required documents approved
+        </p>
         <ul id="required-document-list" className="space-y-3">
-          {REQUIRED_DOCUMENTS[loanType].map((required) => {
-            const status = getChecklistStatus(required.type, documents);
-            const latest = getLatestDocument(required.type, documents);
-            const Icon = STATUS_ICONS[status];
+          {items.map((item) => {
+            const Icon = STATE_ICONS[item.state];
+            const actionLabel = item.action === "resubmit" ? "Resubmit" : "Upload";
             return (
-              <li key={required.type} className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+              <li
+                key={item.type}
+                id={`document-${item.type}`}
+                data-testid={`document-item-${item.type}`}
+                data-state={item.state}
+                className="rounded-xl border border-slate-800 bg-slate-950/50 p-4"
+              >
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-100">{required.label}</p>
-                    {latest && <p className="mt-1 truncate text-xs text-slate-500">{latest.originalName}</p>}
-                    {latest?.reviewMessage && status === "rejected" && (
-                      <p className="mt-1 text-xs text-red-300">{latest.reviewMessage}</p>
+                    <p className="text-sm font-semibold text-slate-100">{item.label}</p>
+                    {item.document && <p className="mt-1 truncate text-xs text-slate-500">{item.document.originalName}</p>}
+                    {item.rejectionReason && (
+                      <p className="mt-1 text-xs text-red-300">
+                        <span className="font-semibold">Reason: </span>
+                        {item.rejectionReason}
+                      </p>
                     )}
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${STATUS_STYLES[status]}`}>
-                      <Icon className="h-3.5 w-3.5" /> {STATUS_LABELS[status]}
+                    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${STATE_STYLES[item.state]}`}>
+                      <Icon className="h-3.5 w-3.5" aria-hidden="true" /> {STATE_LABELS[item.state]}
                     </span>
-                    {status !== "accepted" && applicantAddress && (
-                      <label className="cursor-pointer rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-cyan-300 hover:border-cyan-500/50">
-                        {uploadingType === required.type ? "Uploading…" : status === "missing" ? "Upload" : "Replace"}
+                    {item.action && applicantAddress && (
+                      <label
+                        data-testid={`document-action-${item.type}`}
+                        className="cursor-pointer rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-cyan-300 hover:border-cyan-500/50 focus-within:ring-2 focus-within:ring-cyan-400"
+                      >
+                        <FileUp className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" />
+                        {uploadingType === item.type ? "Uploading…" : actionLabel}
                         <input
                           type="file"
                           accept="application/pdf,image/jpeg,image/png"
                           className="sr-only"
-                          aria-label={`Upload ${required.label}`}
+                          aria-label={`${actionLabel} ${item.label}`}
                           disabled={uploadingType !== null}
                           onChange={(event) => {
                             const file = event.currentTarget.files?.[0];
-                            if (file) void handleUpload(required.type, file);
+                            if (file) void handleUpload(item.type, file);
                             event.currentTarget.value = "";
                           }}
                         />
@@ -262,6 +276,7 @@ export default function DocumentChecklist({
             );
           })}
         </ul>
+        </>
       )}
 
       {!eligible && (
