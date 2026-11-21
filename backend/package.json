@@ -26,6 +26,7 @@
     "migration:safety:all": "tsx scripts/migration-safety-gate.ts --all",
     "check:module-cycles": "tsx scripts/check-module-cycles.ts",
     "check:module-cycles:update-baseline": "tsx scripts/check-module-cycles.ts --update-baseline",
+    "fixtures:contract-events": "tsx scripts/generate-contract-event-fixtures.ts",
     "backup:restore-drill": "tsx scripts/restore-latest-backup.ts",
     "anonymize:staging-seed": "tsx scripts/anonymize-staging-seed.ts",
     "load-test": "tsx load-tests/run-all.ts",

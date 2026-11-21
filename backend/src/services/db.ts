@@ -279,6 +279,15 @@ export async function saveIndexerState(key: string, lastProcessedLedger: number,
   });
 }
 
+/** Borrower wallet behind an on-chain loan id (hex), or null when unknown. */
+export async function findBorrowerAddressByLoanId(loanId: string): Promise<string | null> {
+  const loan = await prisma.loanApplication.findFirst({
+    where: { loanId, deletedAt: null },
+    select: { applicant: { select: { stellarAddress: true } } },
+  });
+  return loan?.applicant?.stellarAddress ?? null;
+}
+
 export async function getBorrower(stellarAddress: string) {
   return prisma.borrower.findFirst({
     where: { stellarAddress, deletedAt: null },

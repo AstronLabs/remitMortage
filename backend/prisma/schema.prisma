@@ -1185,6 +1185,20 @@ model ApiKeyEndpointUsage {
   @@index([apiKeyId, periodStart])
 }
 
+/// Per-country bank holidays (issue #980). Weekends are always non-business
+/// days; each row adds one holiday for one country, stored at UTC midnight.
+/// Admins edit it through /api/admin/calendar/holidays and the repayment
+/// cutoff moves due dates that land on a non-business day.
+model BankHoliday {
+  id        String   @id @default(uuid())
+  /// ISO 3166-1 alpha-2 country code, upper case.
+  country   String
+  date      DateTime
+  name      String?
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([country, date])
 /// Server-side save point for an applicant's in-progress multi-step
 /// application (issue #1110), so it can be resumed on any device. One row per
 /// wallet; `data` holds the wizard's form values and is replaced on each save.

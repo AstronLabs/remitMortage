@@ -60,6 +60,11 @@ import {
   DEFAULT_STAGE_SUMMARY_WINDOW_DAYS,
 } from "../services/loanReviewStages.js";
 import {
+  addHoliday,
+  CalendarValidationError,
+  listHolidays,
+  removeHoliday,
+} from "../services/businessCalendar.js";
   AssignmentError,
   MAX_HANDOFF_NOTE_LENGTH,
   reassignApplicationReviewer,
@@ -1023,3 +1028,48 @@ adminRouter.post(
     }
   }
 );
+
+// ── Business-day calendar (issue #980) ───────────────────────────────────
+// Per-country bank holidays used to move payment cutoffs off non-business
+// days. Changes apply on the next cutoff check, no deploy needed.
+
+function sendCalendarError(res: Response, error: unknown, fallback: string) {
+  if (error instanceof CalendarValidationError) {
+    return res.status(400).json({ error: "invalid_request", field: error.field, message: error.message });
+  }
+  logger.error(fallback, { error });
+  return res.status(500).json({ error: fallback });
+}
+
+adminRouter.get("/calendar/holidays", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const country = typeof req.query.country === "string" ? req.query.country : undefined;
+    return res.json({ holidays: await listHolidays(country) });
+  } catch (error) {
+    return sendCalendarError(res, error, "failed_to_list_holidays");
+  }
+});
+
+adminRouter.post("/calendar/holidays", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const holiday = await addHoliday({
+      country: req.body?.country,
+      date: req.body?.date,
+      name: req.body?.name,
+      createdBy: req.user?.walletAddress ?? "admin-api-key",
+    });
+    return res.status(201).json({ holiday });
+  } catch (error) {
+    return sendCalendarError(res, error, "failed_to_add_holiday");
+  }
+});
+
+adminRouter.delete("/calendar/holidays/:country/:date", requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const removed = await removeHoliday(String(req.params.country), String(req.params.date));
+    if (!removed) return res.status(404).json({ error: "holiday_not_found" });
+    return res.status(204).send();
+  } catch (error) {
+    return sendCalendarError(res, error, "failed_to_remove_holiday");
+  }
+});
