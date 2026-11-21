@@ -2,9 +2,10 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { X, Wallet, CheckCircle2, AlertCircle, Loader2, Link } from "lucide-react";
 import { useWallet } from "../context/WalletContext";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 interface MultiWalletModalProps {
   isOpen: boolean;
@@ -20,6 +21,8 @@ export const MultiWalletModal: React.FC<MultiWalletModalProps> = ({
   const wallet = useWallet();
   const [isSigning, setIsSigning] = useState(false);
   const [signStatus, setSignStatus] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, isOpen, { onEscape: onClose });
 
   if (!isOpen) return null;
 
@@ -95,21 +98,31 @@ export const MultiWalletModal: React.FC<MultiWalletModalProps> = ({
         : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm transition-opacity">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="multi-wallet-modal-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm transition-opacity"
+    >
       <div className="absolute inset-0" onClick={onClose} aria-hidden="true" />
 
-      <div className="relative w-full max-w-md bg-zinc-950 border border-zinc-800 shadow-2xl rounded-2xl overflow-hidden flex flex-col">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="relative w-full max-w-md bg-zinc-950 border border-zinc-800 shadow-2xl rounded-2xl overflow-hidden flex flex-col"
+      >
         <div className="flex items-center justify-between p-5 border-b border-zinc-800/80 bg-zinc-900/50">
           <div className="flex items-center space-x-3">
             <div className="p-2 bg-indigo-500/10 rounded-lg">
               <Wallet className="w-5 h-5 text-indigo-400" />
             </div>
-            <h2 className="text-lg font-bold text-zinc-100 tracking-tight">
+            <h2 id="multi-wallet-modal-title" className="text-lg font-bold text-zinc-100 tracking-tight">
               Connect Remittance Wallet
             </h2>
           </div>
           <button
             onClick={onClose}
+            aria-label="Close remittance wallet dialog"
             className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors focus:outline-none"
           >
             <X className="w-5 h-5" />

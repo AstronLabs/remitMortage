@@ -25,6 +25,8 @@ export interface SiemExportRequest {
   requestorAddress?: string;
   /** PII redaction level (issue #1104). Defaults to the most redacted, `aggregate`. */
   redactionLevel?: ExportRedactionLevel;
+  /** Optional predicate checked between batches so a client disconnect stops the query early (#994). */
+  shouldAbort?: () => boolean;
 }
 
 export interface SiemExportResult {
@@ -34,6 +36,7 @@ export interface SiemExportResult {
   chainHash: string; // HMAC-SHA256 over the full export payload for integrity verification
   pages: number;
   redactionLevel: ExportRedactionLevel;
+  aborted?: boolean;
 }
 
 /** One row of an `aggregate` export: counts only, no actor, IP or metadata. */
@@ -116,8 +119,8 @@ export function buildExportChainHash(lines: string[], secret: string): string {
 /**
  * Streams historical audit log entries to the caller in pages.
  * Each page is an array of formatted lines ready to forward to a SIEM over
- * HTTP/syslog.  The caller receives a final `chainHash` for end-to-end
- * integrity verification.
+ * HTTP/syslog. The rolling HMAC-SHA256 is updated incrementally per page so
+ * peak memory never grows with the total number of exported events (#994).
  */
 export async function exportAuditLogToSiem(
   req: SiemExportRequest,
@@ -140,10 +143,11 @@ export async function exportAuditLogToSiem(
   const redactionLevel = req.redactionLevel ?? DEFAULT_EXPORT_REDACTION_LEVEL;
   const aggregates = new Map<string, AggregateExportRow>();
   const exportId = crypto.randomUUID();
-  const allLines: string[] = [];
+  const rollingHmac = crypto.createHmac("sha256", hmacSecret);
   let cursor: string | undefined;
   let pageIndex = 0;
   let totalEvents = 0;
+  let aborted = false;
 
   const where: Record<string, unknown> = {
     createdAt: { gte: req.from, lte: req.to },
@@ -156,6 +160,9 @@ export async function exportAuditLogToSiem(
   }
 
   async function emitPage(lines: string[], index: number): Promise<void> {
+    for (const line of lines) {
+      rollingHmac.update(line + "\n");
+    }
     try {
       await onPage(lines, index);
     } catch (err) {
@@ -170,6 +177,11 @@ export async function exportAuditLogToSiem(
 
   // Keyset pagination over (createdAt, id) to avoid OFFSET scans on large tables
   for (;;) {
+    if (req.shouldAbort?.()) {
+      aborted = true;
+      break;
+    }
+
     const rows = await prisma.auditLog.findMany({
       where: cursor
         ? { ...where, id: { gt: cursor } }
@@ -219,26 +231,29 @@ export async function exportAuditLogToSiem(
           ? redacted.map(formatAsCef)
           : redacted.map(formatAsNdjson);
 
-      allLines.push(...lines);
       await emitPage(lines, pageIndex);
       pageIndex++;
+    }
+
+    if (req.shouldAbort?.()) {
+      aborted = true;
+      break;
     }
 
     if (rows.length < SIEM_EXPORT_PAGE_SIZE) break;
   }
 
-  if (redactionLevel === "aggregate" && aggregates.size > 0) {
+  if (!aborted && redactionLevel === "aggregate" && aggregates.size > 0) {
     const rowsOut = [...aggregates.values()].sort((a, b) => a.action.localeCompare(b.action));
     const lines =
       format === "cef"
         ? rowsOut.map(formatAggregateAsCef)
         : rowsOut.map((r) => JSON.stringify(r));
-    allLines.push(...lines);
     await emitPage(lines, pageIndex);
     pageIndex++;
   }
 
-  const chainHash = buildExportChainHash(allLines, hmacSecret);
+  const chainHash = rollingHmac.digest("hex");
 
   logAudit({
     action: "audit.siem_export_completed",
@@ -254,8 +269,17 @@ export async function exportAuditLogToSiem(
       actions: req.actions ?? null,
       actorFilter: req.actorAddress ?? null,
       chainHash,
+      ...(aborted ? { aborted: true } : {}),
     },
   });
 
-  return { exportId, totalEvents, format, chainHash, pages: pageIndex, redactionLevel };
+  return {
+    exportId,
+    totalEvents,
+    format,
+    chainHash,
+    pages: pageIndex,
+    redactionLevel,
+    ...(aborted ? { aborted: true } : {}),
+  };
 }

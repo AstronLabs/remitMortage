@@ -30,8 +30,62 @@ type Options = {
 };
 
 /**
+ * Marks siblings of every ancestor between `container` and `document.body`
+ * as `inert` and `aria-hidden="true"` so screen readers and pointer/focus
+ * traversal cannot reach background content while the dialog is open.
+ */
+function markBackgroundInert(container: HTMLElement): () => void {
+  const restored: Array<{
+    el: HTMLElement;
+    hadInert: boolean;
+    prevAriaHidden: string | null;
+  }> = [];
+  const seen = new Set<HTMLElement>();
+
+  let node: HTMLElement | null = container;
+  while (node && node !== document.body && node.parentElement) {
+    const parent: HTMLElement = node.parentElement;
+    for (const child of Array.from(parent.children)) {
+      if (!(child instanceof HTMLElement) || child === node || seen.has(child)) {
+        continue;
+      }
+      const tag = child.tagName.toLowerCase();
+      if (tag === "script" || tag === "style" || tag === "link") {
+        continue;
+      }
+      if (child.getAttribute("aria-live") || child.querySelector("[aria-live]")) {
+        continue;
+      }
+      seen.add(child);
+      restored.push({
+        el: child,
+        hadInert: child.hasAttribute("inert"),
+        prevAriaHidden: child.getAttribute("aria-hidden"),
+      });
+      child.setAttribute("inert", "");
+      child.setAttribute("aria-hidden", "true");
+    }
+    node = parent;
+  }
+
+  return () => {
+    for (const { el, hadInert, prevAriaHidden } of restored) {
+      if (!hadInert) {
+        el.removeAttribute("inert");
+      }
+      if (prevAriaHidden === null) {
+        el.removeAttribute("aria-hidden");
+      } else {
+        el.setAttribute("aria-hidden", prevAriaHidden);
+      }
+    }
+  };
+}
+
+/**
  * Keeps keyboard focus inside `containerRef` while `active`, closes on Escape,
- * and returns focus to the element that opened the dialog when it closes.
+ * marks background content `inert` and `aria-hidden="true"`, and returns focus
+ * to the element that opened the dialog when it closes.
  * The container should have `tabIndex={-1}` so it can hold focus when it has
  * no focusable children.
  */
@@ -52,6 +106,7 @@ export function useFocusTrap(
     const trap = {};
     openTraps.push(trap);
     const opener = document.activeElement as HTMLElement | null;
+    const restoreBackground = markBackgroundInert(container);
 
     if (!container.contains(document.activeElement)) {
       (initialFocusRef?.current ?? focusableIn(container)[0] ?? container).focus();
@@ -91,6 +146,7 @@ export function useFocusTrap(
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
+      restoreBackground();
       openTraps.splice(openTraps.indexOf(trap), 1);
       if (opener && opener !== document.body && document.contains(opener)) {
         opener.focus();

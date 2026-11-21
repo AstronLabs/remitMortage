@@ -16,9 +16,10 @@
  * directly and only requires `isOpen` / `onClose` props from its parent.
  */
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { X, Wallet, CheckCircle2, AlertCircle, Loader2, ChevronDown, ChevronUp, Copy, ExternalLink } from "lucide-react";
 import { useWallet } from "../context/WalletContext";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import { DEFAULT_LEDGER_PATH } from "../lib/ledger";
 import QrCodeDisplay from "./QrCodeDisplay";
 
@@ -94,6 +95,8 @@ export const WalletSelectModal: React.FC<WalletSelectModalProps> = ({
   const [signatureResult, setSignatureResult] = useState<string | null>(null);
 
   const wallet = useWallet();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, isOpen, { onEscape: onClose });
 
   async function handleSignChallenge() {
     setChallengeStatus("Signing challenge...");
@@ -399,7 +402,11 @@ export const WalletSelectModal: React.FC<WalletSelectModalProps> = ({
       {/* Backdrop click closes */}
       <div className="absolute inset-0" onClick={onClose} aria-hidden="true" />
 
-      <div className="relative w-full max-w-md bg-zinc-950 border border-zinc-800 shadow-2xl rounded-2xl overflow-hidden flex flex-col">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="relative w-full max-w-md bg-zinc-950 border border-zinc-800 shadow-2xl rounded-2xl overflow-hidden flex flex-col"
+      >
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800/80 bg-zinc-900/50">

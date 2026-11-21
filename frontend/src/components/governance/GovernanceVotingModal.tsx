@@ -1,9 +1,10 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { X, Check, XCircle, MinusCircle } from "lucide-react";
 import { GovernanceProposal } from "../../hooks/useGovernanceProposals";
+import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { QuorumProgressBar } from "./QuorumProgressBar";
 import ConfirmationDialog from "../ConfirmationDialog";
 
@@ -21,6 +22,8 @@ export function GovernanceVotingModal({
   onVote,
 }: GovernanceVotingModalProps) {
   const [pendingVote, setPendingVote] = useState<"yes" | "no" | "abstain" | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, Boolean(isOpen && proposal), { onEscape: onClose });
 
   if (!isOpen || !proposal) return null;
 
@@ -32,18 +35,28 @@ export function GovernanceVotingModal({
 
   return (
     <>
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="governance-voting-modal-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         onClick={onClose}
       />
       
-      <div className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col"
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-slate-800">
-          <h2 className="text-xl font-bold text-white">Cast Your Vote</h2>
+          <h2 id="governance-voting-modal-title" className="text-xl font-bold text-white">Cast Your Vote</h2>
           <button
             onClick={onClose}
+            aria-label="Close voting dialog"
             className="text-slate-400 hover:text-white transition-colors disabled:opacity-50"
           >
             <X className="w-6 h-6" />
