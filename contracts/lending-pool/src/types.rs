@@ -736,6 +736,114 @@ pub enum FeatureKey {
     UtilizationAutoPaused,
 }
 
+/// Extension storage keys kept separate from [`FeatureKey`] so neither enum
+/// exceeds Soroban's 50-variant `#[contracttype]` enum limit.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum PoolExtKey {
+    /// Aggregate outstanding loan principal currently deployed out of the pool
+    /// (incremented on disbursement, decremented on principal repayment, refund,
+    /// or default write-off).
+    OutstandingPrincipal,
+    /// Active utilization-based kinked borrow rate curve configuration.
+    BorrowRateCurve,
+    /// Pending timelocked borrow rate curve change.
+    PendingRateCurve,
+    /// Pause-only guardian address separate from the pool admin.
+    PauseGuardian,
+    /// Cumulative fees paid on a loan (application + origination + protocol interest fees).
+    LoanFees(BytesN<32>),
+    /// Cumulative early-prepayment penalties paid on a loan.
+    LoanPrepayPenalties(BytesN<32>),
+    /// Cumulative rebates credited/paid on a loan (maturity rebate).
+    LoanRebates(BytesN<32>),
+    /// Authoritative final accounting closing statement stored when a loan is paid off.
+    LoanClosingStatement(BytesN<32>),
+}
+
+/// Single-ledger solvency snapshot of the lending pool, returned by
+/// `get_proof_of_reserves`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProofOfReserves {
+    /// Actual pool token balance currently held by this contract (`token.balance(pool)`).
+    pub token_balance: i128,
+    /// Net investor claims owed by the pool across senior and junior tranches
+    /// (`senior.total_deposited + junior.total_deposited`, already net of
+    /// absorbed default losses).
+    pub total_investor_claims: i128,
+    /// Outstanding loan principal currently deployed to borrowers (disbursed
+    /// principal minus repaid principal, refunds, and defaulted write-offs).
+    pub outstanding_loan_principal: i128,
+    /// Current reserves held by the configured `InsurancePool` contract (`0` if unset).
+    pub insurance_reserve: i128,
+    /// Coverage ratio in basis points (`10_000 = 100%`):
+    /// `((token_balance + outstanding_loan_principal + insurance_reserve) * 10_000) / total_investor_claims`
+    /// when `total_investor_claims > 0`, or `10_000` when `total_investor_claims == 0`.
+    pub coverage_ratio_bps: u32,
+    /// Ledger sequence at which all figures were atomically read.
+    pub ledger: u32,
+}
+
+/// Utilization-based kinked borrow rate curve parameters (all in basis points).
+///
+/// For pool utilization `u` in `0..=10_000`:
+/// - When `u <= optimal_utilization_bps`:
+///   `rate = base_rate_bps + (u * slope1_bps) / optimal_utilization_bps`
+///   (if `optimal_utilization_bps == 0`, `base_rate_bps` at `u == 0`, else `base_rate_bps + slope1_bps`).
+/// - When `u > optimal_utilization_bps`:
+///   `excess = u - optimal_utilization_bps`
+///   `max_excess = 10_000 - optimal_utilization_bps`
+///   `rate = base_rate_bps + slope1_bps + (excess * slope2_bps) / max_excess`.
+///
+/// The resulting rate is clamped to `[min_rate_bps, max_rate_bps]`.
+/// Setting `slope1_bps == 0` and `slope2_bps == 0` preserves a flat rate.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BorrowRateCurve {
+    /// Base annual borrow rate at 0% utilization, in basis points.
+    pub base_rate_bps: u32,
+    /// Target (kink) utilization point in basis points (`0..=10_000`, e.g. 8_000 = 80%).
+    pub optimal_utilization_bps: u32,
+    /// Rate increase across `0..=optimal_utilization_bps`, in basis points.
+    pub slope1_bps: u32,
+    /// Additional steep rate increase across `optimal_utilization_bps..=10_000`, in basis points.
+    pub slope2_bps: u32,
+    /// Interest rate floor in basis points.
+    pub min_rate_bps: u32,
+    /// Interest rate cap in basis points.
+    pub max_rate_bps: u32,
+}
+
+/// A pending timelocked update to the borrow rate curve.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingRateCurveChange {
+    /// The rate curve queued to take effect.
+    pub curve: BorrowRateCurve,
+    /// The ledger sequence after which this change may be executed.
+    pub execute_after: u32,
+}
+
+/// Authoritative final accounting closing statement emitted and stored when a
+/// loan is fully repaid.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoanClosingStatement {
+    /// Total principal repaid over the life of the loan.
+    pub total_principal: i128,
+    /// Total interest repaid over the life of the loan.
+    pub total_interest: i128,
+    /// Total fees paid on the loan (application fee + origination fees + protocol interest fees).
+    pub total_fees: i128,
+    /// Total penalties paid on the loan (late fees + early-prepayment penalty).
+    pub total_penalties: i128,
+    /// Total rebates paid/credited on the loan (e.g., maturity rebate).
+    pub total_rebates: i128,
+    /// Ledger sequence at which the loan reached `LoanStatus::Repaid`.
+    pub closing_ledger: u32,
+}
+
 /// One investor deposit lot tracked independently for the withdrawal grace window.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
