@@ -237,7 +237,7 @@ loanRouter.post("/apply", requireRpcAvailable(), idempotencyMiddleware, validate
 // ---------------------------------------------------------------------------
 // GET /api/loan/borrower/:address
 // ---------------------------------------------------------------------------
-loanRouter.get("/borrower/:address", async (req, res) => {
+loanRouter.get("/borrower/:address", strongEtag({ userScoped: true }), async (req, res) => {
   const address = String(req.params?.address ?? "");
   try {
     StrKey.decodeEd25519PublicKey(address);
@@ -330,7 +330,7 @@ loanRouter.get("/queue-metrics", async (req, res) => {
 // ---------------------------------------------------------------------------
 // GET /api/loan/pending
 // ---------------------------------------------------------------------------
-loanRouter.get("/pending", async (req, res) => {
+loanRouter.get("/pending", strongEtag(), async (req, res) => {
   const pending = await getPendingApplications();
   return res.json(pending);
 });
