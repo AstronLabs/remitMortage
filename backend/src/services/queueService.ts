@@ -257,6 +257,16 @@ class QueueService {
     };
   }
 
+  /**
+   * The initialized queue with this BullMQ name, e.g. to requeue a
+   * dead-lettered job onto the queue it came from (issue #1103).
+   */
+  getQueueByName(name: string): Queue | undefined {
+    if (!this.initialized) return undefined;
+    const queues: Queue[] = [this.notificationQueue, this.webhookQueue, this.emailQueue, this.analyticsQueue];
+    return queues.find((queue) => queue.name === name);
+  }
+
   async close(): Promise<void> {
     const queues = [this.notificationQueue, this.webhookQueue, this.emailQueue, this.analyticsQueue];
     await Promise.allSettled(queues.map((q) => q.close()));
