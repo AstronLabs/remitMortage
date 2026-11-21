@@ -1,10 +1,14 @@
 {
   "contract": "lending-pool",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "changes": [
     {
       "version": 1,
       "summary": "Initial baseline"
+    },
+    {
+      "version": 2,
+      "summary": "lending-pool loan events gain a trailing per-loan event sequence number"
     }
   ],
   "events": {
@@ -24,7 +28,8 @@
         "data": [
           "borrower",
           "loan_id",
-          "application_fee"
+          "application_fee",
+          "loan_seq"
         ]
       }
     ],
@@ -35,7 +40,8 @@
         "data": [
           "loan_id",
           "borrower",
-          "fee"
+          "fee",
+          "loan_seq"
         ]
       }
     ],
@@ -46,7 +52,8 @@
         "data": [
           "loan_id",
           "treasury_address",
-          "fee"
+          "fee",
+          "loan_seq"
         ]
       }
     ],
@@ -76,7 +83,8 @@
         "data": [
           "loan_id",
           "new_borrower",
-          "fee"
+          "fee",
+          "loan_seq"
         ]
       }
     ],
@@ -226,7 +234,8 @@
         "data": [
           "borrower",
           "releasable",
-          "remaining_collateral"
+          "remaining_collateral",
+          "loan_seq"
         ]
       }
     ],
@@ -240,7 +249,8 @@
           "from",
           "amount",
           "remaining_collateral",
-          "ratio_bps"
+          "ratio_bps",
+          "loan_seq"
         ]
       }
     ],
@@ -297,7 +307,8 @@
           "loan_id",
           "borrower",
           "seized_amount",
-          "net_loss"
+          "net_loss",
+          "loan_seq"
         ]
       }
     ],
@@ -307,7 +318,8 @@
         "dataKind": "tuple",
         "data": [
           "loan_id",
-          "recovered_amount"
+          "recovered_amount",
+          "loan_seq"
         ]
       }
     ],
@@ -343,7 +355,8 @@
         "data": [
           "loan_id",
           "recipient",
-          "amount"
+          "amount",
+          "loan_seq"
         ]
       }
     ],
@@ -378,7 +391,8 @@
           "borrower",
           "additional_months",
           "fee",
-          "duration_months"
+          "duration_months",
+          "loan_seq"
         ]
       }
     ],
@@ -401,7 +415,31 @@
         "data": [
           "uncapped",
           "capped",
-          "cap"
+          "cap",
+          "loan_seq"
+        ]
+      }
+    ],
+    "fee_ltc": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "cap_bps"
+        ]
+      }
+    ],
+    "fee_ltcp": [
+      {
+        "topicArgs": [
+          "loan_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "fee",
+          "room",
+          "ceiling",
+          "loan_seq"
         ]
       }
     ],
@@ -423,6 +461,47 @@
         "dataKind": "tuple",
         "data": [
           "paused",
+          "admin"
+        ]
+      }
+    ],
+    "grace_win_set": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "grace_ledgers",
+          "admin"
+        ]
+      }
+    ],
+    "guardian_clr": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "old",
+          "admin"
+        ]
+      }
+    ],
+    "guardian_pause": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "guardian",
+          "env.ledger().sequence()"
+        ]
+      }
+    ],
+    "guardian_set": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "old",
+          "guardian",
           "admin"
         ]
       }
@@ -468,7 +547,8 @@
         "data": [
           "loan_id",
           "insurance_addr",
-          "premium"
+          "premium",
+          "loan_seq"
         ]
       }
     ],
@@ -490,7 +570,8 @@
         "dataKind": "tuple",
         "data": [
           "keeper",
-          "keeper_reward"
+          "keeper_reward",
+          "loan_seq"
         ]
       }
     ],
@@ -499,7 +580,8 @@
         "topicArgs": [],
         "dataKind": "tuple",
         "data": [
-          "loan_id"
+          "loan_id",
+          "loan_seq"
         ]
       }
     ],
@@ -509,7 +591,20 @@
         "dataKind": "tuple",
         "data": [
           "borrower",
+          "loan_id",
+          "loan_seq"
+        ]
+      }
+    ],
+    "loan_closed": [
+      {
+        "topicArgs": [
           "loan_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "statement",
+          "loan_seq"
         ]
       }
     ],
@@ -519,7 +614,8 @@
         "dataKind": "tuple",
         "data": [
           "loan_id",
-          "net_loss"
+          "net_loss",
+          "loan_seq"
         ]
       }
     ],
@@ -529,7 +625,8 @@
         "dataKind": "tuple",
         "data": [
           "loan_id",
-          "source_pool"
+          "source_pool",
+          "loan_seq"
         ]
       }
     ],
@@ -540,7 +637,8 @@
         "data": [
           "loan_id",
           "locked_rate_bps",
-          "locked_duration_months"
+          "locked_duration_months",
+          "loan_seq"
         ]
       }
     ],
@@ -550,7 +648,8 @@
         "dataKind": "tuple",
         "data": [
           "borrower",
-          "loan_id"
+          "loan_id",
+          "loan_seq"
         ]
       }
     ],
@@ -561,7 +660,8 @@
         "data": [
           "borrower",
           "loan_id",
-          "principal"
+          "principal",
+          "loan_seq"
         ]
       }
     ],
@@ -572,7 +672,8 @@
         "data": [
           "borrower",
           "loan_id",
-          "rebate_amount"
+          "rebate_amount",
+          "loan_seq"
         ]
       }
     ],
@@ -582,6 +683,28 @@
         "dataKind": "tuple",
         "data": [
           "ver"
+        ]
+      }
+    ],
+    "note_hash_set": [
+      {
+        "topicArgs": [
+          "loan_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "hash",
+          "loan_seq"
+        ]
+      },
+      {
+        "topicArgs": [
+          "loan_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "note_hash",
+          "loan_seq"
         ]
       }
     ],
@@ -602,7 +725,8 @@
         "data": [
           "loan_id",
           "quoted_amount",
-          "expires_ledger"
+          "expires_ledger",
+          "loan_seq"
         ]
       }
     ],
@@ -614,7 +738,8 @@
         "dataKind": "tuple",
         "data": [
           "loan_id",
-          "amount"
+          "amount",
+          "loan_seq"
         ]
       }
     ],
@@ -635,7 +760,28 @@
         "dataKind": "tuple",
         "data": [
           "LoanPhase::Amortizing as u32",
-          "monthly_amount"
+          "monthly_amount",
+          "loan_seq"
+        ]
+      }
+    ],
+    "pool_paused": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "admin",
+          "env.ledger().sequence()"
+        ]
+      }
+    ],
+    "pool_unpaused": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "admin",
+          "env.ledger().sequence()"
         ]
       }
     ],
@@ -646,7 +792,8 @@
         "data": [
           "loan_id",
           "waived",
-          "prepayment_penalty"
+          "prepayment_penalty",
+          "loan_seq"
         ]
       }
     ],
@@ -657,7 +804,8 @@
         "data": [
           "loan_id",
           "borrower",
-          "penalty"
+          "penalty",
+          "loan_seq"
         ]
       }
     ],
@@ -668,6 +816,20 @@
         "data": [
           "previous",
           "ledgers"
+        ]
+      }
+    ],
+    "principal_paid": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "borrower",
+          "loan_id",
+          "amount",
+          "remaining_principal",
+          "outstanding_debt",
+          "loan_seq"
         ]
       }
     ],
@@ -689,7 +851,51 @@
           "loan_id",
           "treasury_address",
           "protocol_fee",
-          "fee_switch_bps"
+          "fee_switch_bps",
+          "loan_seq"
+        ]
+      }
+    ],
+    "rate_adj": [
+      {
+        "topicArgs": [
+          "loan_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "current_rate_bps",
+          "new_rate_bps",
+          "starting_rate_bps",
+          "loan_seq"
+        ]
+      }
+    ],
+    "rate_cap": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "periodic_cap_bps",
+          "lifetime_cap_bps"
+        ]
+      }
+    ],
+    "rate_crvp": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "curve",
+          "execute_after"
+        ]
+      }
+    ],
+    "rate_crvs": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "curve"
         ]
       }
     ],
@@ -701,7 +907,22 @@
           "loan_id",
           "new_interest_rate_bps",
           "new_duration_months",
-          "lock_expiry_ledger"
+          "lock_expiry_ledger",
+          "loan_seq"
+        ]
+      }
+    ],
+    "refinance_fee": [
+      {
+        "topicArgs": [
+          "loan_id"
+        ],
+        "dataKind": "tuple",
+        "data": [
+          "fee",
+          "pool_fee",
+          "treasury_fee",
+          "loan_seq"
         ]
       }
     ],
@@ -711,7 +932,8 @@
         "dataKind": "tuple",
         "data": [
           "loan_id",
-          "amount"
+          "amount",
+          "loan_seq"
         ]
       }
     ],
@@ -723,7 +945,8 @@
           "borrower",
           "loan_id",
           "amount",
-          "0i128"
+          "0i128",
+          "loan_seq"
         ]
       },
       {
@@ -733,7 +956,17 @@
           "borrower",
           "loan_id",
           "amount",
-          "remaining - amount"
+          "remaining - amount",
+          "loan_seq"
+        ]
+      }
+    ],
+    "rpy_cap": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "cap"
         ]
       }
     ],
@@ -742,7 +975,8 @@
         "topicArgs": [],
         "dataKind": "tuple",
         "data": [
-          "loan_id"
+          "loan_id",
+          "loan_seq"
         ]
       }
     ],
@@ -751,7 +985,8 @@
         "topicArgs": [],
         "dataKind": "tuple",
         "data": [
-          "loan_id"
+          "loan_id",
+          "loan_seq"
         ]
       }
     ],
@@ -761,7 +996,8 @@
         "dataKind": "tuple",
         "data": [
           "borrower",
-          "loan_id"
+          "loan_id",
+          "loan_seq"
         ]
       }
     ],
@@ -929,6 +1165,15 @@
         ]
       }
     ],
+    "shr_cap": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "max_bps"
+        ]
+      }
+    ],
     "upg_prop": [
       {
         "topicArgs": [],
@@ -945,6 +1190,50 @@
         "data": [
           "new_wasm_hash",
           "ver + 1"
+        ]
+      }
+    ],
+    "util_auto_pause": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "util",
+          "threshold"
+        ]
+      }
+    ],
+    "util_pause_clr": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "0u32",
+          "0u32"
+        ]
+      },
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "util",
+          "threshold"
+        ]
+      }
+    ],
+    "util_pause_lift": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": []
+      }
+    ],
+    "util_thresh_set": [
+      {
+        "topicArgs": [],
+        "dataKind": "value",
+        "data": [
+          "threshold_bps"
         ]
       }
     ],

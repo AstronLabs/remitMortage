@@ -78,6 +78,9 @@ mod test_closing_statement;
 
 #[cfg(test)]
 mod test_loan_summaries;
+
+#[cfg(test)]
+mod test_loan_event_seq;
 mod test_principal_payment;
 
 pub use crate::errors::{LoanAssumptionError, PoolError, RateAdjustmentError};
@@ -668,9 +671,10 @@ impl LendingPoolContract {
         let token = Self::token_client(env, &config.token);
         token.transfer(&env.current_contract_address(), borrower, &fee);
 
+        let loan_seq = Self::next_loan_seq(env, &loan_id);
         env.events().publish(
             (Symbol::new(env, "app_fee_refund"),),
-            (loan_id.clone(), borrower.clone(), fee),
+            (loan_id.clone(), borrower.clone(), fee, loan_seq),
         );
     }
 
@@ -704,9 +708,10 @@ impl LendingPoolContract {
             .set(&DataKey::TotalApplicationFees, &(total + fee));
         Self::add_loan_fee(env, loan_id, fee);
 
+        let loan_seq = Self::next_loan_seq(env, &loan_id);
         env.events().publish(
             (Symbol::new(env, "app_fee_retained"),),
-            (loan_id.clone(), config.treasury_address.clone(), fee),
+            (loan_id.clone(), config.treasury_address.clone(), fee, loan_seq),
         );
     }
 
@@ -821,9 +826,10 @@ impl LendingPoolContract {
             .instance()
             .set(&DataKey::TotalPrepaymentPenalties, &(total + penalty));
 
+        let loan_seq = Self::next_loan_seq(env, &loan_id);
         env.events().publish(
             (Symbol::new(env, "prepay_penalty"),),
-            (loan_id.clone(), borrower.clone(), penalty),
+            (loan_id.clone(), borrower.clone(), penalty, loan_seq),
         );
     }
 
@@ -854,6 +860,17 @@ impl LendingPoolContract {
         env.storage()
             .persistent()
             .set(&DataKey::Loan(loan_id.clone()), record);
+    }
+
+    /// Advances and returns a loan's event sequence number. Every
+    /// state-changing loan event carries the value this returns as the last
+    /// field of its payload, so an indexer that sees a jump knows it missed
+    /// an event. The first event for a loan is `1`.
+    fn next_loan_seq(env: &Env, loan_id: &BytesN<32>) -> u32 {
+        let key = PoolExtKey::LoanEventSeq(loan_id.clone());
+        let seq: u32 = env.storage().persistent().get(&key).unwrap_or(0u32) + 1;
+        env.storage().persistent().set(&key, &seq);
+        seq
     }
 
     /// Appends a newly created loan to the sequential loan index that
@@ -1402,13 +1419,15 @@ impl LendingPoolContract {
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+        let loan_seq = Self::next_loan_seq(env, &loan_id);
         env.events().publish(
             (symbol_short!("repay"),),
-            (borrower.clone(), loan_id.clone(), amount, 0i128),
+            (borrower.clone(), loan_id.clone(), amount, 0i128, loan_seq),
         );
+        let loan_seq = Self::next_loan_seq(env, &loan_id);
         env.events().publish(
             (symbol_short!("pay_quote"), symbol_short!("used")),
-            (loan_id.clone(), amount),
+            (loan_id.clone(), amount, loan_seq),
         );
         Ok(())
     }
@@ -1806,9 +1825,10 @@ impl LendingPoolContract {
             .min(uncapped);
 
         if capped < uncapped {
+            let loan_seq = Self::next_loan_seq(env, &loan_id);
             env.events().publish(
                 (symbol_short!("fee_capd"), loan_id.clone()),
-                (uncapped, capped, cap),
+                (uncapped, capped, cap, loan_seq),
             );
         }
         capped
@@ -1854,9 +1874,10 @@ impl LendingPoolContract {
             let ceiling = original_principal.saturating_mul(cap_bps as i128) / BPS_SCALE as i128;
             let room = ceiling.saturating_sub(charged).max(0);
             if fee > room {
+                let loan_seq = Self::next_loan_seq(env, &loan_id);
                 env.events().publish(
                     (symbol_short!("fee_ltcp"), loan_id.clone()),
-                    (fee, room, ceiling),
+                    (fee, room, ceiling, loan_seq),
                 );
                 room
             } else {
@@ -2184,9 +2205,10 @@ impl LendingPoolContract {
         env.storage()
             .persistent()
             .set(&PoolExtKey::LoanClosingStatement(loan_id.clone()), &statement);
+        let loan_seq = Self::next_loan_seq(env, &loan_id);
         env.events().publish(
             (Symbol::new(env, "loan_closed"), loan_id.clone()),
-            statement,
+            (statement, loan_seq),
         );
     }
 
@@ -3055,8 +3077,9 @@ impl LendingPoolContract {
             env.storage()
                 .persistent()
                 .set(&FeatureKey::LoanNoteHash(loan_id.clone()), &hash);
+            let loan_seq = Self::next_loan_seq(&env, &loan_id);
             env.events()
-                .publish((Symbol::new(&env, "note_hash_set"), loan_id), hash);
+                .publish((Symbol::new(&env, "note_hash_set"), loan_id), (hash, loan_seq));
         }
         Ok(())
     }
@@ -3082,8 +3105,9 @@ impl LendingPoolContract {
         env.storage()
             .persistent()
             .set(&FeatureKey::LoanNoteHash(loan_id.clone()), &note_hash);
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events()
-            .publish((Symbol::new(&env, "note_hash_set"), loan_id), note_hash);
+            .publish((Symbol::new(&env, "note_hash_set"), loan_id), (note_hash, loan_seq));
         Ok(())
     }
 
@@ -3195,9 +3219,10 @@ impl LendingPoolContract {
             token.transfer(&borrower, &env.current_contract_address(), &application_fee);
             Self::set_application_fee(env, &loan_id, application_fee);
 
+            let loan_seq = Self::next_loan_seq(env, &loan_id);
             env.events().publish(
                 (Symbol::new(env, "app_fee_collected"),),
-                (borrower.clone(), loan_id.clone(), application_fee),
+                (borrower.clone(), loan_id.clone(), application_fee, loan_seq),
             );
         }
 
@@ -3218,9 +3243,10 @@ impl LendingPoolContract {
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+        let loan_seq = Self::next_loan_seq(env, &loan_id);
         env.events().publish(
             (Symbol::new(env, "loan_requested"),),
-            (borrower, loan_id.clone(), principal),
+            (borrower, loan_id.clone(), principal, loan_seq),
         );
 
         Ok(())
@@ -3329,8 +3355,9 @@ impl LendingPoolContract {
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events()
-            .publish((Symbol::new(&env, "loan_approved"),), (loan_id.clone(),));
+            .publish((Symbol::new(&env, "loan_approved"),), (loan_id.clone(), loan_seq));
 
         Ok(())
     }
@@ -3387,9 +3414,10 @@ impl LendingPoolContract {
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events().publish(
             (Symbol::new(&env, "loan_rejected"),),
-            (loan.borrower.clone(), loan_id.clone()),
+            (loan.borrower.clone(), loan_id.clone(), loan_seq),
         );
 
         Ok(())
@@ -3437,9 +3465,10 @@ impl LendingPoolContract {
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events().publish(
             (Symbol::new(&env, "loan_cancelled"),),
-            (loan.borrower.clone(), loan_id.clone()),
+            (loan.borrower.clone(), loan_id.clone(), loan_seq),
         );
 
         Ok(())
@@ -3504,9 +3533,10 @@ impl LendingPoolContract {
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events().publish(
             (Symbol::new(&env, "rst_prop"),),
-            (loan.borrower.clone(), loan_id.clone()),
+            (loan.borrower.clone(), loan_id.clone(), loan_seq),
         );
 
         Ok(())
@@ -3568,8 +3598,9 @@ impl LendingPoolContract {
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events()
-            .publish((Symbol::new(&env, "rst_appr"),), (loan_id.clone(),));
+            .publish((Symbol::new(&env, "rst_appr"),), (loan_id.clone(), loan_seq));
 
         Ok(())
     }
@@ -3604,8 +3635,9 @@ impl LendingPoolContract {
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events()
-            .publish((Symbol::new(&env, "rst_cncl"),), (loan_id.clone(),));
+            .publish((Symbol::new(&env, "rst_cncl"),), (loan_id.clone(), loan_seq));
 
         Ok(())
     }
@@ -3708,6 +3740,7 @@ impl LendingPoolContract {
 
         Self::set_loan_extension_count(&env, &loan_id, current_extensions + 1);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events().publish(
             (symbol_short!("ext_loan"), loan_id.clone()),
             (
@@ -3715,6 +3748,7 @@ impl LendingPoolContract {
                 additional_months,
                 fee,
                 schedule.duration_months,
+                loan_seq,
             ),
         );
 
@@ -3844,6 +3878,7 @@ impl LendingPoolContract {
             .persistent()
             .set(&FeatureKey::RefinanceRateLock(loan_id.clone()), &rate_lock);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events().publish(
             (Symbol::new(&env, "refi_requested"),),
             (
@@ -3851,6 +3886,7 @@ impl LendingPoolContract {
                 new_interest_rate_bps,
                 new_duration_months,
                 lock_expiry_ledger,
+                loan_seq,
             ),
         );
 
@@ -3961,12 +3997,14 @@ impl LendingPoolContract {
             .persistent()
             .remove(&FeatureKey::RefinanceRateLock(loan_id.clone()));
 
+        let loan_seq = Self::next_loan_seq(env, &loan_id);
         env.events().publish(
             (Symbol::new(env, "loan_refinanced"),),
             (
                 loan_id.clone(),
                 rate_lock.locked_rate_bps,
                 rate_lock.locked_duration_months,
+                loan_seq,
             ),
         );
 
@@ -4008,9 +4046,10 @@ impl LendingPoolContract {
             env.storage().instance().set(&DataKey::TotalLiquidity, &liquidity);
             Self::refresh_utilization_auto_pause(env);
         }
+        let loan_seq = Self::next_loan_seq(env, &loan_id);
         env.events().publish(
             (Symbol::new(env, "refinance_fee"), loan_id.clone()),
-            (fee, pool_fee, treasury_fee),
+            (fee, pool_fee, treasury_fee, loan_seq),
         );
         Ok(())
     }
@@ -4165,9 +4204,10 @@ impl LendingPoolContract {
                     &(total_premiums + premium),
                 );
 
+                let loan_seq = Self::next_loan_seq(&env, &loan_id);
                 env.events().publish(
                     (Symbol::new(&env, "insurance_premium"),),
-                    (loan_id.clone(), insurance_addr, premium),
+                    (loan_id.clone(), insurance_addr, premium, loan_seq),
                 );
             }
 
@@ -4196,9 +4236,10 @@ impl LendingPoolContract {
                 .instance()
                 .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+            let loan_seq = Self::next_loan_seq(&env, &loan_id);
             env.events().publish(
                 (symbol_short!("disburse"),),
-                (loan_id.clone(), recipient.clone(), amount),
+                (loan_id.clone(), recipient.clone(), amount, loan_seq),
             );
 
             Ok(())
@@ -4388,9 +4429,10 @@ impl LendingPoolContract {
                 &(active_commitments - item.amount),
             );
 
+            let loan_seq = Self::next_loan_seq(&env, &item.loan_id);
             env.events().publish(
                 (symbol_short!("disburse"),),
-                (item.loan_id.clone(), item.recipient.clone(), item.amount),
+                (item.loan_id.clone(), item.recipient.clone(), item.amount, loan_seq),
             );
 
             success_count += 1;
@@ -4458,8 +4500,9 @@ impl LendingPoolContract {
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events()
-            .publish((symbol_short!("refund"),), (loan_id.clone(), amount));
+            .publish((symbol_short!("refund"),), (loan_id.clone(), amount, loan_seq));
 
         Ok(())
     }
@@ -4678,9 +4721,10 @@ impl LendingPoolContract {
         }
 
         if is_early_close {
+            let loan_seq = Self::next_loan_seq(&env, &loan_id);
             env.events().publish(
                 (Symbol::new(&env, "prepay_closed"),),
-                (loan_id.clone(), waived, prepayment_penalty),
+                (loan_id.clone(), waived, prepayment_penalty, loan_seq),
             );
         }
 
@@ -4732,9 +4776,10 @@ impl LendingPoolContract {
                             .persistent()
                             .set(&DataKey::LoanSchedule(loan_id.clone()), &s);
                         Self::set_loan_intro_config(&env, &loan_id, &intro);
+                        let loan_seq = Self::next_loan_seq(&env, &loan_id);
                         env.events().publish(
                             (symbol_short!("phase_tr"), loan_id.clone()),
-                            (LoanPhase::Amortizing as u32, s.monthly_amount),
+                            (LoanPhase::Amortizing as u32, s.monthly_amount, loan_seq),
                         );
                     }
                 }
@@ -4805,6 +4850,7 @@ impl LendingPoolContract {
                     .instance()
                     .set(&DataKey::TotalProtocolFees, &total_protocol_fees);
 
+                let loan_seq = Self::next_loan_seq(&env, &loan_id);
                 env.events().publish(
                     (Symbol::new(&env, "protocol_fee"),),
                     (
@@ -4812,6 +4858,7 @@ impl LendingPoolContract {
                         config.treasury_address.clone(),
                         protocol_fee,
                         config.fee_switch_bps,
+                        loan_seq,
                     ),
                 );
             }
@@ -4937,6 +4984,7 @@ impl LendingPoolContract {
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events().publish(
             (symbol_short!("repay"),),
             (
@@ -4944,6 +4992,7 @@ impl LendingPoolContract {
                 loan_id.clone(),
                 amount,
                 remaining - amount,
+                loan_seq,
             ),
         );
 
@@ -5034,9 +5083,10 @@ impl LendingPoolContract {
             );
         }
         if is_early_close {
+            let loan_seq = Self::next_loan_seq(&env, &loan_id);
             env.events().publish(
                 (Symbol::new(&env, "prepay_closed"),),
-                (loan_id.clone(), waived, prepayment_penalty),
+                (loan_id.clone(), waived, prepayment_penalty, loan_seq),
             );
         }
 
@@ -5078,6 +5128,7 @@ impl LendingPoolContract {
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
         let remaining_principal = (loan.principal - loan.repaid).max(0);
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events().publish(
             (Symbol::new(&env, "principal_paid"),),
             (
@@ -5086,6 +5137,7 @@ impl LendingPoolContract {
                 amount,
                 remaining_principal,
                 loan.outstanding_debt,
+                loan_seq,
             ),
         );
 
@@ -5338,9 +5390,10 @@ impl LendingPoolContract {
             .persistent()
             .set(&DataKey::LoanCollateral(loan_id.clone()), &collateral);
 
+        let loan_seq = Self::next_loan_seq(env, &loan_id);
         env.events().publish(
             (Symbol::new(env, "collateral_released"), loan_id.clone()),
-            (loan.borrower.clone(), releasable, remaining_collateral),
+            (loan.borrower.clone(), releasable, remaining_collateral, loan_seq),
         );
 
         Ok(releasable)
@@ -5394,9 +5447,10 @@ impl LendingPoolContract {
         let (_, remaining_collateral, ratio_bps) =
             Self::compute_collateral_release(&env, &loan, &collateral);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events().publish(
             (Symbol::new(&env, "collateral_topped_up"), loan_id),
-            (from, amount, remaining_collateral, ratio_bps),
+            (from, amount, remaining_collateral, ratio_bps, loan_seq),
         );
 
         Ok(ratio_bps)
@@ -5711,9 +5765,10 @@ impl LendingPoolContract {
                     keeper,
                     &keeper_reward,
                 );
+                let loan_seq = Self::next_loan_seq(env, &loan_id);
                 env.events().publish(
                     (Symbol::new(&env, "keeper_rewarded"), loan_id.clone()),
-                    (keeper.clone(), keeper_reward),
+                    (keeper.clone(), keeper_reward, loan_seq),
                 );
             }
         }
@@ -5799,6 +5854,7 @@ impl LendingPoolContract {
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+        let loan_seq = Self::next_loan_seq(env, &loan_id);
         env.events().publish(
             (soroban_sdk::symbol_short!("default"),),
             (
@@ -5806,11 +5862,13 @@ impl LendingPoolContract {
                 loan.borrower.clone(),
                 seized_amount,
                 net_loss,
+                loan_seq,
             ),
         );
+        let loan_seq = Self::next_loan_seq(env, &loan_id);
         env.events().publish(
             (Symbol::new(&env, "loan_defaulted"),),
-            (loan_id.clone(), net_loss),
+            (loan_id.clone(), net_loss, loan_seq),
         );
 
         Ok(())
@@ -5876,9 +5934,10 @@ impl LendingPoolContract {
             Self::set_tranche_info(&env, &Tranche::Junior, &junior_info);
         }
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events().publish(
             (Symbol::new(&env, "default_recovered"),),
-            (loan_id.clone(), recovered_amount),
+            (loan_id.clone(), recovered_amount, loan_seq),
         );
 
         env.storage()
@@ -6545,6 +6604,16 @@ impl LendingPoolContract {
         Self::read_loan(&env, &loan_id)
     }
 
+    /// Returns the sequence number of the most recent event emitted for a
+    /// loan (`0` if it has emitted none). Compare with the last sequence seen
+    /// in the event stream: a larger value means events were missed.
+    pub fn get_loan_event_seq(env: Env, loan_id: BytesN<32>) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&PoolExtKey::LoanEventSeq(loan_id))
+            .unwrap_or(0u32)
+    }
+
     /// Returns a page of loan summaries for indexers, in creation order.
     ///
     /// `start_id` is a position in the sequential loan index (the first loan
@@ -6688,9 +6757,10 @@ impl LendingPoolContract {
         env.storage()
             .instance()
             .set(&DataKey::LoanCount, &(count + 1));
+        let loan_seq = Self::next_loan_seq(&env, &snapshot.loan_id);
         env.events().publish(
             (Symbol::new(&env, "loan_ported"),),
-            (snapshot.loan_id, snapshot.source_pool),
+            (snapshot.loan_id, snapshot.source_pool, loan_seq),
         );
         Ok(())
     }
@@ -7171,9 +7241,10 @@ impl LendingPoolContract {
                 &config.treasury_address,
                 &fee,
             );
+            let loan_seq = Self::next_loan_seq(&env, &loan_id);
             env.events().publish(
                 (symbol_short!("assm_fee"),),
-                (loan_id.clone(), new_borrower.clone(), fee),
+                (loan_id.clone(), new_borrower.clone(), fee, loan_seq),
             );
         }
 
@@ -8042,9 +8113,10 @@ impl LendingPoolContract {
         loan.interest_rate_bps = new_rate_bps;
         Self::set_loan(&env, &loan_id, &loan);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events().publish(
             (symbol_short!("rate_adj"), loan_id),
-            (current_rate_bps, new_rate_bps, starting_rate_bps),
+            (current_rate_bps, new_rate_bps, starting_rate_bps, loan_seq),
         );
         Ok(())
     }
@@ -8427,9 +8499,10 @@ impl LendingPoolContract {
         env.storage()
             .persistent()
             .set(&DataKey::PayoffQuote(loan_id.clone()), &quote);
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events().publish(
             (symbol_short!("pay_quote"),),
-            (loan_id, quote.quoted_amount, quote.expires_ledger),
+            (loan_id, quote.quoted_amount, quote.expires_ledger, loan_seq),
         );
         Ok(quote.quoted_amount)
     }
@@ -8925,9 +8998,10 @@ impl LendingPoolContract {
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
+        let loan_seq = Self::next_loan_seq(&env, &loan_id);
         env.events().publish(
             (Symbol::new(&env, "maturity_rebate"),),
-            (loan.borrower.clone(), loan_id.clone(), rebate_amount),
+            (loan.borrower.clone(), loan_id.clone(), rebate_amount, loan_seq),
         );
 
         Ok(rebate_amount)

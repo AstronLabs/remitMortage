@@ -99,3 +99,11 @@ read-only call, so an indexer does not need one call per loan.
 * The page carries `next_start_id` (pass it back as `start_id`; it equals
   `total` once the end is reached) and `total`. A `start_id` past the end
   returns an empty page.
+
+## Per-loan event sequence number
+
+Every state-changing loan event carries a per-loan sequence number as the last
+field of its payload. It rises by exactly one per event, starting at `1`.
+`get_loan_event_seq(loan_id)` returns the latest value (`0` if the loan has
+emitted nothing). An indexer that sees a jump in the stream, or a counter
+larger than the last number it saw, has missed events for that loan.

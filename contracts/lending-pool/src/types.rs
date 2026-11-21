@@ -764,6 +764,9 @@ pub enum PoolExtKey {
     LoanIndexLen,
     /// Loan ID stored at a position in the sequential loan index.
     LoanIndexEntry(u32),
+    /// Number of state-changing events emitted for a loan so far. Increases
+    /// by exactly one per event; absent means no event yet.
+    LoanEventSeq(BytesN<32>),
 }
 
 /// Compact per-loan view returned in bulk by `get_loan_summaries`, so an
