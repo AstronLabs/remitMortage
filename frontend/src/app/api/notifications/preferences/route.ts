@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { NextRequest, NextResponse } from "next/server";
+import { resolveEventChannels, validateEventChannels } from "@/lib/notificationChannels";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -17,6 +18,11 @@ export async function GET(request: NextRequest) {
     
     if (res.ok) {
       const data = await res.json();
+      // A backend record from before per-event channels (issue #1116) has
+      // none stored; seed every event type from its global setting.
+      if (data?.preferences) {
+        data.preferences = { ...data.preferences, eventChannels: resolveEventChannels(data.preferences) };
+      }
       return NextResponse.json(data);
     }
   } catch {
@@ -38,6 +44,7 @@ export async function GET(request: NextRequest) {
       milestonesFrequency: "IMMEDIATE",
       governanceFrequency: "IMMEDIATE",
       webhookUrl: "",
+      eventChannels: resolveEventChannels({ emailAlerts: true, smsAlerts: false }),
     },
   });
 }
@@ -57,6 +64,16 @@ export async function POST(request: NextRequest) {
         },
         { status: 400 }
       );
+    }
+
+    if (body?.eventChannels !== undefined) {
+      const eventChannelsError = validateEventChannels(body.eventChannels);
+      if (eventChannelsError) {
+        return NextResponse.json(
+          { error: "invalid_event_channels", message: eventChannelsError },
+          { status: 400 }
+        );
+      }
     }
 
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3001";
