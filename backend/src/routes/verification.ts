@@ -16,6 +16,7 @@ import {
   verificationOwnershipRateLimiter,
 } from "../middleware/rateLimit.js";
 import { prisma } from "../services/db.js";
+import { loadConfig } from "../config.js";
 
 // Simple in-memory report cache for generated verification reports
 const reportStore = new Map<string, VerificationReport>();
@@ -471,11 +472,12 @@ verificationRouter.post("/verify-ownership", verificationOwnershipRateLimiter, v
 
   await recordLoginLocation(walletAddress, clientIp);
   const loginSession = await recordLoginSession(req, walletAddress);
+  const { sessionMaxLifetimeMs } = loadConfig();
 
   const token = jwt.sign(
     { walletAddress, network, sid: loginSession.sessionId },
     process.env.JWT_SECRET || "default_jwt_secret",
-    { expiresIn: "24h" }
+    { expiresIn: Math.floor(sessionMaxLifetimeMs / 1000) }
   );
 
   res.clearCookie("session");
@@ -483,7 +485,7 @@ verificationRouter.post("/verify-ownership", verificationOwnershipRateLimiter, v
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict",
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    maxAge: sessionMaxLifetimeMs,
   });
 
   res.json({
@@ -549,11 +551,12 @@ verificationRouter.post("/step-up", async (req, res) => {
     ipAddress: clientIp,
   });
   const loginSession = await recordLoginSession(req, walletAddress);
+  const { sessionMaxLifetimeMs } = loadConfig();
 
   const token = jwt.sign(
     { walletAddress, network: network || "stellar", sid: loginSession.sessionId },
     process.env.JWT_SECRET || "default_jwt_secret",
-    { expiresIn: "24h" }
+    { expiresIn: Math.floor(sessionMaxLifetimeMs / 1000) }
   );
 
   res.clearCookie("session");
@@ -561,7 +564,7 @@ verificationRouter.post("/step-up", async (req, res) => {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict",
-    maxAge: 24 * 60 * 60 * 1000,
+    maxAge: sessionMaxLifetimeMs,
   });
 
   let trustedDeviceId: string | undefined;

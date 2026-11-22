@@ -130,6 +130,10 @@ export interface Config {
   complianceSlackWebhookUrl: string | null;
   /** Number of days expired session/refresh tokens are retained before being purged. */
   sessionTokenRetentionDays: number;
+  /** Max time (ms) a session stays valid without any authenticated request (idle timeout). */
+  sessionIdleTimeoutMs: number;
+  /** Hard upper bound (ms) on total session lifetime regardless of activity. */
+  sessionMaxLifetimeMs: number;
   /** Compliance-reviewed retention window for soft-deleted borrower profiles. */
   borrowerRecordRetentionDays: number;
   /** Compliance-reviewed retention window for soft-deleted loan applications. */
@@ -378,6 +382,14 @@ export function loadConfig(): Config {
       process.env.SESSION_TOKEN_RETENTION_DAYS ||
         process.env.RETENTION_DAYS ||
         "7",
+      10
+    ),
+    sessionIdleTimeoutMs: parseInt(
+      process.env.SESSION_IDLE_TIMEOUT_MS || "1800000",
+      10
+    ),
+    sessionMaxLifetimeMs: parseInt(
+      process.env.SESSION_MAX_LIFETIME_MS || "86400000",
       10
     ),
     borrowerRecordRetentionDays: parseInt(

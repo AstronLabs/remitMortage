@@ -100,6 +100,65 @@ export function isSessionActive(sessionId: string): boolean {
   return !s.revokedAt;
 }
 
+/** Optional idle / absolute-lifetime thresholds passed to {@link checkSession}. */
+export interface SessionTimeoutConfig {
+  idleTimeoutMs?: number;
+  maxLifetimeMs?: number;
+  now?: Date;
+}
+
+/** Why a session was found inactive by {@link checkSession}. */
+export type SessionCheckReason = "revoked" | "idle_timeout" | "max_lifetime_exceeded";
+
+/** Result of {@link checkSession}: active, or inactive with a reason. */
+export type SessionCheckResult =
+  | { active: true }
+  | { active: false; reason: SessionCheckReason };
+
+/**
+ * Check whether a session is active, applying configurable idle and absolute
+ * lifetime timeouts in addition to revocation.
+ *
+ * - **Idle timeout:** the session expires after `idleTimeoutMs` milliseconds
+ *   with no authenticated request. `touchSession` (called by the auth
+ *   middleware on every request) slides `lastUsedAt` forward, so each
+ *   authenticated request resets the idle clock.
+ * - **Absolute max lifetime:** the session expires after `maxLifetimeMs`
+ *   milliseconds from creation, regardless of activity. This is the hard
+ *   upper bound the idle window can never extend past.
+ *
+ * Both thresholds are optional — a zero/undefined value disables that check.
+ * Untracked session IDs (legacy tokens without a stored record) are treated
+ * as active, matching the existing {@link isSessionActive} behavior.
+ */
+export function checkSession(
+  sessionId: string,
+  timeouts?: SessionTimeoutConfig
+): SessionCheckResult {
+  const s = sessions.get(sessionId);
+  if (!s) return { active: true };
+  if (s.revokedAt) return { active: false, reason: "revoked" };
+  if (!timeouts) return { active: true };
+
+  const now = (timeouts.now ?? new Date()).getTime();
+
+  if (timeouts.idleTimeoutMs && timeouts.idleTimeoutMs > 0) {
+    const lastUsed = new Date(s.lastUsedAt).getTime();
+    if (now - lastUsed > timeouts.idleTimeoutMs) {
+      return { active: false, reason: "idle_timeout" };
+    }
+  }
+
+  if (timeouts.maxLifetimeMs && timeouts.maxLifetimeMs > 0) {
+    const created = new Date(s.createdAt).getTime();
+    if (now - created > timeouts.maxLifetimeMs) {
+      return { active: false, reason: "max_lifetime_exceeded" };
+    }
+  }
+
+  return { active: true };
+}
+
 export function touchSession(sessionId: string, now: Date = new Date()): void {
   const s = sessions.get(sessionId);
   if (s && !s.revokedAt) {
