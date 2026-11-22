@@ -98,8 +98,10 @@ Every event follows the naming convention in
 | lending-pool | `loan_rejected` | topics[] data(tuple)[borrower, loan_id, loan_seq] v1 |
 | lending-pool | `loan_requested` | topics[] data(tuple)[borrower, loan_id, principal, loan_seq] v1 |
 | lending-pool | `maturity_rebate` | topics[] data(tuple)[borrower, loan_id, rebate_amount, loan_seq] v1 |
+| lending-pool | `max_ltv_set` | topics[] data(tuple)[previous, max_ltv_bps] v1 |
 | lending-pool | `migrate` | topics[] data(tuple)[ver] v1 |
 | lending-pool | `note_hash_set` | topics[loan_id] data(tuple)[hash, loan_seq] v1<br>topics[loan_id] data(tuple)[note_hash, loan_seq] v1 |
+| lending-pool | `oracle_set` | topics[] data(value)[oracle] v1 |
 | lending-pool | `orig_fee_set` | topics[] data(tuple)[previous_bps, new_bps] v1 |
 | lending-pool | `pay_quote` | topics[] data(tuple)[loan_id, quoted_amount, expires_ledger, loan_seq] v1 |
 | lending-pool | `pay_quote/used` | topics["used"] data(tuple)[loan_id, amount, loan_seq] v1 |

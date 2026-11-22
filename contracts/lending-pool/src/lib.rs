@@ -51,6 +51,9 @@ mod test_early_repayment_fee;
 mod test_repay_batch;
 
 #[cfg(test)]
+mod test_max_ltv;
+
+#[cfg(test)]
 mod test_tranche_share_cap;
 
 #[cfg(test)]
@@ -169,6 +172,11 @@ const DEFAULT_DURATION_MONTHS: u32 = 12;
 /// repayment (loan, schedule, tranche and token writes), so the cap keeps the
 /// transaction inside Soroban's per-transaction resource limits.
 const MAX_REPAY_BATCH_SIZE: u32 = 20;
+
+/// Oracle prices are fixed-point with 7 decimals (the pool token's own
+/// precision): a price of `ORACLE_PRICE_SCALE` values one unit of collateral
+/// at exactly one unit of the pool token.
+const ORACLE_PRICE_SCALE: i128 = 10_000_000;
 const DEFAULT_MISSED_THRESHOLD: u32 = 3; // default after 3 missed payments
 const DEFAULT_OVERDUE_LEDGERS: u32 = 3 * LEDGERS_PER_MONTH; // ~90 days past due
 
@@ -3360,6 +3368,9 @@ impl LendingPoolContract {
         // have been approved since this one was requested.
         Self::check_borrower_exposure(&env, &loan.borrower, loan.principal)?;
 
+        // Refuse to originate a loan the collateral does not support.
+        Self::check_max_ltv(&env, &loan_id, &loan)?;
+
         // Verify pool has enough liquidity accounting for active commitments.
         let liquidity = Self::read_total_liquidity(&env);
         let active_commitments = Self::read_active_commitments(&env);
@@ -3434,6 +3445,136 @@ impl LendingPoolContract {
         emit_event(&env, 1, (Symbol::new(&env, "loan_approved"),), (loan_id.clone(), loan_seq));
 
         Ok(())
+    }
+
+    /// The collateral value the price oracle puts on `loan_id`'s collateral,
+    /// in pool-token units.
+    ///
+    /// Reads the oracle's `get_price` through `try_invoke_contract`, so the
+    /// oracle's own guards apply as they stand: an oracle with aggregation
+    /// configured refuses to price when too few fresh reports remain (its
+    /// staleness window), and one that has never been given a price fails
+    /// outright. Any such failure, a missing oracle, or a non-positive price
+    /// or value comes back as `None` — the pool never guesses a value.
+    fn collateral_value_from_oracle(
+        env: &Env,
+        loan_id: &BytesN<32>,
+        loan: &LoanRecord,
+    ) -> Option<i128> {
+        let oracle: Address = env.storage().instance().get(&PoolExtKey::PriceOracle)?;
+        let price = match env.try_invoke_contract::<i128, soroban_sdk::Error>(
+            &oracle,
+            &Symbol::new(env, "get_price"),
+            Vec::new(env),
+        ) {
+            Ok(Ok(price)) if price > 0 => price,
+            _ => return None,
+        };
+        let collateral = Self::get_or_default_loan_collateral(env, loan_id, loan);
+        let value = collateral
+            .initial_collateral
+            .checked_mul(price)?
+            / ORACLE_PRICE_SCALE;
+        if value > 0 {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    /// Enforces the pool's maximum loan-to-value ratio at origination.
+    ///
+    /// A no-op while no limit is set. Otherwise the loan's principal divided
+    /// by its oracle-priced collateral value may not exceed the limit: a loan
+    /// exactly at the limit is allowed. Checked as
+    /// `principal * 10_000 <= max_ltv_bps * value` so nothing rounds in the
+    /// borrower's favour.
+    ///
+    /// # Errors
+    /// * `InvalidCollateralRatio` — the oracle is not set, has no price, or
+    ///   its price is stale, so the collateral cannot be valued.
+    /// * `CollateralRatioBreached` — principal exceeds the limit.
+    fn check_max_ltv(env: &Env, loan_id: &BytesN<32>, loan: &LoanRecord) -> Result<(), PoolError> {
+        let max_ltv_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&PoolExtKey::MaxLtvBps)
+            .unwrap_or(0);
+        if max_ltv_bps == 0 {
+            return Ok(());
+        }
+        let value = Self::collateral_value_from_oracle(env, loan_id, loan)
+            .ok_or(PoolError::InvalidCollateralRatio)?;
+        let lhs = loan
+            .principal
+            .checked_mul(BPS_SCALE as i128)
+            .ok_or(PoolError::InvalidAmount)?;
+        let rhs = value
+            .checked_mul(max_ltv_bps as i128)
+            .ok_or(PoolError::InvalidAmount)?;
+        if lhs > rhs {
+            return Err(PoolError::CollateralRatioBreached);
+        }
+        Ok(())
+    }
+
+    /// Set the maximum loan-to-value ratio, in basis points, that a loan may
+    /// have when it is approved. Admin-only.
+    ///
+    /// `0` disables the limit (the default). Values above 10,000 (100%) are
+    /// rejected. While a limit is set, `approve_loan` values the loan's
+    /// collateral through the price oracle (`set_price_oracle`) and rejects a
+    /// loan whose principal exceeds the limit. Loans already approved are not
+    /// re-checked.
+    pub fn set_max_ltv_bps(env: Env, max_ltv_bps: u32) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        if max_ltv_bps > BPS_SCALE {
+            return Err(PoolError::InvalidAmount);
+        }
+        let previous: u32 = env
+            .storage()
+            .instance()
+            .get(&PoolExtKey::MaxLtvBps)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&PoolExtKey::MaxLtvBps, &max_ltv_bps);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        emit_event(&env, 1, (Symbol::new(&env, "max_ltv_set"),),
+            (previous, max_ltv_bps),);
+        Ok(())
+    }
+
+    /// The maximum loan-to-value ratio in basis points. `0` means no limit.
+    pub fn get_max_ltv_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&PoolExtKey::MaxLtvBps)
+            .unwrap_or(0)
+    }
+
+    /// Set the price oracle contract used to value collateral for the
+    /// loan-to-value limit. Admin-only.
+    ///
+    /// The oracle must expose `get_price() -> i128`, a fixed-point price with
+    /// 7 decimals for one unit of collateral in pool-token terms.
+    pub fn set_price_oracle(env: Env, oracle: Address) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        env.storage().instance().set(&PoolExtKey::PriceOracle, &oracle);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        emit_event(&env, 1, (Symbol::new(&env, "oracle_set"),), oracle);
+        Ok(())
+    }
+
+    /// The price oracle used for the loan-to-value limit, if one is set.
+    pub fn get_price_oracle(env: Env) -> Option<Address> {
+        env.storage().instance().get(&PoolExtKey::PriceOracle)
     }
 
     /// Admin approves a pending loan request (defaults to zero interest-only months).

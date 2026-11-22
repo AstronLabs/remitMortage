@@ -920,6 +920,7 @@ dependencies = [
  "governance",
  "insurance-pool",
  "multisig-validator",
+ "oracle-price",
  "proptest",
  "soroban-sdk",
  "verification-registry",

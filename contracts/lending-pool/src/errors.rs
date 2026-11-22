@@ -72,11 +72,17 @@ pub enum PoolError {
     LockupPeriodActive = 36,
     /// Deposit is below the pool's configured minimum deposit amount.
     DepositBelowMinimum = 40,
-    /// Collateral release would breach the minimum collateralization ratio.
+    /// Collateral release would breach the minimum collateralization ratio, or
+    /// a loan's principal exceeds the pool's maximum loan-to-value ratio at
+    /// origination. (The error enum is at Soroban's 50-variant ceiling, so
+    /// both share this code.)
     CollateralRatioBreached = 41,
     /// No collateral available for release.
     NoCollateralToRelease = 42,
-    /// Invalid collateral ratio configuration.
+    /// Invalid collateral ratio configuration, or the price oracle could not
+    /// value the collateral for the loan-to-value check at origination: it is
+    /// not configured, has no price, or its price is stale. (Shares a code
+    /// for the same reason as `CollateralRatioBreached`.)
     InvalidCollateralRatio = 44,
     /// A fee (origination, application or protocol fee switch) exceeds its ceiling.
     FeeTooHigh = 45,

@@ -788,6 +788,11 @@ pub enum PoolExtKey {
     /// Early-repayment fee included in a live payoff quote's `quoted_amount`.
     /// Absent means the quote carries no fee.
     PayoffQuoteFee(BytesN<32>),
+    /// Maximum loan-to-value ratio in basis points enforced at origination.
+    /// Absent or `0` means no limit.
+    MaxLtvBps,
+    /// Price oracle contract that values loan collateral for the LTV check.
+    PriceOracle,
 }
 
 /// Early-repayment fee rates, in basis points of the remaining principal, by
