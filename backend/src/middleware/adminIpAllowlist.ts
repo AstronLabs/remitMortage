@@ -59,7 +59,7 @@ export const ADMIN_IP_BYPASS_HEADER = "x-admin-ip-override";
 export const DEFAULT_BYPASS_TTL_SECONDS = 900; // 15 minutes
 export const MAX_BYPASS_TTL_SECONDS = 3600; // 1 hour
 
-type IpRange =
+export type IpRange =
   | { family: 4; network: number; mask: number }
   | { family: 6; network: bigint; mask: bigint };
 
@@ -152,7 +152,7 @@ function normalizeAddress(address: string): string {
 }
 
 /** Parses one allowlist entry (`1.2.3.4`, `10.0.0.0/8`, `2001:db8::/32`). */
-function parseRange(entry: string): IpRange | null {
+export function parseRange(entry: string): IpRange | null {
   const trimmed = entry.trim();
   if (!trimmed) return null;
 
@@ -189,7 +189,7 @@ function parseRange(entry: string): IpRange | null {
 }
 
 /** True when `address` falls inside `range`. Families never cross-match. */
-function rangeMatches(range: IpRange, address: string): boolean {
+export function rangeMatches(range: IpRange, address: string): boolean {
   const normalized = normalizeAddress(address);
 
   if (range.family === 4) {

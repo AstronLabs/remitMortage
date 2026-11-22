@@ -160,6 +160,10 @@ export interface Config {
   payrollVerificationApiKey: string | null;
   sanctionsProviderUrl: string | null;
   sanctionsProviderApiKey: string | null;
+  /** ISO 3166-1 alpha-2 country codes from which API access is blocked (issue #1029). */
+  restrictedCountries: string[];
+  /** CIDR IP ranges that bypass the country restriction for internal tooling (issue #1029). */
+  countryOverrideIpRanges: string[];
   /** Backup KYC provider endpoint. Null leaves failover disabled. */
   kycBackupProviderUrl: string | null;
   /** Bearer token sent to the backup KYC provider. */
@@ -420,6 +424,14 @@ export function loadConfig(): Config {
     payrollVerificationApiKey: process.env.PAYROLL_VERIFICATION_API_KEY || null,
     sanctionsProviderUrl: process.env.SANCTIONS_PROVIDER_URL || null,
     sanctionsProviderApiKey: process.env.SANCTIONS_PROVIDER_API_KEY || null,
+    restrictedCountries: String(process.env.RESTRICTED_COUNTRIES || "")
+      .split(",")
+      .map((c) => c.trim().toUpperCase())
+      .filter(Boolean),
+    countryOverrideIpRanges: String(process.env.COUNTRY_OVERRIDE_IP_RANGES || "")
+      .split(",")
+      .map((r) => r.trim())
+      .filter(Boolean),
     kycBackupProviderUrl: process.env.KYC_BACKUP_PROVIDER_URL || null,
     kycBackupProviderApiKey: process.env.KYC_BACKUP_PROVIDER_API_KEY || null,
     kycFailoverThreshold: parseInt(process.env.KYC_FAILOVER_THRESHOLD || "3", 10),

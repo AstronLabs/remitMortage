@@ -105,6 +105,7 @@ import {
 } from "./middleware/rateLimit.js";
 import { issueCsrfToken, csrfProtection, CSRF_COOKIE } from "./middleware/csrf.js";
 import { adminIpAllowlist, resolveTrustProxy } from "./middleware/adminIpAllowlist.js";
+import { countryRestriction } from "./middleware/countryRestriction.js";
 import { requireBoundDevice } from "./middleware/adminDeviceBinding.js";
 import { notFoundHandler } from "./middleware/notFound.js";
 import { startEventListener } from "./services/eventListener.js";
@@ -151,6 +152,7 @@ import { startWebhookWorker, stopWebhookWorker } from "./workers/webhookWorker.j
 import { startAnalyticsWorker, stopAnalyticsWorker } from "./workers/analyticsWorker.js";
 
 const app = express();
+app.set("trust proxy", resolveTrustProxy());
 const config = loadConfig();
 const PORT = config.port;
 
@@ -255,6 +257,10 @@ void (async () => {
 // In-flight request tracking comes before everything so draining counts (and,
 // once shutting down, turns away) every request (issue #827).
 app.use(inFlightRequestTracker());
+// Country-level access restriction (issue #1029): block API access from
+// jurisdictions the protocol is not permitted to serve, resolved from the
+// request IP via the geo-IP lookup. Inert when RESTRICTED_COUNTRIES is unset.
+app.use(countryRestriction);
 app.use(correlationId);
 app.use(tenantContext);
 // Attach user/tenant identity to the tracing baggage right after the tenant is
