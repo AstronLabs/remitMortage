@@ -4,22 +4,25 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { checkTranslations } from "../checkTranslations";
 
 const FRONTEND_ROOT = path.resolve(__dirname, "../../..");
-const SCRIPT_PATH = path.join(FRONTEND_ROOT, "scripts/check-translations.mjs");
 const MESSAGES_DIR = path.join(FRONTEND_ROOT, "src/i18n/messages");
+const SRC_DIR = path.join(FRONTEND_ROOT, "src");
 
 describe("Translation key synchronization check (#1003)", () => {
   test("passes cleanly for the repository locale files (en, es, fr)", () => {
-    const output = execFileSync(process.execPath, [SCRIPT_PATH], {
-      cwd: FRONTEND_ROOT,
-      encoding: "utf8",
+    const report = checkTranslations({
+      messagesDir: MESSAGES_DIR,
+      srcDir: SRC_DIR,
     });
-    expect(output).toContain("Translation check passed");
+    expect(report.ok).toBe(true);
+    expect(report.errors).toHaveLength(0);
+    expect(report.locales).toEqual(expect.arrayContaining(["en", "es", "fr"]));
+    expect(report.totalKeys).toBeGreaterThan(0);
   });
 
-  test("fails with non-zero exit status and lists the exact missing key and locale when a key is removed", () => {
+  test("fails and lists the exact missing key and locale when a key is removed", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "remit-i18n-test-"));
     const tmpMessages = path.join(tmpDir, "messages");
     const tmpSrc = path.join(tmpDir, "src");
@@ -38,35 +41,14 @@ describe("Translation key synchronization check (#1003)", () => {
       fs.writeFileSync(path.join(tmpMessages, "es.json"), JSON.stringify(es, null, 2));
       fs.writeFileSync(path.join(tmpMessages, "fr.json"), JSON.stringify(fr, null, 2));
 
-      const runner = `
-        import { checkTranslations } from ${JSON.stringify("file://" + SCRIPT_PATH.replace(/\\/g, "/"))};
-        const report = checkTranslations({
-          messagesDir: ${JSON.stringify(tmpMessages)},
-          srcDir: ${JSON.stringify(tmpSrc)},
-        });
-        if (!report.ok) {
-          console.error(JSON.stringify(report));
-          process.exit(1);
-        }
-      `;
+      const report = checkTranslations({
+        messagesDir: tmpMessages,
+        srcDir: tmpSrc,
+      });
 
-      let failed = false;
-      let stderrOutput = "";
-      try {
-        execFileSync(process.execPath, ["--input-type=module", "-e", runner], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-      } catch (err: any) {
-        failed = true;
-        stderrOutput = String(err.stderr || "");
-      }
-
-      expect(failed).toBe(true);
-      const parsed = JSON.parse(stderrOutput.trim());
-      expect(parsed.ok).toBe(false);
-      expect(parsed.missingByLocale.es).toContain("nav.connectWallet");
-      expect(parsed.errors).toContain(
+      expect(report.ok).toBe(false);
+      expect(report.missingByLocale.es).toContain("nav.connectWallet");
+      expect(report.errors).toContain(
         'Missing key "nav.connectWallet" in locale "es" (defined in "en").'
       );
     } finally {
@@ -89,19 +71,11 @@ describe("Translation key synchronization check (#1003)", () => {
       fs.writeFileSync(path.join(tmpMessages, "en.json"), JSON.stringify(en, null, 2));
       fs.writeFileSync(path.join(tmpMessages, "fr.json"), JSON.stringify(fr, null, 2));
 
-      const runner = `
-        import { checkTranslations } from ${JSON.stringify("file://" + SCRIPT_PATH.replace(/\\/g, "/"))};
-        const report = checkTranslations({
-          messagesDir: ${JSON.stringify(tmpMessages)},
-          srcDir: ${JSON.stringify(tmpSrc)},
-        });
-        console.log(JSON.stringify(report));
-      `;
-
-      const stdout = execFileSync(process.execPath, ["--input-type=module", "-e", runner], {
-        encoding: "utf8",
+      const report = checkTranslations({
+        messagesDir: tmpMessages,
+        srcDir: tmpSrc,
       });
-      const report = JSON.parse(stdout.trim());
+
       expect(report.ok).toBe(false);
       expect(report.extraByLocale.fr).toContain("dashboard.untrackedBonusKey");
     } finally {

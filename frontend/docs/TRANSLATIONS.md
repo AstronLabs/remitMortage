@@ -17,12 +17,12 @@ The frontend uses [`next-intl`](https://next-intl.dev/) with locale catalogs sto
    ```
 4. **Run the translation check** before committing:
    ```bash
-   npm run i18n:check
+   node ./scripts/check-translations.mjs
    ```
 
 ## Automated Build & Test Enforcement
 
-`scripts/check-translations.mjs` runs automatically as part of `npm test`. The check fails with a non-zero exit code if:
+Translation consistency runs automatically as part of the frontend Jest test suite (`npm test`). The check fails with a non-zero exit code if:
 
 - Any key present in `en.json` is missing in `es.json` or `fr.json`.
 - Any locale contains an orphaned key that does not exist in `en.json`.
