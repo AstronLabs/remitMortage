@@ -7,7 +7,7 @@ import { verifySessionToken } from "../services/jwtKeyRing.js";
 import { loadConfig } from "../config.js";
 import { IMPERSONATION_COOKIE, isImpersonationSessionActive } from "../services/impersonation.js";
 import { tenantRateLimitMiddleware } from "./tenantRateLimit.js";
-import { isSessionActive, touchSession } from "../services/userSessions.js";
+import { checkSession, touchSession } from "../services/userSessions.js";
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -109,15 +109,26 @@ export async function authMiddleware(req: AuthenticatedRequest, res: Response, n
       sessionId?: string;
     };
     const sid = decoded.sid ?? decoded.sessionId;
-    if (sid && !isSessionActive(sid)) {
-      res.status(401).json({
-        error: "SESSION_REVOKED",
-        code: "SESSION_REVOKED",
-        message: "This session has been revoked",
+    if (sid) {
+      const { sessionIdleTimeoutMs, sessionMaxLifetimeMs } = loadConfig();
+      const result = checkSession(sid, {
+        idleTimeoutMs: sessionIdleTimeoutMs,
+        maxLifetimeMs: sessionMaxLifetimeMs,
       });
-      return;
+      if (!result.active) {
+        const isRevoked = result.reason === "revoked";
+        const code = isRevoked ? "SESSION_REVOKED" : "SESSION_EXPIRED";
+        res.status(401).json({
+          error: code,
+          code,
+          message: isRevoked
+            ? "This session has been revoked"
+            : "This session has expired due to inactivity or maximum age.",
+        });
+        return;
+      }
+      touchSession(sid);
     }
-    if (sid) touchSession(sid);
     req.user = { ...decoded, sessionId: sid, deviceFingerprint: deviceFingerprintOf(decoded) };
   } catch (err) {
     res.status(401).json({ error: "unauthorized", message: "Invalid or expired token" });

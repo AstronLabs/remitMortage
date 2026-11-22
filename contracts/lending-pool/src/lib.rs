@@ -96,6 +96,9 @@ mod test_loan_event_seq;
 mod test_event_versions;
 mod test_principal_payment;
 
+#[cfg(test)]
+mod bench_accrual;
+
 pub use crate::errors::{BatchRepayError, LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
     BatchDisburseItem, BatchRepayItem, BorrowRateCurve, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot,

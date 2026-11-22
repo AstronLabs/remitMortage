@@ -75,11 +75,18 @@ behind cargo features:
 
 - `escrow`: scenarios written in `tests/budget_regression/escrow.rs` but not yet
   compiled or baselined. Enable with `--features escrow` once the crates build.
-- `lending-pool`, `bridge-adapter`: no scenarios yet.
+- `bridge-adapter`: no scenarios yet.
+- `lending-pool`: full-coverage budget scenario is not wired into `budget-tests`
+  because the crate's storage-key types (`DataKey`, `LoanRecord`, …) are private
+  and cannot be constructed from outside the crate. Interest accrual — the
+  hottest internal path — has a dedicated inline benchmark in
+  `contracts/lending-pool/src/bench_accrual.rs` that runs under
+  `cargo test --lib` (see "Lending-pool interest accrual benchmark" below).
 
 When those crates compile again: add the scenario modules, add the contracts to
 `CONTRACTS` in `main.rs`, make the features default, and record baselines. Until
-then, changes to them are not budget-checked.
+then, changes to them are not budget-checked — except interest accrual, which
+the inline benchmark covers.
 
 ## Intentionally updating baselines
 
@@ -108,6 +115,47 @@ Other knobs in `budget-config.json`:
   and the intended fix. They still go through the baseline regression check.
   Remove the entry once the function is fixed.
 
+## Lending-pool interest accrual benchmark
+
+Interest accrual (`LendingPoolContract::accrue_interest`) is the hottest
+internal path in the lending pool — it runs on every repayment, disbursement,
+refinance and default. Because the lending-pool's storage-key types are
+private to the crate, the benchmark lives **inside** the lending-pool crate
+(`src/bench_accrual.rs`) rather than in `budget-tests`, so it can call the
+private function directly via `env.as_contract`.
+
+```bash
+# Run the benchmark (prints measured cost; fails on regression or limit breach)
+cd contracts
+cargo test -p lending-pool --lib bench_accrual -- --nocapture
+
+# Record / re-record baselines after a deliberate cost change
+cd contracts
+BUDGET_UPDATE=1 cargo test -p lending-pool --lib bench_accrual -- --nocapture
+```
+
+`BUDGET_UPDATE=1` prints the measured CPU and memory for each scenario. Copy
+the printed values into the `BASE_*` constants at the top of
+`bench_accrual.rs`, explain every increase over the tolerance in the PR, and
+commit them with the code change. Do not update baselines to silence an
+unexplained regression.
+
+Scenarios measured:
+
+| key | loan age | payment history | why |
+|-----|----------|-----------------|-----|
+| `representative (1 period)` | 100 ledgers | fresh | typical one-period accrue |
+| `mid-age (12 periods)` | 1 200 ledgers | fresh | one year of monthly compounding |
+| `worst case (39k periods)` | 3 900 000 ledgers | fresh | longest gap within TTL; max `compound_pow` iterations |
+| `after partial repayment` | 500 + 500 ledgers | half repaid | accrue on reduced balance after a payment |
+
+The benchmark uses the same Soroban budget API as `budget-tests`
+(`env.cost_estimate().budget()` → `cpu_instruction_cost()` /
+`memory_bytes_cost()`). The tolerance (`15%`), minimum absolute growth
+thresholds, and network-limit gate (`80%`) mirror `budget-config.json`. A zero
+baseline skips the regression check until the first `BUDGET_UPDATE=1` run
+records a real value; the network-limit gate is always on.
+
 ## Caveats
 
 - Numbers come from the native (non-Wasm) test environment, so absolute values
@@ -131,3 +179,6 @@ Other knobs in `budget-config.json`:
 - `staking-pool::unstake` with 25 supported tokens uses about 9.5% of the CPU
   limit; `yield-vault::process_withdrawal_queue` with 40 queued withdrawals uses
   about 16%.
+- `lending-pool::accrue_interest` cost is tracked by the inline benchmark in
+  `contracts/lending-pool/src/bench_accrual.rs`. Baselines are recorded with
+  `BUDGET_UPDATE=1`; see "Lending-pool interest accrual benchmark" above.

@@ -4,6 +4,7 @@
 import { Router, type Response } from "express";
 import { requireAdmin, type AuthenticatedRequest } from "../middleware/auth.js";
 import { signSessionToken } from "../services/jwtKeyRing.js";
+import { loadConfig } from "../config.js";
 import {
   DeviceEnrolmentError,
   deviceBindingMode,
@@ -17,7 +18,7 @@ import logger from "../utils/logger.js";
 export const adminDevicesRouter = Router();
 
 /** Session cookie lifetime, matching the one `/api/auth/register` issues. */
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const SESSION_TTL_MS = loadConfig().sessionMaxLifetimeMs;
 
 function adminAddressOf(req: AuthenticatedRequest): string {
   return (
@@ -103,7 +104,7 @@ adminDevicesRouter.post(
       // did not — is replaced in the browser.
       const token = signSessionToken(
         { walletAddress: adminAddress, dbk: device.fingerprint },
-        { expiresIn: "24h" }
+        { expiresIn: Math.floor(SESSION_TTL_MS / 1000) }
       );
 
       res.cookie("token", token, {

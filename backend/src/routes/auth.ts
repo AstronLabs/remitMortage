@@ -3,6 +3,7 @@
 
 import { Router, Request, Response } from "express";
 import { signSessionToken } from "../services/jwtKeyRing.js";
+import { loadConfig } from "../config.js";
 import { isInviteRequired, validateInviteCode, consumeInviteCode } from "../services/inviteCode.js";
 import { upsertApplicant } from "../services/db.js";
 import { screenOnboardedParty } from "../services/sanctionsScreening.js";
@@ -104,16 +105,17 @@ authRouter.post("/register", adaptiveCaptcha("register"), async (req: Request, r
     // Signed with the current key of the rotation ring; the token carries that
     // key's `kid` so verification can also accept the previous key during its
     // grace period.
+    const { sessionMaxLifetimeMs } = loadConfig();
     const token = signSessionToken(
       { walletAddress, email: email || null },
-      { expiresIn: "24h" }
+      { expiresIn: Math.floor(sessionMaxLifetimeMs / 1000) }
     );
 
     res.cookie("token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
-      maxAge: 24 * 60 * 60 * 1000,
+      maxAge: sessionMaxLifetimeMs,
     });
 
     return res.status(201).json({

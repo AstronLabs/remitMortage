@@ -130,6 +130,10 @@ export interface Config {
   complianceSlackWebhookUrl: string | null;
   /** Number of days expired session/refresh tokens are retained before being purged. */
   sessionTokenRetentionDays: number;
+  /** Max time (ms) a session stays valid without any authenticated request (idle timeout). */
+  sessionIdleTimeoutMs: number;
+  /** Hard upper bound (ms) on total session lifetime regardless of activity. */
+  sessionMaxLifetimeMs: number;
   /** Compliance-reviewed retention window for soft-deleted borrower profiles. */
   borrowerRecordRetentionDays: number;
   /** Compliance-reviewed retention window for soft-deleted loan applications. */
@@ -156,6 +160,10 @@ export interface Config {
   payrollVerificationApiKey: string | null;
   sanctionsProviderUrl: string | null;
   sanctionsProviderApiKey: string | null;
+  /** ISO 3166-1 alpha-2 country codes from which API access is blocked (issue #1029). */
+  restrictedCountries: string[];
+  /** CIDR IP ranges that bypass the country restriction for internal tooling (issue #1029). */
+  countryOverrideIpRanges: string[];
   /** Backup KYC provider endpoint. Null leaves failover disabled. */
   kycBackupProviderUrl: string | null;
   /** Bearer token sent to the backup KYC provider. */
@@ -380,6 +388,14 @@ export function loadConfig(): Config {
         "7",
       10
     ),
+    sessionIdleTimeoutMs: parseInt(
+      process.env.SESSION_IDLE_TIMEOUT_MS || "1800000",
+      10
+    ),
+    sessionMaxLifetimeMs: parseInt(
+      process.env.SESSION_MAX_LIFETIME_MS || "86400000",
+      10
+    ),
     borrowerRecordRetentionDays: parseInt(
       process.env.BORROWER_RECORD_RETENTION_DAYS || "2555",
       10
@@ -408,6 +424,14 @@ export function loadConfig(): Config {
     payrollVerificationApiKey: process.env.PAYROLL_VERIFICATION_API_KEY || null,
     sanctionsProviderUrl: process.env.SANCTIONS_PROVIDER_URL || null,
     sanctionsProviderApiKey: process.env.SANCTIONS_PROVIDER_API_KEY || null,
+    restrictedCountries: String(process.env.RESTRICTED_COUNTRIES || "")
+      .split(",")
+      .map((c) => c.trim().toUpperCase())
+      .filter(Boolean),
+    countryOverrideIpRanges: String(process.env.COUNTRY_OVERRIDE_IP_RANGES || "")
+      .split(",")
+      .map((r) => r.trim())
+      .filter(Boolean),
     kycBackupProviderUrl: process.env.KYC_BACKUP_PROVIDER_URL || null,
     kycBackupProviderApiKey: process.env.KYC_BACKUP_PROVIDER_API_KEY || null,
     kycFailoverThreshold: parseInt(process.env.KYC_FAILOVER_THRESHOLD || "3", 10),
