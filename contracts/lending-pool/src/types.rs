@@ -438,6 +438,16 @@ pub struct BatchDisburseItem {
     pub amount: i128,
 }
 
+/// One repayment in a `repay_batch` call.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatchRepayItem {
+    /// The loan being repaid.
+    pub loan_id: BytesN<32>,
+    /// The amount to apply to it.
+    pub amount: i128,
+}
+
 /// Self-contained representation of a loan moved between compatible pools.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]

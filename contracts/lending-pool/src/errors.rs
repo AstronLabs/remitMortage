@@ -142,6 +142,35 @@ pub enum LoanAssumptionError {
     NotInitialized = 9,
 }
 
+/// Errors returned by `repay_batch`. Kept apart from [`PoolError`] because
+/// that enum is at Soroban's 50-variant ceiling.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum BatchRepayError {
+    /// The pool has not been initialized.
+    NotInitialized = 1,
+    /// Repayments are paused.
+    ContractPaused = 2,
+    /// The batch has no entries.
+    EmptyBatch = 3,
+    /// The batch has more entries than `MAX_REPAY_BATCH_SIZE`.
+    BatchTooLarge = 4,
+    /// The same loan id appears more than once in the batch.
+    DuplicateLoan = 5,
+    /// An entry's amount is not positive.
+    InvalidAmount = 6,
+    /// An entry names a loan that does not exist.
+    LoanNotFound = 7,
+    /// An entry names a loan that is not active.
+    InvalidLoanState = 8,
+    /// An entry pays more than the loan owes.
+    OverPayment = 9,
+    /// An entry was refused for another reason, such as a late-payment
+    /// penalty it does not cover or the daily repayment cap.
+    EntryRejected = 10,
+}
+
 /// Errors returned by `adjust_loan_rate`. Kept apart from [`PoolError`]
 /// because that enum is at Soroban's 50-variant ceiling.
 #[contracterror]

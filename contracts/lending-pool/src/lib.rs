@@ -48,6 +48,9 @@ mod test_payoff_quote_expiry;
 mod test_early_repayment_fee;
 
 #[cfg(test)]
+mod test_repay_batch;
+
+#[cfg(test)]
 mod test_tranche_share_cap;
 
 #[cfg(test)]
@@ -90,9 +93,9 @@ mod test_loan_event_seq;
 mod test_event_versions;
 mod test_principal_payment;
 
-pub use crate::errors::{LoanAssumptionError, PoolError, RateAdjustmentError};
+pub use crate::errors::{BatchRepayError, LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
-    BatchDisburseItem, BorrowRateCurve, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot,
+    BatchDisburseItem, BatchRepayItem, BorrowRateCurve, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot,
     EarlyRepaymentFeeSchedule,
     FeatureKey, HalvingInfo, InvestorLockupPosition, InvestorRecord, LoanAssumptionRequest,
     LoanClosingStatement, LoanCollateralRecord, LoanIntroConfig, LoanOriginTerms, LoanPhase,
@@ -161,6 +164,11 @@ const GRACE_PERIOD_LEDGERS: u32 = 120_960; // ~7 days (default grace period)
 const LATE_PENALTY_BPS: u32 = 50; // 50 bps = 0.5% (legacy flat late penalty)
 const DEFAULT_DAILY_PENALTY_BPS: u32 = 10; // 10 bps = 0.1% of the installment per overdue day
 const DEFAULT_DURATION_MONTHS: u32 = 12;
+
+/// Most entries a single `repay_batch` call may carry. Each entry runs a full
+/// repayment (loan, schedule, tranche and token writes), so the cap keeps the
+/// transaction inside Soroban's per-transaction resource limits.
+const MAX_REPAY_BATCH_SIZE: u32 = 20;
 const DEFAULT_MISSED_THRESHOLD: u32 = 3; // default after 3 missed payments
 const DEFAULT_OVERDUE_LEDGERS: u32 = 3 * LEDGERS_PER_MONTH; // ~90 days past due
 
@@ -4568,6 +4576,84 @@ impl LendingPoolContract {
         Self::do_repay(env, borrower, loan_id, amount, false)
     }
 
+    /// Repay several loans in one transaction. The `servicer` pays for every
+    /// entry and authorizes the call once.
+    ///
+    /// Each entry is applied exactly as `repay` would apply it, so every loan
+    /// emits its own `repay` event and indexers need no change. The batch is
+    /// atomic: if any entry is invalid, the call fails and none are applied.
+    ///
+    /// # Errors
+    /// * `EmptyBatch` — there are no entries.
+    /// * `BatchTooLarge` — more than `MAX_REPAY_BATCH_SIZE` entries.
+    /// * `DuplicateLoan` — a loan id appears twice.
+    /// * `InvalidAmount`, `LoanNotFound`, `InvalidLoanState`, `OverPayment` —
+    ///   an entry is invalid for that reason.
+    /// * `EntryRejected` — an entry was refused for any other reason.
+    ///
+    /// Returns the number of repayments applied.
+    pub fn repay_batch(
+        env: Env,
+        servicer: Address,
+        entries: Vec<BatchRepayItem>,
+    ) -> Result<u32, BatchRepayError> {
+        Self::check_function_not_paused(&env, PauseGroup::Repayments)
+            .map_err(Self::batch_repay_error)?;
+        servicer.require_auth();
+
+        let len = entries.len();
+        if len == 0 {
+            return Err(BatchRepayError::EmptyBatch);
+        }
+        if len > MAX_REPAY_BATCH_SIZE {
+            return Err(BatchRepayError::BatchTooLarge);
+        }
+
+        // Validate the whole batch before moving anything.
+        for i in 0..len {
+            let item = entries.get_unchecked(i);
+            if item.amount <= 0 {
+                return Err(BatchRepayError::InvalidAmount);
+            }
+            for j in 0..i {
+                if entries.get_unchecked(j).loan_id == item.loan_id {
+                    return Err(BatchRepayError::DuplicateLoan);
+                }
+            }
+            let loan = Self::read_loan(&env, &item.loan_id).map_err(Self::batch_repay_error)?;
+            if loan.status != LoanStatus::Approved {
+                return Err(BatchRepayError::InvalidLoanState);
+            }
+        }
+
+        // Returning an error reverts every transfer and write made so far, so
+        // an entry that fails here still leaves none of the batch applied.
+        for i in 0..len {
+            let item = entries.get_unchecked(i);
+            Self::apply_repay(env.clone(), servicer.clone(), item.loan_id, item.amount, false)
+                .map_err(Self::batch_repay_error)?;
+        }
+        Ok(len)
+    }
+
+    /// Maps a repayment failure to the batch's error type.
+    fn batch_repay_error(err: PoolError) -> BatchRepayError {
+        match err {
+            PoolError::NotInitialized => BatchRepayError::NotInitialized,
+            PoolError::ContractPaused => BatchRepayError::ContractPaused,
+            PoolError::InvalidAmount => BatchRepayError::InvalidAmount,
+            PoolError::LoanNotFound => BatchRepayError::LoanNotFound,
+            PoolError::InvalidLoanState => BatchRepayError::InvalidLoanState,
+            PoolError::OverPayment => BatchRepayError::OverPayment,
+            _ => BatchRepayError::EntryRejected,
+        }
+    }
+
+    /// The most entries `repay_batch` accepts in one call.
+    pub fn get_max_repay_batch_size(_env: Env) -> u32 {
+        MAX_REPAY_BATCH_SIZE
+    }
+
     /// Admin lists (or updates) an asset accepted for repayment. Only an asset
     /// marked `pegged` is converted — one-to-one in value, rescaled for token
     /// decimals — into the pool's accounting unit; a listed asset that is not
@@ -4685,7 +4771,19 @@ impl LendingPoolContract {
     ) -> Result<(), PoolError> {
         Self::check_function_not_paused(&env, PauseGroup::Repayments)?;
         borrower.require_auth();
+        Self::apply_repay(env, borrower, loan_id, amount, funded)
+    }
 
+    /// The repayment itself, with the pause check and the payer's
+    /// authorization already done by the caller. `repay_batch` authorizes its
+    /// payer once for the whole batch and applies every entry through here.
+    fn apply_repay(
+        env: Env,
+        borrower: Address,
+        loan_id: BytesN<32>,
+        amount: i128,
+        funded: bool,
+    ) -> Result<(), PoolError> {
         if amount <= 0 {
             return Err(PoolError::InvalidAmount);
         }
