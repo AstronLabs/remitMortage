@@ -1,13 +1,14 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React from 'react';
+import React, { useRef } from 'react';
 import {
   REFRESH_INTERVAL_OPTIONS,
   RefreshInterval,
   useWidgetStore,
   WidgetId,
 } from '../../app/stores/useWidgetStore';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
 
 interface WidgetSettingsModalProps {
   isOpen: boolean;
@@ -39,15 +40,26 @@ export function WidgetSettingsModal({ isOpen, onClose }: WidgetSettingsModalProp
     setRefreshInterval,
     resetLayout,
   } = useWidgetStore();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, isOpen, { onEscape: onClose });
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-6">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="widget-settings-title"
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+    >
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-6"
+      >
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-bold text-white">Dashboard Layout</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-white">
+          <h2 id="widget-settings-title" className="text-xl font-bold text-white">Dashboard Layout</h2>
+          <button onClick={onClose} aria-label="Close dashboard layout dialog" className="text-slate-400 hover:text-white">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M18 6L6 18M6 6l12 12" />
             </svg>

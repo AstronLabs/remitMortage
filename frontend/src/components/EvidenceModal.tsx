@@ -2,9 +2,10 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React, { useState, useEffect } from "react";
+import React, { useRef, useState } from "react";
 import { X, Maximize2, Minimize2, Calendar, HardDrive, ShieldCheck, ShieldAlert } from "lucide-react";
 import { IPFSMediaPlayer } from "./IPFSMediaPlayer";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 export interface MilestoneData {
   title: string;
@@ -26,17 +27,8 @@ interface EvidenceModalProps {
 
 export const EvidenceModal: React.FC<EvidenceModalProps> = ({ isOpen, onClose, milestoneData }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
-
-  // Close on Escape key
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    if (isOpen) {
-      window.addEventListener("keydown", handleKeyDown);
-    }
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, isOpen, { onEscape: onClose });
 
   if (!isOpen) return null;
 
@@ -62,6 +54,8 @@ export const EvidenceModal: React.FC<EvidenceModalProps> = ({ isOpen, onClose, m
       />
 
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className={`relative flex flex-col bg-zinc-900 border border-zinc-800 shadow-2xl rounded-xl overflow-hidden transition-all duration-300 ease-in-out ${
           isFullscreen ? "w-full h-full" : "w-full max-w-4xl max-h-[90vh]"
         }`}

@@ -2,8 +2,9 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React from "react";
+import React, { useRef } from "react";
 import { ShieldAlert, Clock, LogOut, CheckCircle2 } from "lucide-react";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 interface IdleSessionModalProps {
   isOpen: boolean;
@@ -20,6 +21,9 @@ export default function IdleSessionModal({
   onExtendSession,
   onLogoutNow,
 }: IdleSessionModalProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, isOpen, { onEscape: onExtendSession });
+
   if (!isOpen) return null;
 
   const minutes = Math.floor(remainingSeconds / 60);
@@ -36,7 +40,11 @@ export default function IdleSessionModal({
       aria-labelledby="idle-modal-title"
       data-testid="idle-warning-modal"
     >
-      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-amber-500/40 bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 p-6 md:p-8 shadow-2xl">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="relative w-full max-w-md overflow-hidden rounded-2xl border border-amber-500/40 bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 p-6 md:p-8 shadow-2xl"
+      >
         {/* Glow backdrop effect */}
         <div className="absolute -top-12 -right-12 h-36 w-36 rounded-full bg-amber-500/10 blur-2xl pointer-events-none" />
 

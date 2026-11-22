@@ -2,8 +2,9 @@
 // Copyright (c) 2026 RemitMortgage Protocol Contributors
 // SPDX-License-Identifier: MIT
 
-import React, { useEffect } from "react";
+import React, { useRef } from "react";
 import { SHORTCUT_LIST, ShortcutItem } from "@/context/KeyboardShortcutsContext";
+import { useFocusTrap } from "@/hooks/useFocusTrap";
 
 type KeyboardShortcutsModalProps = {
   isOpen: boolean;
@@ -11,15 +12,8 @@ type KeyboardShortcutsModalProps = {
 };
 
 export default function KeyboardShortcutsModal({ isOpen, onClose }: KeyboardShortcutsModalProps) {
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isOpen) {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, isOpen, { onEscape: onClose });
 
   if (!isOpen) return null;
 
@@ -31,6 +25,8 @@ export default function KeyboardShortcutsModal({ isOpen, onClose }: KeyboardShor
       <div className="absolute inset-0" onClick={onClose} />
 
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="relative w-full max-w-2xl bg-slate-900/95 border border-slate-800/80 rounded-2xl shadow-2xl overflow-hidden p-6 sm:p-8 text-slate-100 z-10"
         role="dialog"
         aria-modal="true"
