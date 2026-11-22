@@ -438,6 +438,16 @@ pub struct BatchDisburseItem {
     pub amount: i128,
 }
 
+/// One repayment in a `repay_batch` call.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatchRepayItem {
+    /// The loan being repaid.
+    pub loan_id: BytesN<32>,
+    /// The amount to apply to it.
+    pub amount: i128,
+}
+
 /// Self-contained representation of a loan moved between compatible pools.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -769,6 +779,34 @@ pub enum PoolExtKey {
     LoanEventSeq(BytesN<32>),
     /// Admin-listed repayment asset (see `add_repayment_asset`).
     RepaymentAsset(Address),
+    /// The admin-configured early-repayment fee schedule applied to loans
+    /// originated from now on (see `set_early_repayment_fee_schedule`).
+    EarlyRepayFeeSchedule,
+    /// The early-repayment fee schedule a loan was originated under. Latched
+    /// at request time, so a later schedule change never reprices the loan.
+    LoanEarlyFeeSchedule(BytesN<32>),
+    /// Early-repayment fee included in a live payoff quote's `quoted_amount`.
+    /// Absent means the quote carries no fee.
+    PayoffQuoteFee(BytesN<32>),
+    /// Maximum loan-to-value ratio in basis points enforced at origination.
+    /// Absent or `0` means no limit.
+    MaxLtvBps,
+    /// Price oracle contract that values loan collateral for the LTV check.
+    PriceOracle,
+}
+
+/// Early-repayment fee rates, in basis points of the remaining principal, by
+/// the age of the loan at the time it is paid off. Rates must not rise with
+/// age, so a borrower is always rewarded for staying longer.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct EarlyRepaymentFeeSchedule {
+    /// Rate for a loan younger than one year.
+    pub year1_bps: u32,
+    /// Rate for a loan at least one year but less than two years old.
+    pub year2_bps: u32,
+    /// Rate for a loan two years old or more.
+    pub year3_plus_bps: u32,
 }
 
 /// A listed repayment asset. Only a `pegged` asset is converted, one-to-one

@@ -7,6 +7,7 @@ import { startPartitionManager } from "./partitionManager.js";
 import { runRepaymentAudit } from "./repaymentAudit.js";
 import { runKycExpiryReminderJob } from "./kycExpiryReminder.js";
 import { runInvestorReverificationJob } from "./investorReverificationReminder.js";
+import { runSanctionsScreeningJob } from "./sanctionsScreeningSweep.js";
 import { runEscrowReconciliation } from "./escrowReconciliation.js";
 import { runApplicationSlaMonitorJob } from "./applicationSlaMonitor.js";
 import { runStuckStageAlertScan } from "../services/loanReviewStages.js";
@@ -36,6 +37,7 @@ import { scheduledJob } from "../services/jobLeaderElection.js";
 let schedulerTask: ReturnType<typeof cron.schedule> | null = null;
 let kycExpiryTask: ReturnType<typeof cron.schedule> | null = null;
 let investorReverificationTask: ReturnType<typeof cron.schedule> | null = null;
+let sanctionsScreeningTask: ReturnType<typeof cron.schedule> | null = null;
 let escrowReconciliationTask: ReturnType<typeof cron.schedule> | null = null;
 let applicationSlaTask: ReturnType<typeof cron.schedule> | null = null;
 let reviewStageStuckTask: ReturnType<typeof cron.schedule> | null = null;
@@ -131,6 +133,16 @@ export function startScheduler() {
       await runInvestorReverificationJob();
     } catch (error) {
       logger.error("[Scheduler] Investor re-verification sweep failed", { error });
+    }
+  }), { timezone: "UTC" });
+
+  // Hourly: sanctions re-screening (stale, failed, or list-update driven)
+  const sanctionsSchedule = process.env.SANCTIONS_SCREENING_CRON_SCHEDULE || "15 * * * *";
+  sanctionsScreeningTask = cron.schedule(sanctionsSchedule, scheduledJob("sanctions-screening", async () => {
+    try {
+      await runSanctionsScreeningJob();
+    } catch (error) {
+      logger.error("[Scheduler] Sanctions screening sweep failed", { error });
     }
   }), { timezone: "UTC" });
 
@@ -326,6 +338,10 @@ export function stopScheduler() {
   if (investorReverificationTask) {
     investorReverificationTask.stop();
     investorReverificationTask = null;
+  }
+  if (sanctionsScreeningTask) {
+    sanctionsScreeningTask.stop();
+    sanctionsScreeningTask = null;
   }
   if (escrowReconciliationTask) {
     escrowReconciliationTask.stop();

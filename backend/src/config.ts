@@ -154,6 +154,8 @@ export interface Config {
   payrollVerificationApiUrl: string | null;
   /** Bearer token sent to the payroll verification provider. */
   payrollVerificationApiKey: string | null;
+  sanctionsProviderUrl: string | null;
+  sanctionsProviderApiKey: string | null;
   /** Backup KYC provider endpoint. Null leaves failover disabled. */
   kycBackupProviderUrl: string | null;
   /** Bearer token sent to the backup KYC provider. */
@@ -404,6 +406,8 @@ export function loadConfig(): Config {
     slowQueryThresholdMs: parseInt(process.env.SLOW_QUERY_THRESHOLD_MS || "200", 10),
     payrollVerificationApiUrl: process.env.PAYROLL_VERIFICATION_API_URL || null,
     payrollVerificationApiKey: process.env.PAYROLL_VERIFICATION_API_KEY || null,
+    sanctionsProviderUrl: process.env.SANCTIONS_PROVIDER_URL || null,
+    sanctionsProviderApiKey: process.env.SANCTIONS_PROVIDER_API_KEY || null,
     kycBackupProviderUrl: process.env.KYC_BACKUP_PROVIDER_URL || null,
     kycBackupProviderApiKey: process.env.KYC_BACKUP_PROVIDER_API_KEY || null,
     kycFailoverThreshold: parseInt(process.env.KYC_FAILOVER_THRESHOLD || "3", 10),

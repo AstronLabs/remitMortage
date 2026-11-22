@@ -1245,3 +1245,68 @@ model ApplicationProgress {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
+
+/// Sanctions screening state for one onboarded party (issue #922).
+/// `status`: PENDING (no successful screening yet, e.g. provider outage),
+/// CLEAR, HELD (a potential or confirmed match awaiting manual review) or
+/// REJECTED (a reviewer upheld the match). Kept as strings, not an enum, so a
+/// provider-driven status never needs a migration.
+model SanctionsScreening {
+  id                  String    @id @default(uuid())
+  /// APPLICANT | CONTRACTOR | INVESTOR
+  partyType           String
+  partyAddress        String
+  status              String    @default("PENDING")
+  /// "potential" | "confirmed" while HELD; null otherwise.
+  matchLevel          String?
+  /// Stable digest of the matched list entries, used to recognise a match a
+  /// reviewer has already cleared.
+  matchFingerprint    String?
+  reviewedFingerprint String?
+  /// Encrypted screening name, kept so scheduled re-screens can run without
+  /// the applicant resubmitting it.
+  subjectNameEnc      String?
+  subjectCountry      String?
+  listVersion         String?
+  providerName        String?
+  providerReference   String?
+  lastScreenedAt      DateTime?
+  lastError           String?
+  reviewedBy          String?
+  reviewedAt          DateTime?
+  reviewNote          String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  events SanctionsScreeningEvent[]
+
+  @@unique([partyType, partyAddress])
+  @@index([status])
+  @@index([lastScreenedAt])
+}
+
+/// Append-only record of every screening result and manual review decision.
+model SanctionsScreeningEvent {
+  id           String   @id @default(uuid())
+  screeningId  String
+  partyType    String
+  partyAddress String
+  /// screened | held | provider_error | review_decision
+  kind         String
+  /// onboarding | scheduled | list_update | manual
+  trigger      String
+  /// clear | potential_match | confirmed_match, or the review decision
+  outcome      String?
+  /// Status after this event.
+  status       String
+  listVersion  String?
+  actor        String?
+  note         String?
+  detail       Json?
+  createdAt    DateTime @default(now())
+
+  screening SanctionsScreening @relation(fields: [screeningId], references: [id], onDelete: Cascade)
+
+  @@index([screeningId, createdAt])
+  @@index([partyType, partyAddress])
+}

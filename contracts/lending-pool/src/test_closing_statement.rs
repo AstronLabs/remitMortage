@@ -94,7 +94,8 @@ fn closing_statement_records_early_payoff_prepayment_penalty() {
 
     // Pay off immediately in 1 shot (ahead of 12-month schedule) -> triggers 1% prepayment penalty.
     let remaining = current_payoff_amount(&env, client, &loan_id);
-    let expected_penalty = (remaining * PREPAYMENT_PENALTY_BPS as i128) / BPS_SCALE as i128;
+    // The fee is a share of the remaining principal, not of accrued interest.
+    let expected_penalty = (50_000 * PREPAYMENT_PENALTY_BPS as i128) / BPS_SCALE as i128;
     client.repay(&borrower, &loan_id, &remaining);
 
     assert!(has_event(&env, "loan_closed"));

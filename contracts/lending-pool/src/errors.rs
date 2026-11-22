@@ -72,11 +72,17 @@ pub enum PoolError {
     LockupPeriodActive = 36,
     /// Deposit is below the pool's configured minimum deposit amount.
     DepositBelowMinimum = 40,
-    /// Collateral release would breach the minimum collateralization ratio.
+    /// Collateral release would breach the minimum collateralization ratio, or
+    /// a loan's principal exceeds the pool's maximum loan-to-value ratio at
+    /// origination. (The error enum is at Soroban's 50-variant ceiling, so
+    /// both share this code.)
     CollateralRatioBreached = 41,
     /// No collateral available for release.
     NoCollateralToRelease = 42,
-    /// Invalid collateral ratio configuration.
+    /// Invalid collateral ratio configuration, or the price oracle could not
+    /// value the collateral for the loan-to-value check at origination: it is
+    /// not configured, has no price, or its price is stale. (Shares a code
+    /// for the same reason as `CollateralRatioBreached`.)
     InvalidCollateralRatio = 44,
     /// A fee (origination, application or protocol fee switch) exceeds its ceiling.
     FeeTooHigh = 45,
@@ -140,6 +146,35 @@ pub enum LoanAssumptionError {
     AssumptionFeeCapExceeded = 8,
     /// The pool has not been initialized.
     NotInitialized = 9,
+}
+
+/// Errors returned by `repay_batch`. Kept apart from [`PoolError`] because
+/// that enum is at Soroban's 50-variant ceiling.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum BatchRepayError {
+    /// The pool has not been initialized.
+    NotInitialized = 1,
+    /// Repayments are paused.
+    ContractPaused = 2,
+    /// The batch has no entries.
+    EmptyBatch = 3,
+    /// The batch has more entries than `MAX_REPAY_BATCH_SIZE`.
+    BatchTooLarge = 4,
+    /// The same loan id appears more than once in the batch.
+    DuplicateLoan = 5,
+    /// An entry's amount is not positive.
+    InvalidAmount = 6,
+    /// An entry names a loan that does not exist.
+    LoanNotFound = 7,
+    /// An entry names a loan that is not active.
+    InvalidLoanState = 8,
+    /// An entry pays more than the loan owes.
+    OverPayment = 9,
+    /// An entry was refused for another reason, such as a late-payment
+    /// penalty it does not cover or the daily repayment cap.
+    EntryRejected = 10,
 }
 
 /// Errors returned by `adjust_loan_rate`. Kept apart from [`PoolError`]

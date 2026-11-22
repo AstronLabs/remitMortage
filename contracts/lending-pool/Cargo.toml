@@ -21,3 +21,4 @@ verification-registry = { path = "../verification-registry" }
 multisig-validator = { path = "../multisig-validator" }
 insurance-pool = { path = "../insurance-pool" }
 governance = { path = "../governance" }
+oracle-price = { path = "../oracle-price" }

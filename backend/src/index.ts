@@ -135,6 +135,11 @@ import {
   HttpPayrollVerificationProvider,
   setPayrollVerificationProvider,
 } from "./services/payrollVerificationProvider.js";
+import {
+  HttpSanctionsProvider,
+  setSanctionsProvider,
+} from "./services/sanctionsProvider.js";
+import { sanctionsAdminRouter } from "./routes/sanctions.js";
 import logger from "./utils/logger.js";
 import { feeEstimator } from "./services/feeEstimator.js";
 import { initializeRedis } from "./services/redis.js";
@@ -180,6 +185,19 @@ if (config.payrollVerificationApiUrl) {
       url: config.payrollVerificationApiUrl,
       apiKey: config.payrollVerificationApiKey,
       providerName: "payroll_provider",
+    })
+  );
+}
+
+// Sanctions screening (issue #922). Without a provider URL the Null provider
+// stays active and refuses to answer, so enabling screening without one holds
+// every party as unscreened rather than clearing them.
+if (config.sanctionsProviderUrl) {
+  setSanctionsProvider(
+    new HttpSanctionsProvider({
+      url: config.sanctionsProviderUrl,
+      apiKey: config.sanctionsProviderApiKey,
+      providerName: "sanctions_provider",
     })
   );
 }
@@ -349,6 +367,7 @@ app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevi
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminLatencyRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), adminDeadLetterRouter);
 app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), investorAdminRouter);
+app.use("/api/admin", authMiddleware, readYourWritesMiddleware, requireBoundDevice(), sanctionsAdminRouter);
 app.use("/api/admin", adminAuthRouter);
 // Bare (no outer authMiddleware): impersonation/start and /end authenticate
 // via the admin's own token through requireAdmin regardless of whether an

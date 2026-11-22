@@ -396,6 +396,18 @@
         "version": 1
       }
     ],
+    "early_fee_set": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "year1_bps",
+          "year2_bps",
+          "year3_plus_bps"
+        ],
+        "version": 1
+      }
+    ],
     "emrg_inj": [
       {
         "topicArgs": [],
@@ -741,6 +753,17 @@
         "version": 1
       }
     ],
+    "max_ltv_set": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "previous",
+          "max_ltv_bps"
+        ],
+        "version": 1
+      }
+    ],
     "migrate": [
       {
         "topicArgs": [],
@@ -771,6 +794,16 @@
         "data": [
           "note_hash",
           "loan_seq"
+        ],
+        "version": 1
+      }
+    ],
+    "oracle_set": [
+      {
+        "topicArgs": [],
+        "dataKind": "value",
+        "data": [
+          "oracle"
         ],
         "version": 1
       }
