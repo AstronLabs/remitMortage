@@ -7,6 +7,8 @@ import logger from "../utils/logger.js";
 import { validatePositiveNumber } from "../middleware/validate.js";
 import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import { requireRpcAvailable } from "../middleware/rpcDegradedMode.js";
+import { respondToSanctionsHold } from "../middleware/sanctionsGate.js";
+import { assertSanctionsClear } from "../services/sanctionsScreening.js";
 import { strongEtag } from "../middleware/etag.js";
 import {
   createApplication,
@@ -158,6 +160,14 @@ loanRouter.post("/apply", requireRpcAvailable(), idempotencyMiddleware, validate
           message: "Invalid Stellar G-address",
         });
       }
+
+    // An applicant held for sanctions review cannot submit an application.
+    try {
+      await assertSanctionsClear("APPLICANT", borrowerAddress);
+    } catch (err) {
+      if (respondToSanctionsHold(res, err)) return;
+      throw err;
+    }
 
     // Block loan submissions when any KYC document is expired
     const applicant = await prisma.applicant.findFirst({ where: { stellarAddress: borrowerAddress, deletedAt: null } });

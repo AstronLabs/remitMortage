@@ -5,6 +5,7 @@ import { Router, Request, Response } from "express";
 import { signSessionToken } from "../services/jwtKeyRing.js";
 import { isInviteRequired, validateInviteCode, consumeInviteCode } from "../services/inviteCode.js";
 import { upsertApplicant } from "../services/db.js";
+import { screenOnboardedParty } from "../services/sanctionsScreening.js";
 import { adaptiveCaptcha } from "../middleware/adaptiveCaptcha.js";
 import logger from "../utils/logger.js";
 
@@ -71,6 +72,15 @@ authRouter.post("/register", adaptiveCaptcha("register"), async (req: Request, r
   try {
     // Create or update applicant record
     const applicant = await upsertApplicant(walletAddress, {});
+
+    // Screen the new applicant against sanctions lists. A match or an outage
+    // is recorded and holds the account; it never blocks registration itself,
+    // and a failure here is logged without failing the request.
+    try {
+      await screenOnboardedParty({ partyType: "APPLICANT", address: walletAddress });
+    } catch (screeningErr) {
+      logger.error("[auth] sanctions screening at onboarding failed", { screeningErr });
+    }
 
     // Consume invite code if provided (and gating requires it)
     if (inviteCode) {

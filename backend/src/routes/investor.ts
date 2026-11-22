@@ -22,6 +22,7 @@ import {
   getReverificationState,
   recordInvestorVerification,
 } from "../services/investorReverification.js";
+import { requireSanctionsClear } from "../middleware/sanctionsGate.js";
 import logger from "../utils/logger.js";
 
 export const investorRouter = Router();
@@ -68,6 +69,7 @@ investorRouter.get("/accreditation", async (req: AuthenticatedRequest, res: Resp
 investorRouter.post(
   "/investments/authorize",
   requireRpcAvailable(),
+  requireSanctionsClear("INVESTOR"),
   requireCurrentAccreditation,
   (_req: AuthenticatedRequest, res: Response) => res.json({ allowed: true })
 );
