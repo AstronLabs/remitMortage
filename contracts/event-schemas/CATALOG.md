@@ -69,6 +69,7 @@ Every event follows the naming convention in
 | lending-pool | `dep_fees` | topics[] data(tuple)[from, amount, total_interest] v1 |
 | lending-pool | `dep_tier` | topics[investor] data(tuple)[amount, tier as u32, unlock_ledger, bonus_bps] v1 |
 | lending-pool | `disburse` | topics[] data(tuple)[loan_id, recipient, amount, loan_seq] v1 |
+| lending-pool | `early_fee_set` | topics[] data(tuple)[year1_bps, year2_bps, year3_plus_bps] v1 |
 | lending-pool | `emrg_inj` | topics[] data(tuple)[proposal_id, insurance, amount] v1 |
 | lending-pool | `escrow_rel_start` | topics[] data(tuple)[borrower, start_ledger] v1 |
 | lending-pool | `ext_loan` | topics[loan_id] data(tuple)[borrower, additional_months, fee, duration_months, loan_seq] v1 |

@@ -45,6 +45,9 @@ mod test_daily_repayment_cap;
 mod test_payoff_quote_expiry;
 
 #[cfg(test)]
+mod test_early_repayment_fee;
+
+#[cfg(test)]
 mod test_tranche_share_cap;
 
 #[cfg(test)]
@@ -90,6 +93,7 @@ mod test_principal_payment;
 pub use crate::errors::{LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
     BatchDisburseItem, BorrowRateCurve, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot,
+    EarlyRepaymentFeeSchedule,
     FeatureKey, HalvingInfo, InvestorLockupPosition, InvestorRecord, LoanAssumptionRequest,
     LoanClosingStatement, LoanCollateralRecord, LoanIntroConfig, LoanOriginTerms, LoanPhase,
     LoanPortabilitySnapshot, LoanRecord, LoanStatus, LoanSummary, LoanSummaryPage, LockupTier,
@@ -168,9 +172,12 @@ const MAX_ORIGINATION_FEE_BPS: u32 = BPS_SCALE;
 /// Application fees may not exceed 100% of the requested principal.
 const MAX_APPLICATION_FEE_BPS: u32 = BPS_SCALE;
 
-/// Standard early-prepayment penalty: 100 bps = 1% of the amount that closes
-/// a loan ahead of its schedule. Charged on top of the repayment, forwarded to
-/// the treasury, and never counted as pool liquidity.
+/// Default early-prepayment fee: 100 bps = 1% of the remaining principal of a
+/// loan closed ahead of its schedule. It is the rate of every age band until
+/// the admin configures a schedule with `set_early_repayment_fee_schedule`,
+/// and the schedule of any loan originated before one existed. Charged on top
+/// of the repayment, forwarded to the treasury, and never counted as pool
+/// liquidity.
 ///
 /// Waivable in full via `PoolConfig::prepay_waiver_ledgers` for
 /// borrowers with a sufficiently long escrow savings relationship. It is a fee
@@ -771,12 +778,71 @@ impl LendingPoolContract {
         loan.escrow_relationship_ledgers >= threshold
     }
 
-    /// The penalty for closing `prepayment` ahead of schedule, in stroops.
-    fn calculate_prepayment_penalty(prepayment: i128) -> i128 {
-        if prepayment <= 0 {
+    /// The schedule every band falls back to: the flat default rate.
+    fn default_early_fee_schedule() -> EarlyRepaymentFeeSchedule {
+        EarlyRepaymentFeeSchedule {
+            year1_bps: PREPAYMENT_PENALTY_BPS,
+            year2_bps: PREPAYMENT_PENALTY_BPS,
+            year3_plus_bps: PREPAYMENT_PENALTY_BPS,
+        }
+    }
+
+    /// The schedule that new loans are originated under.
+    fn read_early_fee_schedule(env: &Env) -> EarlyRepaymentFeeSchedule {
+        env.storage()
+            .instance()
+            .get(&PoolExtKey::EarlyRepayFeeSchedule)
+            .unwrap_or_else(Self::default_early_fee_schedule)
+    }
+
+    /// The schedule `loan_id` was originated under. A loan with none latched
+    /// (it predates schedules) keeps the default, never the current schedule.
+    fn read_loan_early_fee_schedule(env: &Env, loan_id: &BytesN<32>) -> EarlyRepaymentFeeSchedule {
+        env.storage()
+            .persistent()
+            .get(&PoolExtKey::LoanEarlyFeeSchedule(loan_id.clone()))
+            .unwrap_or_else(Self::default_early_fee_schedule)
+    }
+
+    /// The rate in `schedule` for a loan `age_ledgers` old.
+    fn early_fee_bps_for_age(schedule: &EarlyRepaymentFeeSchedule, age_ledgers: u32) -> u32 {
+        if age_ledgers < LEDGERS_PER_YEAR {
+            schedule.year1_bps
+        } else if age_ledgers < 2 * LEDGERS_PER_YEAR {
+            schedule.year2_bps
+        } else {
+            schedule.year3_plus_bps
+        }
+    }
+
+    /// The early-repayment fee owed for paying `amount` toward `loan` now, in
+    /// stroops: the loan's latched rate for its current age band, applied to
+    /// the remaining principal.
+    ///
+    /// A payment within the regular scheduled installment owes nothing, so the
+    /// fee only ever bites a payment that exceeds what the schedule asks for.
+    fn calculate_prepayment_penalty(
+        env: &Env,
+        loan_id: &BytesN<32>,
+        loan: &LoanRecord,
+        amount: i128,
+    ) -> i128 {
+        if amount <= 0 {
             return 0;
         }
-        (prepayment * PREPAYMENT_PENALTY_BPS as i128) / BPS_SCALE as i128
+        let schedule: Option<RepaymentSchedule> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::LoanSchedule(loan_id.clone()));
+        if let Some(sched) = schedule {
+            if amount <= sched.monthly_amount {
+                return 0;
+            }
+        }
+        let remaining_principal = (loan.principal - loan.repaid).max(0);
+        let age = env.ledger().sequence().saturating_sub(loan.created_ledger);
+        let bps = Self::early_fee_bps_for_age(&Self::read_loan_early_fee_schedule(env, loan_id), age);
+        (remaining_principal * bps as i128) / BPS_SCALE as i128
     }
 
     /// Whether closing the loan on this payment counts as *early*.
@@ -1352,7 +1418,11 @@ impl LendingPoolContract {
     /// The caller has already verified a live quote and `amount ==
     /// quote.quoted_amount`. Any interest that accrued after the quote is
     /// forgiven: the loan is closed, the quote is consumed, and liquidity
-    /// accounting reflects only the quoted transfer.
+    /// accounting reflects only the debt part of the quoted transfer.
+    ///
+    /// `amount` is the full quoted amount, which includes the early-repayment
+    /// fee the quote locked in. That fee goes straight to the treasury; the
+    /// rest settles the loan.
     fn settle_quoted_payoff(
         env: &Env,
         config: &PoolConfig,
@@ -1362,11 +1432,28 @@ impl LendingPoolContract {
         amount: i128,
         funded: bool,
     ) -> Result<(), PoolError> {
+        let fee = Self::read_quote_fee(env, loan_id).min(amount);
+        // A fee is always paid in the pool token, which a repayment already
+        // pulled in another listed asset cannot cover.
+        if funded && fee > 0 {
+            return Err(PoolError::InvalidAmount);
+        }
         // `funded`: the repayment arrived in a listed asset, already pulled.
         if !funded {
             let token = Self::token_client(env, &config.token);
             token.transfer(borrower, &env.current_contract_address(), &amount);
         }
+        // The fee leaves the pool at once and is never booked as liquidity.
+        // Recorded before the closing statement below so it shows up there.
+        if fee > 0 {
+            Self::collect_prepayment_penalty(env, config, loan_id, borrower, fee);
+            Self::add_loan_prepay_penalty(env, loan_id, fee);
+            let loan_seq = Self::next_loan_seq(env, loan_id);
+            emit_event(env, 1, (Symbol::new(env, "prepay_closed"),),
+                (loan_id.clone(), false, fee, loan_seq),);
+        }
+        let quoted_amount = amount;
+        let amount = amount - fee;
 
         let old_repaid = loan.repaid;
         loan.repaid += amount;
@@ -1394,6 +1481,9 @@ impl LendingPoolContract {
         env.storage()
             .persistent()
             .remove(&DataKey::PayoffQuote(loan_id.clone()));
+        env.storage()
+            .persistent()
+            .remove(&PoolExtKey::PayoffQuoteFee(loan_id.clone()));
 
         let mut interest_paid = 0i128;
         if loan.repaid > loan.principal {
@@ -1425,8 +1515,16 @@ impl LendingPoolContract {
             (borrower.clone(), loan_id.clone(), amount, 0i128, loan_seq),);
         let loan_seq = Self::next_loan_seq(env, &loan_id);
         emit_event(env, 1, (symbol_short!("pay_quote"), symbol_short!("used")),
-            (loan_id.clone(), amount, loan_seq),);
+            (loan_id.clone(), quoted_amount, loan_seq),);
         Ok(())
+    }
+
+    /// The early-repayment fee locked into `loan_id`'s live payoff quote.
+    fn read_quote_fee(env: &Env, loan_id: &BytesN<32>) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&PoolExtKey::PayoffQuoteFee(loan_id.clone()))
+            .unwrap_or(0)
     }
 
     /// The configured grace period (in ledgers) after an installment's due date
@@ -3166,6 +3264,12 @@ impl LendingPoolContract {
         };
 
         Self::set_loan(env, &loan_id, &loan);
+        // The early-repayment fee schedule in force now is the one this loan
+        // keeps for life; later schedule changes only reach new loans.
+        env.storage().persistent().set(
+            &PoolExtKey::LoanEarlyFeeSchedule(loan_id.clone()),
+            &Self::read_early_fee_schedule(env),
+        );
         Self::append_loan_index(env, &loan_id);
         env.storage().persistent().set(
             &FeatureKey::LoanOriginTerms(loan_id.clone()),
@@ -4439,7 +4543,10 @@ impl LendingPoolContract {
     ///
     /// A payment that clears a loan while its schedule still has installments
     /// outstanding is an early prepayment, and the borrower additionally owes
-    /// `PREPAYMENT_PENALTY_BPS` of the repaid amount. The penalty is collected
+    /// the early-repayment fee: the rate for the loan's current age band (from
+    /// the schedule the loan was originated under) times its remaining
+    /// principal. A payment within the regular scheduled installment owes no
+    /// fee. The fee is collected
     /// on top of `amount` and forwarded straight to the treasury, so the
     /// borrower must hold the full debt plus the penalty. It is never booked as
     /// pool liquidity and never reduces principal, interest, or investor yield
@@ -4607,6 +4714,9 @@ impl LendingPoolContract {
         if let Some(q) = stored_quote {
             if env.ledger().sequence() > q.expires_ledger {
                 env.storage().persistent().remove(&quote_key);
+                env.storage()
+                    .persistent()
+                    .remove(&PoolExtKey::PayoffQuoteFee(loan_id.clone()));
             } else if amount == q.quoted_amount && q.quoted_amount > 0 {
                 quoted_payoff = true;
             }
@@ -4732,7 +4842,7 @@ impl LendingPoolContract {
         let is_early_close = amount == remaining && Self::is_early_closure(&env, &loan_id);
         let waived = is_early_close && Self::is_prepayment_penalty_waived(&config, &loan);
         let prepayment_penalty = if is_early_close && !waived {
-            Self::calculate_prepayment_penalty(amount)
+            Self::calculate_prepayment_penalty(&env, &loan_id, &loan, amount)
         } else {
             0i128
         };
@@ -5100,7 +5210,7 @@ impl LendingPoolContract {
         let is_early_close = clears_debt && Self::is_early_closure(&env, &loan_id);
         let waived = is_early_close && Self::is_prepayment_penalty_waived(&config, &loan);
         let prepayment_penalty = if is_early_close && !waived {
-            Self::calculate_prepayment_penalty(amount)
+            Self::calculate_prepayment_penalty(&env, &loan_id, &loan, amount)
         } else {
             0i128
         };
@@ -5119,6 +5229,7 @@ impl LendingPoolContract {
                 &borrower,
                 prepayment_penalty,
             );
+            Self::add_loan_prepay_penalty(&env, &loan_id, prepayment_penalty);
         }
         if is_early_close {
             let loan_seq = Self::next_loan_seq(&env, &loan_id);
@@ -5134,6 +5245,9 @@ impl LendingPoolContract {
         env.storage()
             .persistent()
             .remove(&DataKey::PayoffQuote(loan_id.clone()));
+        env.storage()
+            .persistent()
+            .remove(&PoolExtKey::PayoffQuoteFee(loan_id.clone()));
 
         if loan.outstanding_debt == 0 {
             loan.status = LoanStatus::Repaid;
@@ -5210,6 +5324,9 @@ impl LendingPoolContract {
             .ok_or(PoolError::PayoffQuoteNotFound)?;
         if env.ledger().sequence() > quote.expires_ledger {
             env.storage().persistent().remove(&key);
+            env.storage()
+                .persistent()
+                .remove(&PoolExtKey::PayoffQuoteFee(loan_id.clone()));
             return Err(PoolError::PayoffQuoteExpired);
         }
         if amount != quote.quoted_amount {
@@ -7705,8 +7822,60 @@ impl LendingPoolContract {
         Ok(Self::read_config(&env)?.prepay_waiver_ledgers)
     }
 
-    /// The standard early-prepayment penalty rate, in basis points of the
-    /// prepayment that closes a loan ahead of schedule.
+    /// Configure the declining early-repayment fee schedule. Admin-only.
+    ///
+    /// Each rate is in basis points of the remaining principal and applies by
+    /// the loan's age when it is paid off early: `year1_bps` under one year,
+    /// `year2_bps` from one year up to two, `year3_plus_bps` from two years on.
+    /// Rates may not rise with age and none may exceed 100%.
+    ///
+    /// The schedule is latched onto each loan when it is requested, so a
+    /// change here only reaches loans originated afterwards; loans already
+    /// originated keep the schedule they were issued under.
+    pub fn set_early_repayment_fee_schedule(
+        env: Env,
+        year1_bps: u32,
+        year2_bps: u32,
+        year3_plus_bps: u32,
+    ) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        if year1_bps > BPS_SCALE || year1_bps < year2_bps || year2_bps < year3_plus_bps {
+            return Err(PoolError::InvalidAmount);
+        }
+        env.storage().instance().set(
+            &PoolExtKey::EarlyRepayFeeSchedule,
+            &EarlyRepaymentFeeSchedule {
+                year1_bps,
+                year2_bps,
+                year3_plus_bps,
+            },
+        );
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        emit_event(&env, 1, (Symbol::new(&env, "early_fee_set"),),
+            (year1_bps, year2_bps, year3_plus_bps),);
+        Ok(())
+    }
+
+    /// The early-repayment fee schedule new loans are originated under.
+    pub fn get_early_repayment_fee_schedule(env: Env) -> EarlyRepaymentFeeSchedule {
+        Self::read_early_fee_schedule(&env)
+    }
+
+    /// The early-repayment fee schedule `loan_id` was originated under.
+    pub fn get_loan_early_repayment_fee_schedule(
+        env: Env,
+        loan_id: BytesN<32>,
+    ) -> Result<EarlyRepaymentFeeSchedule, PoolError> {
+        Self::read_loan(&env, &loan_id)?;
+        Ok(Self::read_loan_early_fee_schedule(&env, &loan_id))
+    }
+
+    /// The default early-prepayment rate, in basis points of the remaining
+    /// principal of a loan closed ahead of schedule, used for every age band
+    /// until a schedule is configured.
     pub fn get_prepayment_penalty_bps(env: Env) -> u32 {
         let _ = env;
         PREPAYMENT_PENALTY_BPS
@@ -8449,9 +8618,29 @@ impl LendingPoolContract {
         Self::accrue_interest(&env, &mut loan);
         Self::set_loan(&env, &loan_id, &loan);
 
+        // The quote is the all-in payoff: the debt plus the early-repayment
+        // fee for the loan's current age band, so what is quoted is exactly
+        // what is charged. A waived or already-final payoff carries no fee.
+        let is_early_close = Self::is_early_closure(&env, &loan_id)
+            && !Self::is_prepayment_penalty_waived(&config, &loan);
+        let early_fee = if is_early_close {
+            Self::calculate_prepayment_penalty(&env, &loan_id, &loan, loan.outstanding_debt)
+        } else {
+            0i128
+        };
+        if early_fee > 0 {
+            env.storage()
+                .persistent()
+                .set(&PoolExtKey::PayoffQuoteFee(loan_id.clone()), &early_fee);
+        } else {
+            env.storage()
+                .persistent()
+                .remove(&PoolExtKey::PayoffQuoteFee(loan_id.clone()));
+        }
+
         let now = env.ledger().sequence();
         let quote = PayoffQuote {
-            quoted_amount: loan.outstanding_debt,
+            quoted_amount: loan.outstanding_debt + early_fee,
             quoted_at_ledger: now,
             expires_ledger: now.saturating_add(config.payoff_quote_window_ledgers),
         };
@@ -8462,6 +8651,12 @@ impl LendingPoolContract {
         emit_event(&env, 1, (symbol_short!("pay_quote"),),
             (loan_id, quote.quoted_amount, quote.expires_ledger, loan_seq),);
         Ok(quote.quoted_amount)
+    }
+
+    /// The early-repayment fee included in `loan_id`'s live payoff quote, or
+    /// `0` when there is no quote or it carries no fee.
+    pub fn get_payoff_quote_fee(env: Env, loan_id: BytesN<32>) -> i128 {
+        Self::read_quote_fee(&env, &loan_id)
     }
 
     /// Return the stored payoff quote for `loan_id`, if any.

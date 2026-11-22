@@ -179,7 +179,9 @@ fn full_borrower_lifecycle_end_to_end() {
     // repaid amount and forwards it straight to the treasury. The penalty
     // never becomes pool liquidity — it arrives and leaves in the same
     // transaction.
-    let prepay_penalty = owed * 100 / 10_000;
+    // The fee is a share of the remaining principal, not of the interest
+    // that has accrued on top of it.
+    let prepay_penalty = 70_000 * USDC * 100 / 10_000;
     assert_eq!(p.pool.get_total_prepayment_penalties(), prepay_penalty);
 
     // Contractor keeps the full 70,000. Construction fund holds the 30,000

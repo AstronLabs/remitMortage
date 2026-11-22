@@ -396,6 +396,18 @@
         "version": 1
       }
     ],
+    "early_fee_set": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "year1_bps",
+          "year2_bps",
+          "year3_plus_bps"
+        ],
+        "version": 1
+      }
+    ],
     "emrg_inj": [
       {
         "topicArgs": [],
