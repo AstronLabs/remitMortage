@@ -154,7 +154,10 @@ Every event follows the naming convention in
 | lending-pool | `util_thresh_set` | topics[] data(value)[threshold_bps] v1 |
 | lending-pool | `withdraw` | topics[] data(tuple)[investor, amount, fee_amount, net_amount, utilization_bps] v1 |
 | lending-pool | `wl_add` | topics[] data(tuple)[contractor] v1<br>topics[] data(tuple)[address] v1 |
+| lending-pool | `wl_expiry` | topics[] data(tuple)[address, at] v1 |
+| lending-pool | `wl_renew` | topics[] data(tuple)[address, expires_at] v1 |
 | lending-pool | `wl_rm` | topics[] data(tuple)[contractor] v1<br>topics[] data(tuple)[address] v1 |
+| lending-pool | `wl_valid` | topics[] data(tuple)[validity_secs] v1 |
 | lending-pool | `y_comp` | topics[investor] data(tuple)[amount, deposited] v1 |
 | lending-pool | `y_mode` | topics[investor] data(value)[mode as u32] v1 |
 | milestone | `dispute/raised` | topics["raised"] data(tuple)[proposal_id, caller, deadline_ledger] |

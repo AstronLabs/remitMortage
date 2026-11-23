@@ -1421,6 +1421,28 @@
         "version": 1
       }
     ],
+    "wl_expiry": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "address",
+          "at"
+        ],
+        "version": 1
+      }
+    ],
+    "wl_renew": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "address",
+          "expires_at"
+        ],
+        "version": 1
+      }
+    ],
     "wl_rm": [
       {
         "topicArgs": [],
@@ -1435,6 +1457,16 @@
         "dataKind": "tuple",
         "data": [
           "address"
+        ],
+        "version": 1
+      }
+    ],
+    "wl_valid": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "validity_secs"
         ],
         "version": 1
       }

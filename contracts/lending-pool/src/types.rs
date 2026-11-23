@@ -793,6 +793,12 @@ pub enum PoolExtKey {
     MaxLtvBps,
     /// Price oracle contract that values loan collateral for the LTV check.
     PriceOracle,
+    /// Ledger timestamp (seconds) at which an address's permissioned-mode
+    /// whitelist entry lapses. Absent means the entry never expires.
+    WhitelistExpiry(Address),
+    /// Admin-configured default validity, in seconds, applied to new and
+    /// renewed whitelist entries. Absent or `0` means entries never expire.
+    DefaultWhitelistValidity,
 }
 
 /// Early-repayment fee rates, in basis points of the remaining principal, by

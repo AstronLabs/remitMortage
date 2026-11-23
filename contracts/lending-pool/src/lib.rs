@@ -99,6 +99,9 @@ mod test_principal_payment;
 #[cfg(test)]
 mod bench_accrual;
 
+#[cfg(test)]
+mod test_whitelist_expiry;
+
 pub use crate::errors::{BatchRepayError, LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
     BatchDisburseItem, BatchRepayItem, BorrowRateCurve, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot,
@@ -6393,7 +6396,7 @@ impl LendingPoolContract {
     /// protocol treasury address. The net amount is transferred to the investor.
     pub fn withdraw(env: Env, investor: Address, amount: i128) -> Result<(), PoolError> {
         Self::check_function_not_paused(&env, PauseGroup::Withdrawals)?;
-        Self::check_whitelist(&env, &investor)?;
+        Self::check_whitelist_for_withdrawal(&env, &investor)?;
         investor.require_auth();
         Self::non_reentrant(&env, || {
             if amount <= 0 {
@@ -9102,18 +9105,75 @@ impl LendingPoolContract {
     }
 
     /// Add an address to the permissioned-mode whitelist. Admin-only.
+    ///
+    /// The entry expires after the admin-configured default validity
+    /// (`set_default_whitelist_validity`). With no default validity set the
+    /// entry never expires. Re-adding an address restarts its validity period.
     pub fn add_to_whitelist(env: Env, address: Address) -> Result<(), PoolError> {
         let config = Self::read_config(&env)?;
         config.admin.require_auth();
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Whitelist(address.clone()), &true);
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-
+        let expires_at = Self::default_whitelist_expiry(&env);
+        Self::write_whitelist_entry(&env, &address, expires_at);
         emit_event(&env, 1, (symbol_short!("wl_add"),), (address,));
+
+        Ok(())
+    }
+
+    /// Add an address to the permissioned-mode whitelist with an explicit
+    /// expiry (ledger timestamp, in seconds). Admin-only.
+    ///
+    /// The entry counts as whitelisted for new deposits and loan requests
+    /// while the ledger timestamp is strictly before `expires_at`. An expiry
+    /// that is not in the future is rejected with `InvalidAmount`.
+    pub fn add_to_whitelist_until(
+        env: Env,
+        address: Address,
+        expires_at: u64,
+    ) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        if expires_at <= env.ledger().timestamp() {
+            return Err(PoolError::InvalidAmount);
+        }
+        Self::write_whitelist_entry(&env, &address, Some(expires_at));
+        emit_event(&env, 1, (symbol_short!("wl_add"),), (address,));
+
+        Ok(())
+    }
+
+    /// Renew a whitelist entry so it is valid again for new deposits.
+    /// Admin-only.
+    ///
+    /// `new_expiry` is the new expiry timestamp in seconds; `None` applies the
+    /// default validity from now (or clears the expiry when no default is
+    /// set). Works on entries that have already expired, so renewal restores
+    /// deposit access without any redeployment. Fails with `Unauthorized` if
+    /// the address is not on the whitelist at all, and with `InvalidAmount`
+    /// if an explicit expiry is not in the future.
+    pub fn renew_whitelist(
+        env: Env,
+        address: Address,
+        new_expiry: Option<u64>,
+    ) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        if !Self::whitelist_flag(&env, &address) {
+            return Err(PoolError::Unauthorized);
+        }
+        let expires_at = match new_expiry {
+            Some(at) => {
+                if at <= env.ledger().timestamp() {
+                    return Err(PoolError::InvalidAmount);
+                }
+                Some(at)
+            }
+            None => Self::default_whitelist_expiry(&env),
+        };
+        Self::write_whitelist_entry(&env, &address, expires_at);
+        emit_event(&env, 1, (symbol_short!("wl_renew"),), (address, expires_at));
 
         Ok(())
     }
@@ -9127,6 +9187,9 @@ impl LendingPoolContract {
             .persistent()
             .remove(&DataKey::Whitelist(address.clone()));
         env.storage()
+            .persistent()
+            .remove(&PoolExtKey::WhitelistExpiry(address.clone()));
+        env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
@@ -9135,12 +9198,46 @@ impl LendingPoolContract {
         Ok(())
     }
 
-    /// Returns whether `address` is on the permissioned-mode whitelist.
-    pub fn is_address_whitelisted(env: Env, address: Address) -> bool {
+    /// Set the default validity, in seconds, given to whitelist entries when
+    /// they are added or renewed without an explicit expiry. `0` (the
+    /// default) means such entries never expire. Only affects entries written
+    /// after the change. Admin-only.
+    pub fn set_default_whitelist_validity(env: Env, validity_secs: u64) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&PoolExtKey::DefaultWhitelistValidity, &validity_secs);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        emit_event(&env, 1, (symbol_short!("wl_valid"),), (validity_secs,));
+
+        Ok(())
+    }
+
+    /// Default whitelist validity in seconds; `0` means entries never expire.
+    pub fn get_default_whitelist_validity(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&PoolExtKey::DefaultWhitelistValidity)
+            .unwrap_or(0)
+    }
+
+    /// Expiry timestamp (seconds) of an address's whitelist entry. `None`
+    /// means the entry never expires, or the address is not whitelisted.
+    pub fn get_whitelist_expiry(env: Env, address: Address) -> Option<u64> {
         env.storage()
             .persistent()
-            .get::<DataKey, bool>(&DataKey::Whitelist(address))
-            .unwrap_or(false)
+            .get(&PoolExtKey::WhitelistExpiry(address))
+    }
+
+    /// Returns whether `address` is currently on the permissioned-mode
+    /// whitelist. An entry whose expiry has passed is not whitelisted.
+    pub fn is_address_whitelisted(env: Env, address: Address) -> bool {
+        Self::whitelist_active(&env, &address)
     }
 
     /// Returns whether permissioned mode is currently enabled.
@@ -9152,19 +9249,91 @@ impl LendingPoolContract {
             .unwrap_or(false)
     }
 
+    /// Whether an address has a whitelist entry, ignoring its expiry.
+    fn whitelist_flag(env: &Env, address: &Address) -> bool {
+        env.storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::Whitelist(address.clone()))
+            .unwrap_or(false)
+    }
+
+    /// Whether an address has a whitelist entry that has not expired.
+    fn whitelist_active(env: &Env, address: &Address) -> bool {
+        if !Self::whitelist_flag(env, address) {
+            return false;
+        }
+        match env
+            .storage()
+            .persistent()
+            .get::<PoolExtKey, u64>(&PoolExtKey::WhitelistExpiry(address.clone()))
+        {
+            Some(expires_at) => env.ledger().timestamp() < expires_at,
+            None => true,
+        }
+    }
+
+    /// Expiry for an entry written now: `now + default validity`, or `None`
+    /// (never expires) when no default validity is configured.
+    fn default_whitelist_expiry(env: &Env) -> Option<u64> {
+        let validity: u64 = env
+            .storage()
+            .instance()
+            .get(&PoolExtKey::DefaultWhitelistValidity)
+            .unwrap_or(0);
+        if validity == 0 {
+            None
+        } else {
+            Some(env.ledger().timestamp().saturating_add(validity))
+        }
+    }
+
+    /// Writes (or restarts) a whitelist entry and its expiry. `None` clears
+    /// any previous expiry so the entry never lapses.
+    fn write_whitelist_entry(env: &Env, address: &Address, expires_at: Option<u64>) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Whitelist(address.clone()), &true);
+        match expires_at {
+            Some(at) => {
+                env.storage()
+                    .persistent()
+                    .set(&PoolExtKey::WhitelistExpiry(address.clone()), &at);
+                emit_event(env, 1, (symbol_short!("wl_expiry"),), (address.clone(), at));
+            }
+            None => env
+                .storage()
+                .persistent()
+                .remove(&PoolExtKey::WhitelistExpiry(address.clone())),
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
     /// Internal helper: rejects the call if permissioned mode is on and the
-    /// caller is not on the whitelist.
+    /// caller is not on the whitelist, or their entry has expired. Used for
+    /// anything that brings new funds or new exposure into the pool.
     fn check_whitelist(env: &Env, caller: &Address) -> Result<(), PoolError> {
         let config = Self::read_config(env)?;
         if !config.permissioned_mode {
             return Ok(());
         }
-        let whitelisted = env
-            .storage()
-            .persistent()
-            .get::<DataKey, bool>(&DataKey::Whitelist(caller.clone()))
-            .unwrap_or(false);
-        if whitelisted {
+        if Self::whitelist_active(env, caller) {
+            Ok(())
+        } else {
+            Err(PoolError::Unauthorized)
+        }
+    }
+
+    /// Like `check_whitelist` but ignores expiry: an investor whose entry has
+    /// lapsed can still withdraw funds they already hold. Removing the entry
+    /// entirely still blocks the withdrawal.
+    fn check_whitelist_for_withdrawal(env: &Env, caller: &Address) -> Result<(), PoolError> {
+        let config = Self::read_config(env)?;
+        if !config.permissioned_mode {
+            return Ok(());
+        }
+        if Self::whitelist_flag(env, caller) {
             Ok(())
         } else {
             Err(PoolError::Unauthorized)
