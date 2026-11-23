@@ -105,6 +105,9 @@ mod test_whitelist_expiry;
 #[cfg(test)]
 mod test_term_caps;
 
+#[cfg(test)]
+mod test_admin_transfer;
+
 pub use crate::errors::{BatchRepayError, LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
     BatchDisburseItem, BatchRepayItem, BorrowRateCurve, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot,
@@ -176,6 +179,9 @@ const GRACE_PERIOD_LEDGERS: u32 = 120_960; // ~7 days (default grace period)
 const LATE_PENALTY_BPS: u32 = 50; // 50 bps = 0.5% (legacy flat late penalty)
 const DEFAULT_DAILY_PENALTY_BPS: u32 = 10; // 10 bps = 0.1% of the installment per overdue day
 const DEFAULT_DURATION_MONTHS: u32 = 12;
+/// How long a proposed admin has to accept before the proposal lapses (7 days),
+/// unless the admin configures another window.
+const DEFAULT_ADMIN_TRANSFER_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
 
 /// Most entries a single `repay_batch` call may carry. Each entry runs a full
 /// repayment (loan, schedule, tranche and token writes), so the cap keeps the
@@ -7516,39 +7522,130 @@ impl LendingPoolContract {
 
     // ── Admin Transfer ─────────────────────────────────────────────────
 
-    /// Propose a new admin address. The current admin initiates the transfer.
-    /// The pending admin must then call `accept_admin` to finalize.
+    /// Propose a new admin address. The current admin initiates the transfer;
+    /// the admin does not change until the proposed address calls
+    /// `accept_admin`.
+    ///
+    /// The proposal expires after the admin transfer window
+    /// (`set_admin_transfer_window`). Proposing again replaces any pending
+    /// proposal and restarts the window.
     pub fn propose_new_admin(env: Env, new_admin: Address) -> Result<(), PoolError> {
         let config = Self::read_config(&env)?;
         config.admin.require_auth();
+        let expires_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(Self::read_admin_transfer_window(&env));
         env.storage()
             .instance()
             .set(&DataKey::PendingAdmin, &new_admin);
         env.storage()
             .instance()
+            .set(&PoolExtKey::PendingAdminExpiry, &expires_at);
+        env.storage()
+            .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-        emit_event(&env, 1, (symbol_short!("prop_adm"),), (config.admin, new_admin));
+        emit_event(&env, 1, (symbol_short!("prop_adm"),), (config.admin, new_admin.clone()));
+        emit_event(&env, 1, (symbol_short!("adm_exp"),), (new_admin, expires_at));
         Ok(())
     }
 
     /// Accept the admin role. Callable only by the pending admin address
-    /// that was previously proposed via `propose_new_admin`.
+    /// that was previously proposed via `propose_new_admin`, and only before
+    /// the proposal expires. A missing, cancelled, replaced or expired
+    /// proposal fails with `NotPendingAdmin`.
     pub fn accept_admin(env: Env) -> Result<(), PoolError> {
-        let pending: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::PendingAdmin)
-            .ok_or(PoolError::NotPendingAdmin)?;
+        let pending = Self::live_pending_admin(&env).ok_or(PoolError::NotPendingAdmin)?;
         pending.require_auth();
         let mut config = Self::read_config(&env)?;
         config.admin = pending.clone();
         env.storage().instance().set(&DataKey::Config, &config);
-        env.storage().instance().remove(&DataKey::PendingAdmin);
+        Self::clear_pending_admin(&env);
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         emit_event(&env, 1, (symbol_short!("accept_pd"),), (pending,));
         Ok(())
+    }
+
+    /// Cancel the pending admin proposal. Current admin only. Fails with
+    /// `NotPendingAdmin` when nothing is pending.
+    pub fn cancel_admin_transfer(env: Env) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(PoolError::NotPendingAdmin)?;
+        Self::clear_pending_admin(&env);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        emit_event(&env, 1, (symbol_short!("adm_cncl"),), (config.admin, pending));
+        Ok(())
+    }
+
+    /// Set how long, in seconds, a proposed admin has to accept. Applies to
+    /// proposals made afterwards. Zero is rejected with `InvalidAmount`.
+    /// Admin-only.
+    pub fn set_admin_transfer_window(env: Env, window_secs: u64) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        if window_secs == 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+        env.storage()
+            .instance()
+            .set(&PoolExtKey::AdminTransferWindow, &window_secs);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        emit_event(&env, 1, (symbol_short!("adm_win"),), (window_secs,));
+        Ok(())
+    }
+
+    /// Seconds a proposed admin has to accept.
+    pub fn get_admin_transfer_window(env: Env) -> u64 {
+        Self::read_admin_transfer_window(&env)
+    }
+
+    /// The proposed admin, if a proposal is pending and has not expired.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        Self::live_pending_admin(&env)
+    }
+
+    /// Timestamp (seconds) at which the pending proposal expires, if one is
+    /// stored. May be in the past for an expired proposal.
+    pub fn get_pending_admin_expiry(env: Env) -> Option<u64> {
+        env.storage().instance().get(&PoolExtKey::PendingAdminExpiry)
+    }
+
+    fn read_admin_transfer_window(env: &Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&PoolExtKey::AdminTransferWindow)
+            .unwrap_or(DEFAULT_ADMIN_TRANSFER_WINDOW_SECS)
+    }
+
+    /// The pending admin, unless the proposal has expired.
+    fn live_pending_admin(env: &Env) -> Option<Address> {
+        let pending: Address = env.storage().instance().get(&DataKey::PendingAdmin)?;
+        let expires_at: u64 = env
+            .storage()
+            .instance()
+            .get(&PoolExtKey::PendingAdminExpiry)
+            .unwrap_or(0);
+        if env.ledger().timestamp() < expires_at {
+            Some(pending)
+        } else {
+            None
+        }
+    }
+
+    fn clear_pending_admin(env: &Env) {
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        env.storage().instance().remove(&PoolExtKey::PendingAdminExpiry);
     }
 
     // ── Risk-Tier Term Caps ──────────────────────────────────────────────

@@ -46,6 +46,9 @@ Every event follows the naming convention in
 | insurance-pool | `premium_recorded` | topics[] data(tuple)[from, amount] |
 | insurance-pool | `set_pool` | topics[] data(tuple)[lending_pool] |
 | lending-pool | `accept_pd` | topics[] data(tuple)[pending] v1 |
+| lending-pool | `adm_cncl` | topics[] data(tuple)[admin, pending] v1 |
+| lending-pool | `adm_exp` | topics[] data(tuple)[new_admin, expires_at] v1 |
+| lending-pool | `adm_win` | topics[] data(tuple)[window_secs] v1 |
 | lending-pool | `app_fee_collected` | topics[] data(tuple)[borrower, loan_id, application_fee, loan_seq] v1 |
 | lending-pool | `app_fee_refund` | topics[] data(tuple)[loan_id, borrower, fee, loan_seq] v1 |
 | lending-pool | `app_fee_retained` | topics[] data(tuple)[loan_id, treasury_address, fee, loan_seq] v1 |

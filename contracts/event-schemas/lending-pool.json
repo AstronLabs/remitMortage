@@ -26,6 +26,38 @@
         "version": 1
       }
     ],
+    "adm_cncl": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "admin",
+          "pending"
+        ],
+        "version": 1
+      }
+    ],
+    "adm_exp": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "new_admin",
+          "expires_at"
+        ],
+        "version": 1
+      }
+    ],
+    "adm_win": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "window_secs"
+        ],
+        "version": 1
+      }
+    ],
     "app_fee_collected": [
       {
         "topicArgs": [],

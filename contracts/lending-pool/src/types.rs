@@ -805,6 +805,12 @@ pub enum PoolExtKey {
     /// Term, in months, a loan was requested with. Absent means the default
     /// term. Latched at request time and never changed by a later tier change.
     LoanTermMonths(BytesN<32>),
+    /// Ledger timestamp (seconds) after which the pending admin proposal can
+    /// no longer be accepted. Present exactly when `PendingAdmin` is.
+    PendingAdminExpiry,
+    /// Admin-configured window, in seconds, a proposed admin has to accept.
+    /// Absent means `DEFAULT_ADMIN_TRANSFER_WINDOW_SECS`.
+    AdminTransferWindow,
 }
 
 /// Borrower risk tier, derived from the anchored verification score. Lower
