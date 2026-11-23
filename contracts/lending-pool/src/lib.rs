@@ -102,6 +102,9 @@ mod bench_accrual;
 #[cfg(test)]
 mod test_whitelist_expiry;
 
+#[cfg(test)]
+mod test_term_caps;
+
 pub use crate::errors::{BatchRepayError, LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
     BatchDisburseItem, BatchRepayItem, BorrowRateCurve, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot,
@@ -110,7 +113,7 @@ pub use crate::types::{
     LoanClosingStatement, LoanCollateralRecord, LoanIntroConfig, LoanOriginTerms, LoanPhase,
     LoanPortabilitySnapshot, LoanRecord, LoanStatus, LoanSummary, LoanSummaryPage, LockupTier,
     PauseGroup, PayoffQuote, PendingCapChange, PendingHaircutChange, PendingRateCurveChange,
-    PendingUpgradeRecord, PendingWindDown, PoolConfig, PoolExtKey, PoolHealth, ProofOfReserves,
+    PendingUpgradeRecord, PendingWindDown, PoolConfig, PoolExtKey, PoolHealth, ProofOfReserves, RiskTier,
     RepaymentAssetRecord, RepaymentSchedule, RestructureProposal, ScheduleView, Tranche, TrancheInfo, WindDownStatus,
     YieldMode,
 };
@@ -2143,6 +2146,44 @@ impl LendingPoolContract {
         }
     }
 
+    /// Map an anchored verification score to a risk tier. Same score bands as
+    /// `interest_rate_from_score`.
+    fn risk_tier_from_score(score: u32) -> RiskTier {
+        if score >= 80 {
+            RiskTier::Excellent
+        } else if score >= 60 {
+            RiskTier::Good
+        } else if score >= 40 {
+            RiskTier::Fair
+        } else {
+            RiskTier::High
+        }
+    }
+
+    /// The borrower's current risk tier. Without a configured registry, or
+    /// without a valid verification, a borrower is `High`.
+    fn resolve_risk_tier(env: &Env, borrower: &Address) -> RiskTier {
+        Self::read_verification_registry(env)
+            .and_then(|registry| Self::try_get_verification_score(env, &registry, borrower))
+            .map(Self::risk_tier_from_score)
+            .unwrap_or(RiskTier::High)
+    }
+
+    fn read_max_term_months(env: &Env, tier: RiskTier) -> u32 {
+        env.storage()
+            .instance()
+            .get(&PoolExtKey::MaxTermMonths(tier))
+            .unwrap_or(0)
+    }
+
+    /// Term a loan was requested with; the default term when none was latched.
+    fn read_loan_term(env: &Env, loan_id: &BytesN<32>) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&PoolExtKey::LoanTermMonths(loan_id.clone()))
+            .unwrap_or(DEFAULT_DURATION_MONTHS)
+    }
+
     /// Cross-contract call to `<registry>.get_score(borrower)`, mirroring the
     /// typed `VerificationRegistryContractClient::try_get_score` call but via
     /// raw `env.try_invoke_contract` — see the crate-dependency note above
@@ -3125,7 +3166,26 @@ impl LendingPoolContract {
         Self::check_function_not_paused(&env, PauseGroup::LoanRequests)?;
         Self::check_whitelist(&env, &borrower)?;
         borrower.require_auth();
-        Self::do_request_loan(&env, borrower, loan_id, principal, None)
+        Self::do_request_loan(&env, borrower, loan_id, principal, None, DEFAULT_DURATION_MONTHS)
+    }
+
+    /// Borrower requests a loan with an explicit term in months.
+    ///
+    /// The term must not exceed the admin-set cap for the borrower's current
+    /// risk tier (see `get_borrower_max_loan_term`), otherwise the request is
+    /// rejected with `LoanTermExceedsCap`. The term is latched on the loan:
+    /// a later tier change never alters it. A term of zero is `InvalidAmount`.
+    pub fn request_loan_with_term(
+        env: Env,
+        borrower: Address,
+        loan_id: BytesN<32>,
+        principal: i128,
+        term_months: u32,
+    ) -> Result<(), PoolError> {
+        Self::check_function_not_paused(&env, PauseGroup::LoanRequests)?;
+        Self::check_whitelist(&env, &borrower)?;
+        borrower.require_auth();
+        Self::do_request_loan(&env, borrower, loan_id, principal, None, term_months)
     }
 
     pub fn request_loan_with_origin(
@@ -3138,7 +3198,7 @@ impl LendingPoolContract {
         Self::check_function_not_paused(&env, PauseGroup::LoanRequests)?;
         Self::check_whitelist(&env, &borrower)?;
         borrower.require_auth();
-        Self::do_request_loan(&env, borrower, loan_id, principal, Some(escrow_origin))
+        Self::do_request_loan(&env, borrower, loan_id, principal, Some(escrow_origin), DEFAULT_DURATION_MONTHS)
     }
 
     /// Borrower requests a loan and optionally attaches a 32-byte SHA-256 hash
@@ -3161,7 +3221,7 @@ impl LendingPoolContract {
                 return Err(PoolError::InvalidAmount);
             }
         }
-        Self::do_request_loan(&env, borrower, loan_id.clone(), principal, None)?;
+        Self::do_request_loan(&env, borrower, loan_id.clone(), principal, None, DEFAULT_DURATION_MONTHS)?;
         if let Some(hash) = note_hash {
             env.storage()
                 .persistent()
@@ -3221,10 +3281,18 @@ impl LendingPoolContract {
         loan_id: BytesN<32>,
         principal: i128,
         escrow_origin: Option<Address>,
+        term_months: u32,
     ) -> Result<(), PoolError> {
         Self::check_utilization_not_auto_paused(env)?;
-        if principal <= 0 {
+        if principal <= 0 || term_months == 0 {
             return Err(PoolError::InvalidAmount);
+        }
+
+        // The term may not exceed the cap for the borrower's current tier.
+        // `0` means the tier is uncapped.
+        let term_cap = Self::read_max_term_months(env, Self::resolve_risk_tier(env, &borrower));
+        if term_cap != 0 && term_months > term_cap {
+            return Err(PoolError::LoanTermExceedsCap);
         }
 
         // Ensure loan ID doesn't already exist.
@@ -3286,6 +3354,12 @@ impl LendingPoolContract {
         };
 
         Self::set_loan(env, &loan_id, &loan);
+        // Latch a non-default term; the default needs no storage.
+        if term_months != DEFAULT_DURATION_MONTHS {
+            env.storage()
+                .persistent()
+                .set(&PoolExtKey::LoanTermMonths(loan_id.clone()), &term_months);
+        }
         // The early-repayment fee schedule in force now is the one this loan
         // keeps for life; later schedule changes only reach new loans.
         env.storage().persistent().set(
@@ -3364,8 +3438,9 @@ impl LendingPoolContract {
 
         // The introductory period may not exceed the configured maximum or
         // the loan's own duration.
+        let duration_months = Self::read_loan_term(&env, &loan_id);
         if interest_only_months
-            > Self::read_max_interest_only_months(&env).min(DEFAULT_DURATION_MONTHS)
+            > Self::read_max_interest_only_months(&env).min(duration_months)
         {
             return Err(PoolError::InvalidAmount);
         }
@@ -3388,7 +3463,6 @@ impl LendingPoolContract {
         // Calculate simple interest and distribute over default duration.
         let interest = (loan.principal * loan.interest_rate_bps as i128) / 10_000;
         let total_owed = loan.principal + interest;
-        let duration_months = DEFAULT_DURATION_MONTHS;
         let next_due = env.ledger().sequence() + LEDGERS_PER_MONTH;
 
         let monthly_amount = if interest_only_months > 0 {
@@ -4655,7 +4729,7 @@ impl LendingPoolContract {
 
         // Cannot refund more than what has been disbursed.
         if amount > loan.disbursed {
-            return Err(PoolError::RefundExceedsDisbursed);
+            return Err(PoolError::InvalidAmount);
         }
 
         // Reverse the disbursement.
@@ -7475,6 +7549,48 @@ impl LendingPoolContract {
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         emit_event(&env, 1, (symbol_short!("accept_pd"),), (pending,));
         Ok(())
+    }
+
+    // ── Risk-Tier Term Caps ──────────────────────────────────────────────
+
+    /// Set the maximum loan term, in months, for a risk tier. `0` removes the
+    /// cap. Admin-only. Applies to new requests only; existing loans keep the
+    /// term they were requested with.
+    pub fn set_max_loan_term(env: Env, tier: RiskTier, max_months: u32) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&PoolExtKey::MaxTermMonths(tier), &max_months);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        emit_event(&env, 1, (symbol_short!("term_cap"),), (tier, max_months));
+        Ok(())
+    }
+
+    /// Maximum loan term in months for a risk tier; `0` means no cap.
+    pub fn get_max_loan_term(env: Env, tier: RiskTier) -> u32 {
+        Self::read_max_term_months(&env, tier)
+    }
+
+    /// The borrower's current risk tier, as used for term caps.
+    pub fn get_borrower_risk_tier(env: Env, borrower: Address) -> RiskTier {
+        Self::resolve_risk_tier(&env, &borrower)
+    }
+
+    /// Maximum loan term in months that applies to `borrower` right now
+    /// (`0` means no cap), so a frontend can limit its term selector.
+    pub fn get_borrower_max_loan_term(env: Env, borrower: Address) -> u32 {
+        Self::read_max_term_months(&env, Self::resolve_risk_tier(&env, &borrower))
+    }
+
+    /// Term in months the loan was requested with.
+    pub fn get_loan_term(env: Env, loan_id: BytesN<32>) -> Result<u32, PoolError> {
+        let _ = Self::read_loan(&env, &loan_id)?;
+        Ok(Self::read_loan_term(&env, &loan_id))
     }
 
     // ── Verification Registry ────────────────────────────────────────────

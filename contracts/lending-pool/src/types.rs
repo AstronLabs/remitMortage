@@ -799,6 +799,28 @@ pub enum PoolExtKey {
     /// Admin-configured default validity, in seconds, applied to new and
     /// renewed whitelist entries. Absent or `0` means entries never expire.
     DefaultWhitelistValidity,
+    /// Admin-set maximum loan term, in months, for a risk tier. Absent or `0`
+    /// means the tier has no cap.
+    MaxTermMonths(RiskTier),
+    /// Term, in months, a loan was requested with. Absent means the default
+    /// term. Latched at request time and never changed by a later tier change.
+    LoanTermMonths(BytesN<32>),
+}
+
+/// Borrower risk tier, derived from the anchored verification score. Lower
+/// scores are riskier; unverified borrowers are `High`.
+#[contracttype]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
+pub enum RiskTier {
+    /// Score of 80 or more.
+    Excellent = 0,
+    /// Score of 60 to 79.
+    Good = 1,
+    /// Score of 40 to 59.
+    Fair = 2,
+    /// Score below 40, or no usable verification.
+    High = 3,
 }
 
 /// Early-repayment fee rates, in basis points of the remaining principal, by

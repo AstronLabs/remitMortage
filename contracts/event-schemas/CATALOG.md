@@ -146,6 +146,7 @@ Every event follows the naming convention in
 | lending-pool | `set_rllw` | topics[] data(value)[window] v1 |
 | lending-pool | `set_vreg` | topics[] data(tuple)[registry] v1 |
 | lending-pool | `shr_cap` | topics[] data(tuple)[max_bps] v1 |
+| lending-pool | `term_cap` | topics[] data(tuple)[tier, max_months] v1 |
 | lending-pool | `upg_prop` | topics[] data(tuple)[execute_after] v1 |
 | lending-pool | `upgrade` | topics[] data(tuple)[new_wasm_hash, ver + 1] v1 |
 | lending-pool | `util_auto_pause` | topics[] data(tuple)[util, threshold] v1 |

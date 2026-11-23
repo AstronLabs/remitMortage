@@ -8,7 +8,7 @@ use soroban_sdk::contracterror;
 #[repr(u32)]
 pub enum PoolError {
     // Soroban caps a contract error enum at 50 variants. Discriminants 11, 15,
-    // 18, 19 and 27-31 belonged to variants nothing returned and are retired;
+    // 18, 19, 21 and 27-31 belonged to variants nothing returned and are retired;
     // don't reuse them.
     /// Contract has already been initialized.
     AlreadyInitialized = 1,
@@ -44,8 +44,6 @@ pub enum PoolError {
     /// outright, never partially applied. (The error enum is at Soroban's
     /// 50-variant ceiling, so both daily limits share this code.)
     DailyBorrowLimitExceeded = 20,
-    /// Refund amount exceeds the amount disbursed for the loan.
-    RefundExceedsDisbursed = 21,
     /// Disbursement recipient is not a whitelisted contractor.
     UnauthorizedContractor = 22,
     /// Refinancing requires at least 3 successful payments.
@@ -129,6 +127,9 @@ pub enum PoolError {
     /// Soroban's 50-variant ceiling, so both per-investor limits share this
     /// code.)
     InvestorCapExceeded = 66,
+    /// The requested loan term is longer than the admin-set maximum for the
+    /// borrower's risk tier.
+    LoanTermExceedsCap = 67,
 }
 
 #[contracterror]

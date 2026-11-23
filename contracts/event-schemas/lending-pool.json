@@ -1319,6 +1319,17 @@
         "version": 1
       }
     ],
+    "term_cap": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "tier",
+          "max_months"
+        ],
+        "version": 1
+      }
+    ],
     "upg_prop": [
       {
         "topicArgs": [],
