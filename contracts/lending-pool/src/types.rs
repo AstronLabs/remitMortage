@@ -811,6 +811,13 @@ pub enum PoolExtKey {
     /// Admin-configured window, in seconds, a proposed admin has to accept.
     /// Absent means `DEFAULT_ADMIN_TRANSFER_WINDOW_SECS`.
     AdminTransferWindow,
+    /// Admin-set cooldown, in seconds, a borrower must wait after a rejected
+    /// or cancelled loan request before requesting again. Absent or `0`
+    /// disables the cooldown.
+    LoanRequestCooldown,
+    /// Ledger timestamp (seconds) of a borrower's most recent rejected or
+    /// cancelled loan request. Cleared by `clear_loan_request_cooldown`.
+    LastRequestEndedAt(Address),
 }
 
 /// Borrower risk tier, derived from the anchored verification score. Lower

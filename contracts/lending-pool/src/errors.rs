@@ -8,7 +8,7 @@ use soroban_sdk::contracterror;
 #[repr(u32)]
 pub enum PoolError {
     // Soroban caps a contract error enum at 50 variants. Discriminants 11, 15,
-    // 18, 19, 21 and 27-31 belonged to variants nothing returned and are retired;
+    // 18, 19, 21, 42 and 27-31 belonged to variants nothing returned and are retired;
     // don't reuse them.
     /// Contract has already been initialized.
     AlreadyInitialized = 1,
@@ -75,8 +75,6 @@ pub enum PoolError {
     /// origination. (The error enum is at Soroban's 50-variant ceiling, so
     /// both share this code.)
     CollateralRatioBreached = 41,
-    /// No collateral available for release.
-    NoCollateralToRelease = 42,
     /// Invalid collateral ratio configuration, or the price oracle could not
     /// value the collateral for the loan-to-value check at origination: it is
     /// not configured, has no price, or its price is stale. (Shares a code
@@ -130,6 +128,10 @@ pub enum PoolError {
     /// The requested loan term is longer than the admin-set maximum for the
     /// borrower's risk tier.
     LoanTermExceedsCap = 67,
+    /// The borrower's last loan request was rejected or cancelled, and the
+    /// admin-set cooldown has not elapsed. The end of the cooldown is
+    /// available from `get_loan_request_cooldown_end`.
+    LoanRequestCooldownActive = 68,
 }
 
 #[contracterror]

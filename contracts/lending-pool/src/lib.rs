@@ -108,6 +108,9 @@ mod test_term_caps;
 #[cfg(test)]
 mod test_admin_transfer;
 
+#[cfg(test)]
+mod test_request_cooldown;
+
 pub use crate::errors::{BatchRepayError, LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
     BatchDisburseItem, BatchRepayItem, BorrowRateCurve, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot,
@@ -3294,6 +3297,12 @@ impl LendingPoolContract {
             return Err(PoolError::InvalidAmount);
         }
 
+        // A borrower whose last request was rejected or cancelled must wait
+        // out the cooldown before asking again.
+        if Self::loan_request_cooldown_end(env, &borrower).is_some() {
+            return Err(PoolError::LoanRequestCooldownActive);
+        }
+
         // The term may not exceed the cap for the borrower's current tier.
         // `0` means the tier is uncapped.
         let term_cap = Self::read_max_term_months(env, Self::resolve_risk_tier(env, &borrower));
@@ -3697,6 +3706,7 @@ impl LendingPoolContract {
 
         loan.status = LoanStatus::Rejected;
         Self::set_loan(&env, &loan_id, &loan);
+        Self::record_request_ended(&env, &loan.borrower);
 
         // A rejection frees the borrower's slot, exactly as a borrower-initiated
         // cancellation does, so a turn-down never costs them an application slot.
@@ -3747,6 +3757,7 @@ impl LendingPoolContract {
 
         loan.status = LoanStatus::Cancelled;
         Self::set_loan(&env, &loan_id, &loan);
+        Self::record_request_ended(&env, &loan.borrower);
 
         // Cancelling a still-pending request frees the borrower's slot.
         Self::release_borrower_loan_slot(&env, &loan.borrower);
@@ -5846,7 +5857,7 @@ impl LendingPoolContract {
             Self::compute_collateral_release(env, &loan, &collateral);
 
         if releasable <= 0 {
-            return Err(PoolError::NoCollateralToRelease);
+            return Err(PoolError::CollateralRatioBreached);
         }
 
         let remaining_principal = loan
@@ -7646,6 +7657,91 @@ impl LendingPoolContract {
     fn clear_pending_admin(env: &Env) {
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.storage().instance().remove(&PoolExtKey::PendingAdminExpiry);
+    }
+
+    // ── Loan Request Cooldown ────────────────────────────────────────────
+
+    /// Set the cooldown, in seconds, a borrower must wait after a rejected or
+    /// cancelled loan request before submitting another. `0` disables it.
+    /// Admin-only. Measured from the recorded time of the last rejection or
+    /// cancellation, so a change applies to existing records too.
+    pub fn set_loan_request_cooldown(env: Env, cooldown_secs: u64) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&PoolExtKey::LoanRequestCooldown, &cooldown_secs);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        emit_event(&env, 1, (symbol_short!("cd_set"),), (cooldown_secs,));
+        Ok(())
+    }
+
+    /// The configured loan request cooldown in seconds; `0` means disabled.
+    pub fn get_loan_request_cooldown(env: Env) -> u64 {
+        Self::read_loan_request_cooldown(&env)
+    }
+
+    /// Timestamp (seconds) at which the borrower's cooldown ends, or `None`
+    /// when no cooldown is active. A request made before this time fails with
+    /// `LoanRequestCooldownActive`; Soroban errors carry no payload, so this
+    /// getter is how a client learns when the cooldown ends.
+    pub fn get_loan_request_cooldown_end(env: Env, borrower: Address) -> Option<u64> {
+        Self::loan_request_cooldown_end(&env, &borrower)
+    }
+
+    /// Clear a borrower's cooldown so they can request again immediately.
+    /// Admin-only. A no-op when the borrower has no recorded rejection.
+    pub fn clear_loan_request_cooldown(env: Env, borrower: Address) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .persistent()
+            .remove(&PoolExtKey::LastRequestEndedAt(borrower.clone()));
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        emit_event(&env, 1, (symbol_short!("cd_clear"),), (config.admin, borrower));
+        Ok(())
+    }
+
+    fn read_loan_request_cooldown(env: &Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&PoolExtKey::LoanRequestCooldown)
+            .unwrap_or(0)
+    }
+
+    /// Records now as the time the borrower's last request was rejected or
+    /// cancelled.
+    fn record_request_ended(env: &Env, borrower: &Address) {
+        env.storage().persistent().set(
+            &PoolExtKey::LastRequestEndedAt(borrower.clone()),
+            &env.ledger().timestamp(),
+        );
+    }
+
+    /// End of the borrower's cooldown if it is still running.
+    fn loan_request_cooldown_end(env: &Env, borrower: &Address) -> Option<u64> {
+        let cooldown = Self::read_loan_request_cooldown(env);
+        if cooldown == 0 {
+            return None;
+        }
+        let ended_at: u64 = env
+            .storage()
+            .persistent()
+            .get(&PoolExtKey::LastRequestEndedAt(borrower.clone()))?;
+        let end = ended_at.saturating_add(cooldown);
+        if env.ledger().timestamp() < end {
+            Some(end)
+        } else {
+            None
+        }
     }
 
     // ── Risk-Tier Term Caps ──────────────────────────────────────────────

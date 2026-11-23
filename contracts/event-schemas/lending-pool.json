@@ -282,6 +282,27 @@
         "version": 1
       }
     ],
+    "cd_clear": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "admin",
+          "borrower"
+        ],
+        "version": 1
+      }
+    ],
+    "cd_set": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "cooldown_secs"
+        ],
+        "version": 1
+      }
+    ],
     "collateral_released": [
       {
         "topicArgs": [

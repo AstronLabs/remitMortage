@@ -115,7 +115,6 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 38 | `RestructureProposalExists` | A restructure proposal already exists for this loan. |
 | 40 | `DepositBelowMinimum` | Deposit is below the pool's configured minimum deposit amount. |
 | 41 | `CollateralRatioBreached` | Collateral release would breach the minimum collateralization ratio, or a loan's principal exceeds the pool's maximum loan-to-value ratio at origination. (The error enum is at Soroban's 50-variant ceiling, so both share this code.) |
-| 42 | `NoCollateralToRelease` | No collateral available for release. |
 | 44 | `InvalidCollateralRatio` | Invalid collateral ratio configuration, or the price oracle could not value the collateral for the loan-to-value check at origination: it is not configured, has no price, or its price is stale. (Shares a code for the same reason as `CollateralRatioBreached`.) |
 | 45 | `FeeTooHigh` | A fee (origination, application or protocol fee switch) exceeds its ceiling. |
 | 46 | `BorrowerLoanCapExceeded` | Borrower already holds the maximum number of active loans permitted by `max_active_loans_per_borrower`, or the loan would push their aggregate outstanding principal past the configured exposure cap. (The error enum is at Soroban's 50-variant ceiling, so both limits share this code.) |
@@ -136,6 +135,7 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 65 | `TrancheCapExceeded` | Deposit would push the tranche's total past its admin-set cap. |
 | 66 | `InvestorCapExceeded` | Deposit would push the investor's position past the admin-set per-investor cap, or push their share of the tranche above the admin-set maximum per-investor tranche share. (The error enum is at Soroban's 50-variant ceiling, so both per-investor limits share this code.) |
 | 67 | `LoanTermExceedsCap` | The requested loan term is longer than the admin-set maximum for the borrower's risk tier. |
+| 68 | `LoanRequestCooldownActive` | The borrower's last loan request was rejected or cancelled, and the admin-set cooldown has not elapsed. The end of the cooldown is available from `get_loan_request_cooldown_end`. |
 
 ## lending-pool (`LoanAssumptionError`)
 

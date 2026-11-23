@@ -61,6 +61,8 @@ Every event follows the naming convention in
 | lending-pool | `cap_canc/investor` | topics["investor"] data(tuple)[] v1 |
 | lending-pool | `cap_prop` | topics[scope] data(tuple)[cap, execute_after] v1 |
 | lending-pool | `cap_set` | topics[scope] data(tuple)[old, cap] v1 |
+| lending-pool | `cd_clear` | topics[] data(tuple)[admin, borrower] v1 |
+| lending-pool | `cd_set` | topics[] data(tuple)[cooldown_secs] v1 |
 | lending-pool | `collateral_released` | topics[loan_id] data(tuple)[borrower, releasable, remaining_collateral, loan_seq] v1 |
 | lending-pool | `collateral_topped_up` | topics[loan_id] data(tuple)[from, amount, remaining_collateral, ratio_bps, loan_seq] v1 |
 | lending-pool | `credit_drawn` | topics[] data(tuple)[borrower, amount, drawn_balance] v1 |
