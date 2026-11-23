@@ -793,6 +793,47 @@ pub enum PoolExtKey {
     MaxLtvBps,
     /// Price oracle contract that values loan collateral for the LTV check.
     PriceOracle,
+    /// Ledger timestamp (seconds) at which an address's permissioned-mode
+    /// whitelist entry lapses. Absent means the entry never expires.
+    WhitelistExpiry(Address),
+    /// Admin-configured default validity, in seconds, applied to new and
+    /// renewed whitelist entries. Absent or `0` means entries never expire.
+    DefaultWhitelistValidity,
+    /// Admin-set maximum loan term, in months, for a risk tier. Absent or `0`
+    /// means the tier has no cap.
+    MaxTermMonths(RiskTier),
+    /// Term, in months, a loan was requested with. Absent means the default
+    /// term. Latched at request time and never changed by a later tier change.
+    LoanTermMonths(BytesN<32>),
+    /// Ledger timestamp (seconds) after which the pending admin proposal can
+    /// no longer be accepted. Present exactly when `PendingAdmin` is.
+    PendingAdminExpiry,
+    /// Admin-configured window, in seconds, a proposed admin has to accept.
+    /// Absent means `DEFAULT_ADMIN_TRANSFER_WINDOW_SECS`.
+    AdminTransferWindow,
+    /// Admin-set cooldown, in seconds, a borrower must wait after a rejected
+    /// or cancelled loan request before requesting again. Absent or `0`
+    /// disables the cooldown.
+    LoanRequestCooldown,
+    /// Ledger timestamp (seconds) of a borrower's most recent rejected or
+    /// cancelled loan request. Cleared by `clear_loan_request_cooldown`.
+    LastRequestEndedAt(Address),
+}
+
+/// Borrower risk tier, derived from the anchored verification score. Lower
+/// scores are riskier; unverified borrowers are `High`.
+#[contracttype]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
+pub enum RiskTier {
+    /// Score of 80 or more.
+    Excellent = 0,
+    /// Score of 60 to 79.
+    Good = 1,
+    /// Score of 40 to 59.
+    Fair = 2,
+    /// Score below 40, or no usable verification.
+    High = 3,
 }
 
 /// Early-repayment fee rates, in basis points of the remaining principal, by

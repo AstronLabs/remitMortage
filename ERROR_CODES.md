@@ -101,7 +101,6 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 16 | `TimelockActive` | A timelocked change (upgrade, haircut, deposit cap, ...) was proposed but its delay has not elapsed yet. |
 | 17 | `TrancheMismatch` | Investor cannot change tranche after the initial deposit. |
 | 20 | `DailyBorrowLimitExceeded` | The pool-wide daily borrow limit has been exceeded, or (from `repay` and `payoff_with_quote`) the repayment would push the borrower past the admin-set per-borrower daily repayment cap. The repayment is rejected outright, never partially applied. (The error enum is at Soroban's 50-variant ceiling, so both daily limits share this code.) |
-| 21 | `RefundExceedsDisbursed` | Refund amount exceeds the amount disbursed for the loan. |
 | 22 | `UnauthorizedContractor` | Disbursement recipient is not a whitelisted contractor. |
 | 23 | `InsufficientPaymentHistory` | Refinancing requires at least 3 successful payments. |
 | 24 | `InterestRateTooLow` | Interest rate for refinancing is below the allowed floor. |
@@ -115,9 +114,8 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 37 | `LoanNotActive` | Loan must be in Approved state for this operation. |
 | 38 | `RestructureProposalExists` | A restructure proposal already exists for this loan. |
 | 40 | `DepositBelowMinimum` | Deposit is below the pool's configured minimum deposit amount. |
-| 41 | `CollateralRatioBreached` | Collateral release would breach the minimum collateralization ratio. |
-| 42 | `NoCollateralToRelease` | No collateral available for release. |
-| 44 | `InvalidCollateralRatio` | Invalid collateral ratio configuration. |
+| 41 | `CollateralRatioBreached` | Collateral release would breach the minimum collateralization ratio, or a loan's principal exceeds the pool's maximum loan-to-value ratio at origination. (The error enum is at Soroban's 50-variant ceiling, so both share this code.) |
+| 44 | `InvalidCollateralRatio` | Invalid collateral ratio configuration, or the price oracle could not value the collateral for the loan-to-value check at origination: it is not configured, has no price, or its price is stale. (Shares a code for the same reason as `CollateralRatioBreached`.) |
 | 45 | `FeeTooHigh` | A fee (origination, application or protocol fee switch) exceeds its ceiling. |
 | 46 | `BorrowerLoanCapExceeded` | Borrower already holds the maximum number of active loans permitted by `max_active_loans_per_borrower`, or the loan would push their aggregate outstanding principal past the configured exposure cap. (The error enum is at Soroban's 50-variant ceiling, so both limits share this code.) |
 | 47 | `RefinanceCooldownActive` | Refinancing request was submitted before the cooldown window elapsed. |
@@ -136,6 +134,8 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 64 | `ExtensionCapExceeded` | Loan extension exceeds the permitted count or term. |
 | 65 | `TrancheCapExceeded` | Deposit would push the tranche's total past its admin-set cap. |
 | 66 | `InvestorCapExceeded` | Deposit would push the investor's position past the admin-set per-investor cap, or push their share of the tranche above the admin-set maximum per-investor tranche share. (The error enum is at Soroban's 50-variant ceiling, so both per-investor limits share this code.) |
+| 67 | `LoanTermExceedsCap` | The requested loan term is longer than the admin-set maximum for the borrower's risk tier. |
+| 68 | `LoanRequestCooldownActive` | The borrower's last loan request was rejected or cancelled, and the admin-set cooldown has not elapsed. The end of the cooldown is available from `get_loan_request_cooldown_end`. |
 
 ## lending-pool (`LoanAssumptionError`)
 
@@ -150,6 +150,21 @@ Auto-generated from `contracts/*/src/errors.rs` by `scripts/check_error_codes_sy
 | 7 | `AssumptionAlreadyRequested` |  |
 | 8 | `AssumptionFeeCapExceeded` | The requested loan assumption fee is above the hard on-chain cap. |
 | 9 | `NotInitialized` | The pool has not been initialized. |
+
+## lending-pool (`BatchRepayError`)
+
+| Code | Variant | Description |
+|------|---------|-------------|
+| 1 | `NotInitialized` | The pool has not been initialized. |
+| 2 | `ContractPaused` | Repayments are paused. |
+| 3 | `EmptyBatch` | The batch has no entries. |
+| 4 | `BatchTooLarge` | The batch has more entries than `MAX_REPAY_BATCH_SIZE`. |
+| 5 | `DuplicateLoan` | The same loan id appears more than once in the batch. |
+| 6 | `InvalidAmount` | An entry's amount is not positive. |
+| 7 | `LoanNotFound` | An entry names a loan that does not exist. |
+| 8 | `InvalidLoanState` | An entry names a loan that is not active. |
+| 9 | `OverPayment` | An entry pays more than the loan owes. |
+| 10 | `EntryRejected` | An entry was refused for another reason, such as a late-payment penalty it does not cover or the daily repayment cap. |
 
 ## lending-pool (`RateAdjustmentError`)
 

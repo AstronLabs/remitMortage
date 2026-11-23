@@ -99,6 +99,18 @@ mod test_principal_payment;
 #[cfg(test)]
 mod bench_accrual;
 
+#[cfg(test)]
+mod test_whitelist_expiry;
+
+#[cfg(test)]
+mod test_term_caps;
+
+#[cfg(test)]
+mod test_admin_transfer;
+
+#[cfg(test)]
+mod test_request_cooldown;
+
 pub use crate::errors::{BatchRepayError, LoanAssumptionError, PoolError, RateAdjustmentError};
 pub use crate::types::{
     BatchDisburseItem, BatchRepayItem, BorrowRateCurve, CreditLine, DailyRepaymentWindow, DataKey, DepositGraceLot,
@@ -107,7 +119,7 @@ pub use crate::types::{
     LoanClosingStatement, LoanCollateralRecord, LoanIntroConfig, LoanOriginTerms, LoanPhase,
     LoanPortabilitySnapshot, LoanRecord, LoanStatus, LoanSummary, LoanSummaryPage, LockupTier,
     PauseGroup, PayoffQuote, PendingCapChange, PendingHaircutChange, PendingRateCurveChange,
-    PendingUpgradeRecord, PendingWindDown, PoolConfig, PoolExtKey, PoolHealth, ProofOfReserves,
+    PendingUpgradeRecord, PendingWindDown, PoolConfig, PoolExtKey, PoolHealth, ProofOfReserves, RiskTier,
     RepaymentAssetRecord, RepaymentSchedule, RestructureProposal, ScheduleView, Tranche, TrancheInfo, WindDownStatus,
     YieldMode,
 };
@@ -170,6 +182,9 @@ const GRACE_PERIOD_LEDGERS: u32 = 120_960; // ~7 days (default grace period)
 const LATE_PENALTY_BPS: u32 = 50; // 50 bps = 0.5% (legacy flat late penalty)
 const DEFAULT_DAILY_PENALTY_BPS: u32 = 10; // 10 bps = 0.1% of the installment per overdue day
 const DEFAULT_DURATION_MONTHS: u32 = 12;
+/// How long a proposed admin has to accept before the proposal lapses (7 days),
+/// unless the admin configures another window.
+const DEFAULT_ADMIN_TRANSFER_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
 
 /// Most entries a single `repay_batch` call may carry. Each entry runs a full
 /// repayment (loan, schedule, tranche and token writes), so the cap keeps the
@@ -2140,6 +2155,44 @@ impl LendingPoolContract {
         }
     }
 
+    /// Map an anchored verification score to a risk tier. Same score bands as
+    /// `interest_rate_from_score`.
+    fn risk_tier_from_score(score: u32) -> RiskTier {
+        if score >= 80 {
+            RiskTier::Excellent
+        } else if score >= 60 {
+            RiskTier::Good
+        } else if score >= 40 {
+            RiskTier::Fair
+        } else {
+            RiskTier::High
+        }
+    }
+
+    /// The borrower's current risk tier. Without a configured registry, or
+    /// without a valid verification, a borrower is `High`.
+    fn resolve_risk_tier(env: &Env, borrower: &Address) -> RiskTier {
+        Self::read_verification_registry(env)
+            .and_then(|registry| Self::try_get_verification_score(env, &registry, borrower))
+            .map(Self::risk_tier_from_score)
+            .unwrap_or(RiskTier::High)
+    }
+
+    fn read_max_term_months(env: &Env, tier: RiskTier) -> u32 {
+        env.storage()
+            .instance()
+            .get(&PoolExtKey::MaxTermMonths(tier))
+            .unwrap_or(0)
+    }
+
+    /// Term a loan was requested with; the default term when none was latched.
+    fn read_loan_term(env: &Env, loan_id: &BytesN<32>) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&PoolExtKey::LoanTermMonths(loan_id.clone()))
+            .unwrap_or(DEFAULT_DURATION_MONTHS)
+    }
+
     /// Cross-contract call to `<registry>.get_score(borrower)`, mirroring the
     /// typed `VerificationRegistryContractClient::try_get_score` call but via
     /// raw `env.try_invoke_contract` — see the crate-dependency note above
@@ -3122,7 +3175,26 @@ impl LendingPoolContract {
         Self::check_function_not_paused(&env, PauseGroup::LoanRequests)?;
         Self::check_whitelist(&env, &borrower)?;
         borrower.require_auth();
-        Self::do_request_loan(&env, borrower, loan_id, principal, None)
+        Self::do_request_loan(&env, borrower, loan_id, principal, None, DEFAULT_DURATION_MONTHS)
+    }
+
+    /// Borrower requests a loan with an explicit term in months.
+    ///
+    /// The term must not exceed the admin-set cap for the borrower's current
+    /// risk tier (see `get_borrower_max_loan_term`), otherwise the request is
+    /// rejected with `LoanTermExceedsCap`. The term is latched on the loan:
+    /// a later tier change never alters it. A term of zero is `InvalidAmount`.
+    pub fn request_loan_with_term(
+        env: Env,
+        borrower: Address,
+        loan_id: BytesN<32>,
+        principal: i128,
+        term_months: u32,
+    ) -> Result<(), PoolError> {
+        Self::check_function_not_paused(&env, PauseGroup::LoanRequests)?;
+        Self::check_whitelist(&env, &borrower)?;
+        borrower.require_auth();
+        Self::do_request_loan(&env, borrower, loan_id, principal, None, term_months)
     }
 
     pub fn request_loan_with_origin(
@@ -3135,7 +3207,7 @@ impl LendingPoolContract {
         Self::check_function_not_paused(&env, PauseGroup::LoanRequests)?;
         Self::check_whitelist(&env, &borrower)?;
         borrower.require_auth();
-        Self::do_request_loan(&env, borrower, loan_id, principal, Some(escrow_origin))
+        Self::do_request_loan(&env, borrower, loan_id, principal, Some(escrow_origin), DEFAULT_DURATION_MONTHS)
     }
 
     /// Borrower requests a loan and optionally attaches a 32-byte SHA-256 hash
@@ -3158,7 +3230,7 @@ impl LendingPoolContract {
                 return Err(PoolError::InvalidAmount);
             }
         }
-        Self::do_request_loan(&env, borrower, loan_id.clone(), principal, None)?;
+        Self::do_request_loan(&env, borrower, loan_id.clone(), principal, None, DEFAULT_DURATION_MONTHS)?;
         if let Some(hash) = note_hash {
             env.storage()
                 .persistent()
@@ -3218,10 +3290,24 @@ impl LendingPoolContract {
         loan_id: BytesN<32>,
         principal: i128,
         escrow_origin: Option<Address>,
+        term_months: u32,
     ) -> Result<(), PoolError> {
         Self::check_utilization_not_auto_paused(env)?;
-        if principal <= 0 {
+        if principal <= 0 || term_months == 0 {
             return Err(PoolError::InvalidAmount);
+        }
+
+        // A borrower whose last request was rejected or cancelled must wait
+        // out the cooldown before asking again.
+        if Self::loan_request_cooldown_end(env, &borrower).is_some() {
+            return Err(PoolError::LoanRequestCooldownActive);
+        }
+
+        // The term may not exceed the cap for the borrower's current tier.
+        // `0` means the tier is uncapped.
+        let term_cap = Self::read_max_term_months(env, Self::resolve_risk_tier(env, &borrower));
+        if term_cap != 0 && term_months > term_cap {
+            return Err(PoolError::LoanTermExceedsCap);
         }
 
         // Ensure loan ID doesn't already exist.
@@ -3283,6 +3369,12 @@ impl LendingPoolContract {
         };
 
         Self::set_loan(env, &loan_id, &loan);
+        // Latch a non-default term; the default needs no storage.
+        if term_months != DEFAULT_DURATION_MONTHS {
+            env.storage()
+                .persistent()
+                .set(&PoolExtKey::LoanTermMonths(loan_id.clone()), &term_months);
+        }
         // The early-repayment fee schedule in force now is the one this loan
         // keeps for life; later schedule changes only reach new loans.
         env.storage().persistent().set(
@@ -3361,8 +3453,9 @@ impl LendingPoolContract {
 
         // The introductory period may not exceed the configured maximum or
         // the loan's own duration.
+        let duration_months = Self::read_loan_term(&env, &loan_id);
         if interest_only_months
-            > Self::read_max_interest_only_months(&env).min(DEFAULT_DURATION_MONTHS)
+            > Self::read_max_interest_only_months(&env).min(duration_months)
         {
             return Err(PoolError::InvalidAmount);
         }
@@ -3385,7 +3478,6 @@ impl LendingPoolContract {
         // Calculate simple interest and distribute over default duration.
         let interest = (loan.principal * loan.interest_rate_bps as i128) / 10_000;
         let total_owed = loan.principal + interest;
-        let duration_months = DEFAULT_DURATION_MONTHS;
         let next_due = env.ledger().sequence() + LEDGERS_PER_MONTH;
 
         let monthly_amount = if interest_only_months > 0 {
@@ -3614,6 +3706,7 @@ impl LendingPoolContract {
 
         loan.status = LoanStatus::Rejected;
         Self::set_loan(&env, &loan_id, &loan);
+        Self::record_request_ended(&env, &loan.borrower);
 
         // A rejection frees the borrower's slot, exactly as a borrower-initiated
         // cancellation does, so a turn-down never costs them an application slot.
@@ -3664,6 +3757,7 @@ impl LendingPoolContract {
 
         loan.status = LoanStatus::Cancelled;
         Self::set_loan(&env, &loan_id, &loan);
+        Self::record_request_ended(&env, &loan.borrower);
 
         // Cancelling a still-pending request frees the borrower's slot.
         Self::release_borrower_loan_slot(&env, &loan.borrower);
@@ -4652,7 +4746,7 @@ impl LendingPoolContract {
 
         // Cannot refund more than what has been disbursed.
         if amount > loan.disbursed {
-            return Err(PoolError::RefundExceedsDisbursed);
+            return Err(PoolError::InvalidAmount);
         }
 
         // Reverse the disbursement.
@@ -5763,7 +5857,7 @@ impl LendingPoolContract {
             Self::compute_collateral_release(env, &loan, &collateral);
 
         if releasable <= 0 {
-            return Err(PoolError::NoCollateralToRelease);
+            return Err(PoolError::CollateralRatioBreached);
         }
 
         let remaining_principal = loan
@@ -6393,7 +6487,7 @@ impl LendingPoolContract {
     /// protocol treasury address. The net amount is transferred to the investor.
     pub fn withdraw(env: Env, investor: Address, amount: i128) -> Result<(), PoolError> {
         Self::check_function_not_paused(&env, PauseGroup::Withdrawals)?;
-        Self::check_whitelist(&env, &investor)?;
+        Self::check_whitelist_for_withdrawal(&env, &investor)?;
         investor.require_auth();
         Self::non_reentrant(&env, || {
             if amount <= 0 {
@@ -7439,39 +7533,257 @@ impl LendingPoolContract {
 
     // ── Admin Transfer ─────────────────────────────────────────────────
 
-    /// Propose a new admin address. The current admin initiates the transfer.
-    /// The pending admin must then call `accept_admin` to finalize.
+    /// Propose a new admin address. The current admin initiates the transfer;
+    /// the admin does not change until the proposed address calls
+    /// `accept_admin`.
+    ///
+    /// The proposal expires after the admin transfer window
+    /// (`set_admin_transfer_window`). Proposing again replaces any pending
+    /// proposal and restarts the window.
     pub fn propose_new_admin(env: Env, new_admin: Address) -> Result<(), PoolError> {
         let config = Self::read_config(&env)?;
         config.admin.require_auth();
+        let expires_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(Self::read_admin_transfer_window(&env));
         env.storage()
             .instance()
             .set(&DataKey::PendingAdmin, &new_admin);
         env.storage()
             .instance()
+            .set(&PoolExtKey::PendingAdminExpiry, &expires_at);
+        env.storage()
+            .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-        emit_event(&env, 1, (symbol_short!("prop_adm"),), (config.admin, new_admin));
+        emit_event(&env, 1, (symbol_short!("prop_adm"),), (config.admin, new_admin.clone()));
+        emit_event(&env, 1, (symbol_short!("adm_exp"),), (new_admin, expires_at));
         Ok(())
     }
 
     /// Accept the admin role. Callable only by the pending admin address
-    /// that was previously proposed via `propose_new_admin`.
+    /// that was previously proposed via `propose_new_admin`, and only before
+    /// the proposal expires. A missing, cancelled, replaced or expired
+    /// proposal fails with `NotPendingAdmin`.
     pub fn accept_admin(env: Env) -> Result<(), PoolError> {
-        let pending: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::PendingAdmin)
-            .ok_or(PoolError::NotPendingAdmin)?;
+        let pending = Self::live_pending_admin(&env).ok_or(PoolError::NotPendingAdmin)?;
         pending.require_auth();
         let mut config = Self::read_config(&env)?;
         config.admin = pending.clone();
         env.storage().instance().set(&DataKey::Config, &config);
-        env.storage().instance().remove(&DataKey::PendingAdmin);
+        Self::clear_pending_admin(&env);
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         emit_event(&env, 1, (symbol_short!("accept_pd"),), (pending,));
         Ok(())
+    }
+
+    /// Cancel the pending admin proposal. Current admin only. Fails with
+    /// `NotPendingAdmin` when nothing is pending.
+    pub fn cancel_admin_transfer(env: Env) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(PoolError::NotPendingAdmin)?;
+        Self::clear_pending_admin(&env);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        emit_event(&env, 1, (symbol_short!("adm_cncl"),), (config.admin, pending));
+        Ok(())
+    }
+
+    /// Set how long, in seconds, a proposed admin has to accept. Applies to
+    /// proposals made afterwards. Zero is rejected with `InvalidAmount`.
+    /// Admin-only.
+    pub fn set_admin_transfer_window(env: Env, window_secs: u64) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+        if window_secs == 0 {
+            return Err(PoolError::InvalidAmount);
+        }
+        env.storage()
+            .instance()
+            .set(&PoolExtKey::AdminTransferWindow, &window_secs);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        emit_event(&env, 1, (symbol_short!("adm_win"),), (window_secs,));
+        Ok(())
+    }
+
+    /// Seconds a proposed admin has to accept.
+    pub fn get_admin_transfer_window(env: Env) -> u64 {
+        Self::read_admin_transfer_window(&env)
+    }
+
+    /// The proposed admin, if a proposal is pending and has not expired.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        Self::live_pending_admin(&env)
+    }
+
+    /// Timestamp (seconds) at which the pending proposal expires, if one is
+    /// stored. May be in the past for an expired proposal.
+    pub fn get_pending_admin_expiry(env: Env) -> Option<u64> {
+        env.storage().instance().get(&PoolExtKey::PendingAdminExpiry)
+    }
+
+    fn read_admin_transfer_window(env: &Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&PoolExtKey::AdminTransferWindow)
+            .unwrap_or(DEFAULT_ADMIN_TRANSFER_WINDOW_SECS)
+    }
+
+    /// The pending admin, unless the proposal has expired.
+    fn live_pending_admin(env: &Env) -> Option<Address> {
+        let pending: Address = env.storage().instance().get(&DataKey::PendingAdmin)?;
+        let expires_at: u64 = env
+            .storage()
+            .instance()
+            .get(&PoolExtKey::PendingAdminExpiry)
+            .unwrap_or(0);
+        if env.ledger().timestamp() < expires_at {
+            Some(pending)
+        } else {
+            None
+        }
+    }
+
+    fn clear_pending_admin(env: &Env) {
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        env.storage().instance().remove(&PoolExtKey::PendingAdminExpiry);
+    }
+
+    // ── Loan Request Cooldown ────────────────────────────────────────────
+
+    /// Set the cooldown, in seconds, a borrower must wait after a rejected or
+    /// cancelled loan request before submitting another. `0` disables it.
+    /// Admin-only. Measured from the recorded time of the last rejection or
+    /// cancellation, so a change applies to existing records too.
+    pub fn set_loan_request_cooldown(env: Env, cooldown_secs: u64) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&PoolExtKey::LoanRequestCooldown, &cooldown_secs);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        emit_event(&env, 1, (symbol_short!("cd_set"),), (cooldown_secs,));
+        Ok(())
+    }
+
+    /// The configured loan request cooldown in seconds; `0` means disabled.
+    pub fn get_loan_request_cooldown(env: Env) -> u64 {
+        Self::read_loan_request_cooldown(&env)
+    }
+
+    /// Timestamp (seconds) at which the borrower's cooldown ends, or `None`
+    /// when no cooldown is active. A request made before this time fails with
+    /// `LoanRequestCooldownActive`; Soroban errors carry no payload, so this
+    /// getter is how a client learns when the cooldown ends.
+    pub fn get_loan_request_cooldown_end(env: Env, borrower: Address) -> Option<u64> {
+        Self::loan_request_cooldown_end(&env, &borrower)
+    }
+
+    /// Clear a borrower's cooldown so they can request again immediately.
+    /// Admin-only. A no-op when the borrower has no recorded rejection.
+    pub fn clear_loan_request_cooldown(env: Env, borrower: Address) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .persistent()
+            .remove(&PoolExtKey::LastRequestEndedAt(borrower.clone()));
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        emit_event(&env, 1, (symbol_short!("cd_clear"),), (config.admin, borrower));
+        Ok(())
+    }
+
+    fn read_loan_request_cooldown(env: &Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&PoolExtKey::LoanRequestCooldown)
+            .unwrap_or(0)
+    }
+
+    /// Records now as the time the borrower's last request was rejected or
+    /// cancelled.
+    fn record_request_ended(env: &Env, borrower: &Address) {
+        env.storage().persistent().set(
+            &PoolExtKey::LastRequestEndedAt(borrower.clone()),
+            &env.ledger().timestamp(),
+        );
+    }
+
+    /// End of the borrower's cooldown if it is still running.
+    fn loan_request_cooldown_end(env: &Env, borrower: &Address) -> Option<u64> {
+        let cooldown = Self::read_loan_request_cooldown(env);
+        if cooldown == 0 {
+            return None;
+        }
+        let ended_at: u64 = env
+            .storage()
+            .persistent()
+            .get(&PoolExtKey::LastRequestEndedAt(borrower.clone()))?;
+        let end = ended_at.saturating_add(cooldown);
+        if env.ledger().timestamp() < end {
+            Some(end)
+        } else {
+            None
+        }
+    }
+
+    // ── Risk-Tier Term Caps ──────────────────────────────────────────────
+
+    /// Set the maximum loan term, in months, for a risk tier. `0` removes the
+    /// cap. Admin-only. Applies to new requests only; existing loans keep the
+    /// term they were requested with.
+    pub fn set_max_loan_term(env: Env, tier: RiskTier, max_months: u32) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&PoolExtKey::MaxTermMonths(tier), &max_months);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        emit_event(&env, 1, (symbol_short!("term_cap"),), (tier, max_months));
+        Ok(())
+    }
+
+    /// Maximum loan term in months for a risk tier; `0` means no cap.
+    pub fn get_max_loan_term(env: Env, tier: RiskTier) -> u32 {
+        Self::read_max_term_months(&env, tier)
+    }
+
+    /// The borrower's current risk tier, as used for term caps.
+    pub fn get_borrower_risk_tier(env: Env, borrower: Address) -> RiskTier {
+        Self::resolve_risk_tier(&env, &borrower)
+    }
+
+    /// Maximum loan term in months that applies to `borrower` right now
+    /// (`0` means no cap), so a frontend can limit its term selector.
+    pub fn get_borrower_max_loan_term(env: Env, borrower: Address) -> u32 {
+        Self::read_max_term_months(&env, Self::resolve_risk_tier(&env, &borrower))
+    }
+
+    /// Term in months the loan was requested with.
+    pub fn get_loan_term(env: Env, loan_id: BytesN<32>) -> Result<u32, PoolError> {
+        let _ = Self::read_loan(&env, &loan_id)?;
+        Ok(Self::read_loan_term(&env, &loan_id))
     }
 
     // ── Verification Registry ────────────────────────────────────────────
@@ -9102,18 +9414,75 @@ impl LendingPoolContract {
     }
 
     /// Add an address to the permissioned-mode whitelist. Admin-only.
+    ///
+    /// The entry expires after the admin-configured default validity
+    /// (`set_default_whitelist_validity`). With no default validity set the
+    /// entry never expires. Re-adding an address restarts its validity period.
     pub fn add_to_whitelist(env: Env, address: Address) -> Result<(), PoolError> {
         let config = Self::read_config(&env)?;
         config.admin.require_auth();
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Whitelist(address.clone()), &true);
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-
+        let expires_at = Self::default_whitelist_expiry(&env);
+        Self::write_whitelist_entry(&env, &address, expires_at);
         emit_event(&env, 1, (symbol_short!("wl_add"),), (address,));
+
+        Ok(())
+    }
+
+    /// Add an address to the permissioned-mode whitelist with an explicit
+    /// expiry (ledger timestamp, in seconds). Admin-only.
+    ///
+    /// The entry counts as whitelisted for new deposits and loan requests
+    /// while the ledger timestamp is strictly before `expires_at`. An expiry
+    /// that is not in the future is rejected with `InvalidAmount`.
+    pub fn add_to_whitelist_until(
+        env: Env,
+        address: Address,
+        expires_at: u64,
+    ) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        if expires_at <= env.ledger().timestamp() {
+            return Err(PoolError::InvalidAmount);
+        }
+        Self::write_whitelist_entry(&env, &address, Some(expires_at));
+        emit_event(&env, 1, (symbol_short!("wl_add"),), (address,));
+
+        Ok(())
+    }
+
+    /// Renew a whitelist entry so it is valid again for new deposits.
+    /// Admin-only.
+    ///
+    /// `new_expiry` is the new expiry timestamp in seconds; `None` applies the
+    /// default validity from now (or clears the expiry when no default is
+    /// set). Works on entries that have already expired, so renewal restores
+    /// deposit access without any redeployment. Fails with `Unauthorized` if
+    /// the address is not on the whitelist at all, and with `InvalidAmount`
+    /// if an explicit expiry is not in the future.
+    pub fn renew_whitelist(
+        env: Env,
+        address: Address,
+        new_expiry: Option<u64>,
+    ) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        if !Self::whitelist_flag(&env, &address) {
+            return Err(PoolError::Unauthorized);
+        }
+        let expires_at = match new_expiry {
+            Some(at) => {
+                if at <= env.ledger().timestamp() {
+                    return Err(PoolError::InvalidAmount);
+                }
+                Some(at)
+            }
+            None => Self::default_whitelist_expiry(&env),
+        };
+        Self::write_whitelist_entry(&env, &address, expires_at);
+        emit_event(&env, 1, (symbol_short!("wl_renew"),), (address, expires_at));
 
         Ok(())
     }
@@ -9127,6 +9496,9 @@ impl LendingPoolContract {
             .persistent()
             .remove(&DataKey::Whitelist(address.clone()));
         env.storage()
+            .persistent()
+            .remove(&PoolExtKey::WhitelistExpiry(address.clone()));
+        env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
@@ -9135,12 +9507,46 @@ impl LendingPoolContract {
         Ok(())
     }
 
-    /// Returns whether `address` is on the permissioned-mode whitelist.
-    pub fn is_address_whitelisted(env: Env, address: Address) -> bool {
+    /// Set the default validity, in seconds, given to whitelist entries when
+    /// they are added or renewed without an explicit expiry. `0` (the
+    /// default) means such entries never expire. Only affects entries written
+    /// after the change. Admin-only.
+    pub fn set_default_whitelist_validity(env: Env, validity_secs: u64) -> Result<(), PoolError> {
+        let config = Self::read_config(&env)?;
+        config.admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&PoolExtKey::DefaultWhitelistValidity, &validity_secs);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        emit_event(&env, 1, (symbol_short!("wl_valid"),), (validity_secs,));
+
+        Ok(())
+    }
+
+    /// Default whitelist validity in seconds; `0` means entries never expire.
+    pub fn get_default_whitelist_validity(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&PoolExtKey::DefaultWhitelistValidity)
+            .unwrap_or(0)
+    }
+
+    /// Expiry timestamp (seconds) of an address's whitelist entry. `None`
+    /// means the entry never expires, or the address is not whitelisted.
+    pub fn get_whitelist_expiry(env: Env, address: Address) -> Option<u64> {
         env.storage()
             .persistent()
-            .get::<DataKey, bool>(&DataKey::Whitelist(address))
-            .unwrap_or(false)
+            .get(&PoolExtKey::WhitelistExpiry(address))
+    }
+
+    /// Returns whether `address` is currently on the permissioned-mode
+    /// whitelist. An entry whose expiry has passed is not whitelisted.
+    pub fn is_address_whitelisted(env: Env, address: Address) -> bool {
+        Self::whitelist_active(&env, &address)
     }
 
     /// Returns whether permissioned mode is currently enabled.
@@ -9152,19 +9558,91 @@ impl LendingPoolContract {
             .unwrap_or(false)
     }
 
+    /// Whether an address has a whitelist entry, ignoring its expiry.
+    fn whitelist_flag(env: &Env, address: &Address) -> bool {
+        env.storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::Whitelist(address.clone()))
+            .unwrap_or(false)
+    }
+
+    /// Whether an address has a whitelist entry that has not expired.
+    fn whitelist_active(env: &Env, address: &Address) -> bool {
+        if !Self::whitelist_flag(env, address) {
+            return false;
+        }
+        match env
+            .storage()
+            .persistent()
+            .get::<PoolExtKey, u64>(&PoolExtKey::WhitelistExpiry(address.clone()))
+        {
+            Some(expires_at) => env.ledger().timestamp() < expires_at,
+            None => true,
+        }
+    }
+
+    /// Expiry for an entry written now: `now + default validity`, or `None`
+    /// (never expires) when no default validity is configured.
+    fn default_whitelist_expiry(env: &Env) -> Option<u64> {
+        let validity: u64 = env
+            .storage()
+            .instance()
+            .get(&PoolExtKey::DefaultWhitelistValidity)
+            .unwrap_or(0);
+        if validity == 0 {
+            None
+        } else {
+            Some(env.ledger().timestamp().saturating_add(validity))
+        }
+    }
+
+    /// Writes (or restarts) a whitelist entry and its expiry. `None` clears
+    /// any previous expiry so the entry never lapses.
+    fn write_whitelist_entry(env: &Env, address: &Address, expires_at: Option<u64>) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Whitelist(address.clone()), &true);
+        match expires_at {
+            Some(at) => {
+                env.storage()
+                    .persistent()
+                    .set(&PoolExtKey::WhitelistExpiry(address.clone()), &at);
+                emit_event(env, 1, (symbol_short!("wl_expiry"),), (address.clone(), at));
+            }
+            None => env
+                .storage()
+                .persistent()
+                .remove(&PoolExtKey::WhitelistExpiry(address.clone())),
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
     /// Internal helper: rejects the call if permissioned mode is on and the
-    /// caller is not on the whitelist.
+    /// caller is not on the whitelist, or their entry has expired. Used for
+    /// anything that brings new funds or new exposure into the pool.
     fn check_whitelist(env: &Env, caller: &Address) -> Result<(), PoolError> {
         let config = Self::read_config(env)?;
         if !config.permissioned_mode {
             return Ok(());
         }
-        let whitelisted = env
-            .storage()
-            .persistent()
-            .get::<DataKey, bool>(&DataKey::Whitelist(caller.clone()))
-            .unwrap_or(false);
-        if whitelisted {
+        if Self::whitelist_active(env, caller) {
+            Ok(())
+        } else {
+            Err(PoolError::Unauthorized)
+        }
+    }
+
+    /// Like `check_whitelist` but ignores expiry: an investor whose entry has
+    /// lapsed can still withdraw funds they already hold. Removing the entry
+    /// entirely still blocks the withdrawal.
+    fn check_whitelist_for_withdrawal(env: &Env, caller: &Address) -> Result<(), PoolError> {
+        let config = Self::read_config(env)?;
+        if !config.permissioned_mode {
+            return Ok(());
+        }
+        if Self::whitelist_flag(env, caller) {
             Ok(())
         } else {
             Err(PoolError::Unauthorized)

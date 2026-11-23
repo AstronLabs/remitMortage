@@ -46,6 +46,9 @@ Every event follows the naming convention in
 | insurance-pool | `premium_recorded` | topics[] data(tuple)[from, amount] |
 | insurance-pool | `set_pool` | topics[] data(tuple)[lending_pool] |
 | lending-pool | `accept_pd` | topics[] data(tuple)[pending] v1 |
+| lending-pool | `adm_cncl` | topics[] data(tuple)[admin, pending] v1 |
+| lending-pool | `adm_exp` | topics[] data(tuple)[new_admin, expires_at] v1 |
+| lending-pool | `adm_win` | topics[] data(tuple)[window_secs] v1 |
 | lending-pool | `app_fee_collected` | topics[] data(tuple)[borrower, loan_id, application_fee, loan_seq] v1 |
 | lending-pool | `app_fee_refund` | topics[] data(tuple)[loan_id, borrower, fee, loan_seq] v1 |
 | lending-pool | `app_fee_retained` | topics[] data(tuple)[loan_id, treasury_address, fee, loan_seq] v1 |
@@ -58,6 +61,8 @@ Every event follows the naming convention in
 | lending-pool | `cap_canc/investor` | topics["investor"] data(tuple)[] v1 |
 | lending-pool | `cap_prop` | topics[scope] data(tuple)[cap, execute_after] v1 |
 | lending-pool | `cap_set` | topics[scope] data(tuple)[old, cap] v1 |
+| lending-pool | `cd_clear` | topics[] data(tuple)[admin, borrower] v1 |
+| lending-pool | `cd_set` | topics[] data(tuple)[cooldown_secs] v1 |
 | lending-pool | `collateral_released` | topics[loan_id] data(tuple)[borrower, releasable, remaining_collateral, loan_seq] v1 |
 | lending-pool | `collateral_topped_up` | topics[loan_id] data(tuple)[from, amount, remaining_collateral, ratio_bps, loan_seq] v1 |
 | lending-pool | `credit_drawn` | topics[] data(tuple)[borrower, amount, drawn_balance] v1 |
@@ -146,6 +151,7 @@ Every event follows the naming convention in
 | lending-pool | `set_rllw` | topics[] data(value)[window] v1 |
 | lending-pool | `set_vreg` | topics[] data(tuple)[registry] v1 |
 | lending-pool | `shr_cap` | topics[] data(tuple)[max_bps] v1 |
+| lending-pool | `term_cap` | topics[] data(tuple)[tier, max_months] v1 |
 | lending-pool | `upg_prop` | topics[] data(tuple)[execute_after] v1 |
 | lending-pool | `upgrade` | topics[] data(tuple)[new_wasm_hash, ver + 1] v1 |
 | lending-pool | `util_auto_pause` | topics[] data(tuple)[util, threshold] v1 |
@@ -154,7 +160,10 @@ Every event follows the naming convention in
 | lending-pool | `util_thresh_set` | topics[] data(value)[threshold_bps] v1 |
 | lending-pool | `withdraw` | topics[] data(tuple)[investor, amount, fee_amount, net_amount, utilization_bps] v1 |
 | lending-pool | `wl_add` | topics[] data(tuple)[contractor] v1<br>topics[] data(tuple)[address] v1 |
+| lending-pool | `wl_expiry` | topics[] data(tuple)[address, at] v1 |
+| lending-pool | `wl_renew` | topics[] data(tuple)[address, expires_at] v1 |
 | lending-pool | `wl_rm` | topics[] data(tuple)[contractor] v1<br>topics[] data(tuple)[address] v1 |
+| lending-pool | `wl_valid` | topics[] data(tuple)[validity_secs] v1 |
 | lending-pool | `y_comp` | topics[investor] data(tuple)[amount, deposited] v1 |
 | lending-pool | `y_mode` | topics[investor] data(value)[mode as u32] v1 |
 | milestone | `dispute/raised` | topics["raised"] data(tuple)[proposal_id, caller, deadline_ledger] |

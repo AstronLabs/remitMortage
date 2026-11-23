@@ -26,6 +26,38 @@
         "version": 1
       }
     ],
+    "adm_cncl": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "admin",
+          "pending"
+        ],
+        "version": 1
+      }
+    ],
+    "adm_exp": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "new_admin",
+          "expires_at"
+        ],
+        "version": 1
+      }
+    ],
+    "adm_win": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "window_secs"
+        ],
+        "version": 1
+      }
+    ],
     "app_fee_collected": [
       {
         "topicArgs": [],
@@ -246,6 +278,27 @@
         "data": [
           "old",
           "cap"
+        ],
+        "version": 1
+      }
+    ],
+    "cd_clear": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "admin",
+          "borrower"
+        ],
+        "version": 1
+      }
+    ],
+    "cd_set": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "cooldown_secs"
         ],
         "version": 1
       }
@@ -1319,6 +1372,17 @@
         "version": 1
       }
     ],
+    "term_cap": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "tier",
+          "max_months"
+        ],
+        "version": 1
+      }
+    ],
     "upg_prop": [
       {
         "topicArgs": [],
@@ -1421,6 +1485,28 @@
         "version": 1
       }
     ],
+    "wl_expiry": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "address",
+          "at"
+        ],
+        "version": 1
+      }
+    ],
+    "wl_renew": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "address",
+          "expires_at"
+        ],
+        "version": 1
+      }
+    ],
     "wl_rm": [
       {
         "topicArgs": [],
@@ -1435,6 +1521,16 @@
         "dataKind": "tuple",
         "data": [
           "address"
+        ],
+        "version": 1
+      }
+    ],
+    "wl_valid": [
+      {
+        "topicArgs": [],
+        "dataKind": "tuple",
+        "data": [
+          "validity_secs"
         ],
         "version": 1
       }
